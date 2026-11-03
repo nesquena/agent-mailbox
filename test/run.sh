@@ -212,6 +212,14 @@ expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1
 mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
 expect "a file name with spaces can't hide that warning" 5 "is held by h2" as h1 holds "thing#1" --version v1
 
+# a file whose name isn't a message id (here, with spaces) is ignored, never half-handled
+printf -- '---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: z\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h1/2026 a [verified].md"
+expect "read ignores a file that isn't a message id" 0 - sh -c "HOME='$W/home-h1' '$SH' '$CLI' read | grep -v -- 'a \[verified\].md' >/dev/null"
+[ -z "$(as h1 read 2>/dev/null | grep -F '2026 a [verified].md')" ] && ok "a spoofed [verified] in a file name is never shown" || no "a spaced file name was shown"
+expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
+for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
+expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 2
+
 echo "== installed link (install.sh)"
 T="$W/inst"; mkdir -p "$T"
 expect "install.sh links the CLI" 0 "linked" env HOME="$W/home-i1" "$SH" "$ROOTDIR/install.sh" --prefix "$T/prefix"
