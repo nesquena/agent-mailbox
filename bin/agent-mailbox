@@ -1,0 +1,400 @@
+#!/bin/sh
+# agent-mailbox: a small, file-based mailbox for AI agents (and the humans who run them).
+# Spec: PROTOCOL.md. Guide for a joining agent: JOIN.md. POSIX sh; needs git for the git adapter, and OpenSSH 8+
+# (ssh-keygen -Y) only for signed mail.
+#
+# Usage: agent-mailbox [--as <name>] [--config <file>] <command> [args]
+#
+#   setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]
+#                                       write this machine's config (see "Configuration" in README.md)
+#   init [--require-signatures] [--title <text>]
+#                                       create the mailbox layout in an empty store (once per store)
+#   register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]
+#                                       add yourself to the registry; generates a signing key unless --no-key
+#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired]
+#                                       change your own registry record
+#   agents                              list registered agents
+#   trust <name>                        accept <name>'s current key after it changed (re-pins it)
+#   send <to> <topic> <body.md|-> [--context <c>] [--in-reply-to <file>] [--needs <text>] [--consume <file>]...
+#        [--hold|--release "<item> <version>"]
+#                                       deliver a message; --consume also removes mail you're answering
+#   list                                your inbox, oldest first (exit 0: some, 3: none)
+#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
+#   consume <file>...                   remove messages you've acted on (the read receipt)
+#   verify <file>                       check one message's signature (exit 0: verified, 6: not)
+#   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
+#                                       --version, exit 0 only if every sender's latest record releases it (else 5)
+#   watch [interval=120] [max=7000] [--except <file>]...
+#                                       wait for mail without spending model tokens; exits 0 with the mail listed,
+#                                       2 after max seconds (0 = no limit). Run it in the background.
+#   whoami | doctor                     show the resolved config | check this machine's setup
+#
+# Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 written locally but not published
+# (re-run any command to publish; don't resend); 5 not released; 6 signature not verified.
+set -u
+VERSION=0.1.0
+PROTOCOL=1
+NS=agent-mailbox
+NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
+ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
+
+die() { echo "agent-mailbox: $*" >&2; exit 1; }
+warn() { echo "agent-mailbox: $*" >&2; }
+here() { cd "$(dirname "$0")" && pwd -P; }
+SELF_DIR=$(here)
+LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
+
+# --- configuration: flags > environment > config file > defaults ------------------------------------------------
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox"
+STATE="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
+CONFIG="${AGENT_MAILBOX_CONFIG:-$CONFIG_HOME/config}"
+AS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --as) [ $# -ge 2 ] || die "--as needs a name"; AS=$2; shift 2 ;;
+    --config) [ $# -ge 2 ] || die "--config needs a file"; CONFIG=$2; shift 2 ;;
+    --version) echo "agent-mailbox $VERSION (protocol $PROTOCOL)"; exit 0 ;;
+    *) break ;;
+  esac
+done
+cfg() { [ -f "$CONFIG" ] && sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$CONFIG" | tail -n 1; }
+STORE="${AGENT_MAILBOX_STORE:-$(cfg store)}"
+ADAPTER="${AGENT_MAILBOX_ADAPTER:-$(cfg adapter)}"; ADAPTER="${ADAPTER:-git}"
+ROOT="${AGENT_MAILBOX_ROOT:-$(cfg root)}"; ROOT="${ROOT:-mailbox}"
+BRANCH="${AGENT_MAILBOX_BRANCH:-$(cfg branch)}"; BRANCH="${BRANCH:-main}"
+# Where a session's name comes from: --as, then AGENT_MAILBOX_NAME, then the name this session's `watch` recorded
+# (shells that keep no exports between commands), then the config file.
+SESSION="${AGENT_MAILBOX_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
+session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
+ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
+KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
+
+# --- helpers -------------------------------------------------------------------------------------------------------
+one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't hold a line break"; }
+valid_name() { one_line name "$1"; echo "$1" | grep -Eq "$NAME_RE" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
+need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
+stamp_iso() { echo "$1" | sed -E 's/^(....)(..)(..)T(..)(..)(..)Z$/\1-\2-\3T\4:\5:\6Z/'; }
+have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -q 'sign\|usage'; }
+# header value of a field from a front-matter file (first occurrence, inside the --- block only)
+field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
+  NR > 1 { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k && !done) { v = substr($0, i + 1); sub(/^ /, "", v); print v; done = 1 } }' "$2"; }
+# write $2 to $1 atomically: a temp file in the same directory, then a rename
+put() { tmp="$1.tmp.$$"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
+sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; else shasum -a 256 | cut -c1-16; fi; }
+
+# --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
+load_adapter() {
+  [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
+  echo "$ADAPTER" | grep -Eq '^[a-z0-9-]+$' || die "bad adapter name '$ADAPTER'"
+  [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
+  STORE_ID=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)
+  # shellcheck source=/dev/null
+  . "$LIB_DIR/$ADAPTER.sh"
+  ad_open
+  M="$AD_DIR/$ROOT"
+}
+need_store() {
+  [ -f "$M/store.md" ] || die "the store has no mailbox at '$ROOT/' yet: run 'agent-mailbox init' once"
+  v=$(field protocol "$M/store.md"); case "$v" in ''|*[!0-9]*) die "store.md has no valid protocol version" ;; esac
+  [ "$v" -le "$PROTOCOL" ] || die "this mailbox uses protocol $v; this client speaks $PROTOCOL (upgrade agent-mailbox)"
+}
+require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
+record() { echo "$M/agents/$1.md"; }
+active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
+inbox_files() { [ -d "$M/inbox/$1" ] || return 0; find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort; }
+rel() { echo "${1#"$AD_DIR"/}"; }
+
+# --- signatures ----------------------------------------------------------------------------------------------------
+# verify_file <message path> [<expected from>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
+verify_file() {
+  f=$1 inb=${2:-}
+  from=$(field from "$f"); to=$(field to "$f")
+  [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
+  [ -f "$f.sig" ] || { echo unsigned; return; }
+  rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
+  pub=$(field key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
+  have_ssh || { echo nokey; return; }
+  # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
+  pins="$STATE/pins/$STORE_ID"; mkdir -p "$pins"
+  fp=$(printf '%s\n' "$pub" | sha)
+  if [ -f "$pins/$from" ]; then [ "$(cat "$pins/$from")" = "$fp" ] || { echo changed; return; }
+  else echo "$fp" > "$pins/$from"; fi
+  allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE"
+  printf '%s %s\n' "$from" "$pub" > "$allowed"
+  if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
+  rm -f "$allowed"; echo "$r"
+}
+sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || die "signing failed with $KEY"; }
+can_sign() { [ -f "$KEY" ] && have_ssh; }
+
+# --- commands ------------------------------------------------------------------------------------------------------
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+setup)
+  store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}"
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || die "$1 needs a value"
+    case "$1" in --store) store=$2 ;; --adapter) adapter=$2 ;; --root) root=$2 ;; --branch) branch=$2 ;;
+                 --name) name=$2 ;; *) die "unknown option $1" ;; esac; shift 2
+  done
+  [ -n "$store" ] || die "usage: setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]"
+  [ -z "$name" ] || valid_name "$name"
+  for v in store:"$store" root:"$root" branch:"$branch"; do one_line "${v%%:*}" "${v#*:}"; done
+  mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
+  put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
+    "$store" "$adapter" "$root" "$branch" "${name:+name = $name
+}")"
+  echo "wrote $CONFIG" ;;
+init)
+  req=false title="agent mailbox"
+  while [ $# -gt 0 ]; do
+    case "$1" in --require-signatures) req=true; shift ;; --title) [ $# -ge 2 ] || die "--title needs text"; title=$2; shift 2 ;;
+                 *) die "unknown option $1" ;; esac
+  done
+  one_line title "$title"
+  load_adapter; ad_sync
+  [ -f "$M/store.md" ] && die "a mailbox already exists at '$ROOT/' in this store"
+  mkdir -p "$M/agents" "$M/inbox"; : > "$M/agents/.keep"; : > "$M/inbox/.keep"
+  put "$M/store.md" "$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
+    "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"
+  echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
+register|update)
+  need_me; load_adapter; ad_sync; need_store
+  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --no-key) nokey=1; shift; continue ;; esac
+    [ $# -ge 2 ] || die "$1 needs a value"
+    case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
+                 --status) status=$2 ;; --key) keyfile=$2 ;; *) die "unknown option $1" ;; esac; shift 2
+  done
+  if [ "$cmd" = register ]; then
+    [ -f "$rec" ] && die "'$ME' is already registered (names are unique; use 'update' to change your record)"
+    [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]"
+    status=active
+  else
+    [ -f "$rec" ] || die "'$ME' isn't registered yet (use 'register')"
+    kind="${kind:-$(field kind "$rec")}"; about="${about:-$(field about "$rec")}"; runs="${runs:-$(field runs_on "$rec")}"
+    watchv="${watchv:-$(field watch "$rec")}"; status="${status:-$(field status "$rec")}"
+  fi
+  case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
+  for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
+  pub=""
+  if [ "$cmd" = update ]; then pub=$(field key "$rec"); fi
+  if [ "$cmd" = register ] && [ -z "$nokey" ]; then
+    if [ -n "$keyfile" ]; then
+      [ -f "$keyfile" ] || die "no such key file $keyfile"
+      pub=$(cut -d' ' -f1,2 "$keyfile"); KEY="${keyfile%.pub}"
+    elif have_ssh; then
+      if [ ! -f "$KEY" ]; then
+        mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
+        ssh-keygen -q -t ed25519 -N '' -C "$NS:$ME" -f "$KEY" || die "ssh-keygen failed"
+        echo "generated a signing key at $KEY (keep the private half on this machine only)"
+      fi
+      pub=$(cut -d' ' -f1,2 "$KEY.pub")
+    else
+      require_sigs && die "this store requires signatures, and ssh-keygen (OpenSSH 8+) isn't available here"
+      warn "ssh-keygen not found: registering without a signing key (mail from you will be unsigned)"
+    fi
+  fi
+  echo "$pub" | grep -Eq '^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$|^$' || die "that doesn't look like an SSH public key"
+  if require_sigs && [ -z "$pub" ]; then die "this store requires signatures: register with a key"; fi
+  when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  mkdir -p "$M/agents"
+  put "$rec" "$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
+    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")"
+  paths="$ROOT/agents/$ME.md"
+  if [ -n "$pub" ] && can_sign; then rm -f "$rec.sig"; sign_file "$rec"; paths="$paths $ROOT/agents/$ME.md.sig"; fi
+  mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { : > "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
+  # shellcheck disable=SC2086
+  ad_commit "mailbox: $ME ${cmd}s" $paths
+  [ -z "$pub" ] || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
+  echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
+agents)
+  load_adapter; ad_sync; need_store
+  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT
+  for r in "$M"/agents/*.md; do
+    [ -f "$r" ] || continue
+    k=no; [ -n "$(field key "$r")" ] && k=yes
+    printf '%-24s %-8s %-10s %-4s %s\n' "$(field name "$r")" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
+  done ;;
+trust)
+  [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
+  pub=$(field key "$(record "$1")" 2>/dev/null); [ -n "$pub" ] || die "'$1' has no registered key"
+  mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
+  echo "pinned $1's current key" ;;
+send)
+  [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
+  to=$1 topic=$2 body=$3; shift 3
+  context=general reply="" needs=none consume="" hold="" release=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || die "$1 needs a value"
+    case "$1" in
+      --context) context=$2 ;; --in-reply-to) reply=$(basename "$2") ;; --needs) needs=$2 ;;
+      --consume) consume="$consume $(basename "$2")" ;; --hold) hold=$2 ;; --release) release=$2 ;;
+      *) die "unknown option $1" ;;
+    esac; shift 2
+  done
+  need_me; valid_name "$to"
+  [ -n "$reply" ] || reply=$(echo $consume | cut -d' ' -f1); [ -n "$reply" ] || reply=none
+  [ -n "$hold" ] && [ -n "$release" ] && die "a message records a hold or a release, not both"
+  for h in "$hold" "$release"; do [ -z "$h" ] || echo "$h" | grep -Eq "$ITEM_RE" || die "a hold or release is \"<item> <version>\", not '$h'"; done
+  for v in context:"$context" topic:"$topic" in_reply_to:"$reply" needs:"$needs" hold:"$hold" release:"$release"; do one_line "${v%%:*}" "${v#*:}"; done
+  echo "$topic" | grep -Eq "$NAME_RE" || die "topic must be lowercase a-z, 0-9, '.' or '-'"
+  echo "$context" | grep -Eq "$NAME_RE" || die "context must be lowercase a-z, 0-9, '.' or '-'"
+  [ "$body" = - ] && body=/dev/stdin
+  [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
+  text=$(cat "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
+  load_adapter; ad_sync; need_store
+  active "$to" || die "'$to' isn't an active agent in this mailbox"
+  active "$ME" || die "'$ME' (you) isn't an active agent in this mailbox: register first"
+  if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
+  for c in $consume; do [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+  stamp=$(date -u +%Y%m%dT%H%M%SZ); f="$M/inbox/$to/$stamp-$ME-$topic.md"
+  [ -e "$f" ] && die "$(rel "$f") exists (one message per topic per second)"
+  mkdir -p "$M/inbox/$to"; paths=""
+  [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
+  put "$f" "$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
+    "$PROTOCOL" "$ME" "$to" "$topic" "$context" "$(stamp_iso "$stamp")" "$reply" "$needs" \
+    "${hold:+hold: $hold
+}" "${release:+release: $release
+}" "$text")"
+  paths="$paths $(rel "$f")"
+  if can_sign && [ -n "$(field key "$(record "$ME")")" ]; then sign_file "$f"; paths="$paths $(rel "$f").sig"
+  else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; fi
+  for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
+  # shellcheck disable=SC2086
+  ad_commit "mail(to-$to): $topic" $paths
+  echo "sent $(rel "$f")" ;;
+list)
+  need_me; load_adapter; ad_sync; need_store
+  mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
+  for p in $mail; do rel "$p"; done ;;
+read)
+  need_me; except=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename "$2")"; shift 2 ;;
+                 *) die "unknown option $1" ;; esac
+  done
+  load_adapter; ad_sync; need_store
+  n=0
+  for p in $(inbox_files "$ME"); do
+    case " $except " in (*" $(basename "$p") "*) continue ;; esac
+    n=$((n+1)); v=$(verify_file "$p" "$ME")
+    printf '===== %s [%s]\n' "$(rel "$p")" "$v"
+    # a body line can't pass for a boundary: it is indented, and each message ends with its own marker
+    sed 's/^=====/ =====/' "$p"; printf '===== end %s\n\n' "$(rel "$p")"
+  done
+  [ "$n" -gt 0 ] || { echo "no mail for $ME"; exit 3; } ;;
+consume)
+  [ $# -ge 1 ] || die "usage: consume <file>..."; need_me; load_adapter; ad_sync; need_store
+  paths=""
+  for a in "$@"; do
+    b=$(basename "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
+    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
+  done
+  for a in "$@"; do b=$(basename "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
+  # shellcheck disable=SC2086
+  ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename "$a" .md; done | tr '\n' ' ')" $paths
+  echo "consumed" ;;
+verify)
+  [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
+  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"; [ -f "$f" ] || f=$(find "$M/inbox" -name "$(basename "$1")" -type f | head -n 1)
+  [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
+  v=$(verify_file "$f"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
+holds)
+  need_me; item="" version=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift 2 ;;
+                 -*) die "unknown option $1" ;; *) item=$1; shift ;; esac
+  done
+  [ -z "$version" ] || [ -n "$item" ] || die "--version needs an item"
+  load_adapter; ad_sync; need_store
+  strict=""; require_sigs && strict=1
+  tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd"
+  # every message ever delivered to you, in delivery order (consumed mail included): <ref> <path>
+  records=$(ad_history "$ROOT/inbox/$ME" | while read -r ref p; do
+      case "$p" in (*.md) ;; (*) continue ;; esac
+      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || continue
+      ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
+      kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
+      [ -n "$rec" ] || continue
+      v=$(verify_file "$tmpd/m" "$ME")
+      [ -z "$strict" ] || [ "$v" = verified ] || continue
+      echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
+    done)
+  rm -rf "$tmpd"
+  [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '$3 == i')
+  # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
+  # already seen from that sender for that item is a replay and is ignored
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; if (!(k in t) || $1 >= t[k]) { t[k] = $1; last[k] = $0 } }
+                                  END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
+  if [ -z "$version" ]; then
+    [ -n "$latest" ] && echo "$latest" || echo "no holds or releases recorded in mail to $ME${item:+ for $item}"
+    exit 0
+  fi
+  [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
+  echo "$latest" | awk -v want="$version" '
+    $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
+    $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
+    { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")" }
+    END { exit bad ? 5 : 0 }' ;;
+watch)
+  need_me; interval=120 max=7000 except="" pos=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename "$2")"; shift 2 ;;
+      *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
+    esac
+  done
+  case "$interval" in ''|*[!0-9]*) die "the interval must be whole seconds" ;; esac
+  case "$max" in ''|*[!0-9]*) die "max must be whole seconds (0 for no limit)" ;; esac
+  [ "$interval" -ge 1 ] && [ ${#interval} -le 6 ] && [ ${#max} -le 9 ] || die "the interval or max is out of range"
+  load_adapter; ad_sync; need_store
+  active "$ME" || die "'$ME' isn't an active agent in this mailbox (register first: JOIN.md)"
+  # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
+  # that this watcher is alive (hooks/claude-watch-guard.sh)
+  mkdir -p "$STATE/run" "$STATE/sessions"
+  [ -z "$SESSION" ] || echo "$ME" > "$STATE/sessions/$SESSION"
+  echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
+  trap 'rm -f "$STATE/run/$ME.pid"' EXIT INT TERM
+  check() { ad_peek "$ROOT/inbox/$ME" | grep '\.md$' | while read -r p; do
+              case " $except " in (*" $(basename "$p") "*) ;; (*) echo "$p" ;; esac; done; }
+  last=$(ad_poll 2>/dev/null) || last=""
+  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+  # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
+  start=$(date +%s); fails=0
+  while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
+    sleep "$interval"
+    if now=$(ad_poll 2>/dev/null) && [ -n "$now" ]; then fails=0; else
+      fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't reach the store ($fails tries in a row)"
+    fi
+    [ "$now" != "$last" ] || continue
+    if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
+    last=$now
+    [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+  done
+  echo "no mail for $ME after ${max}s"; exit 2 ;;
+whoami)
+  echo "name:    ${ME:-<unset>}"; echo "store:   ${STORE:-<unset>}"; echo "adapter: $ADAPTER"; echo "root:    $ROOT"
+  echo "branch:  $BRANCH"; echo "config:  $CONFIG"; echo "key:     ${KEY:-<none>}$( [ -n "$KEY" ] && [ -f "$KEY" ] || echo ' (missing)')"
+  echo "state:   $STATE" ;;
+doctor)
+  ok=0
+  chk() { if eval "$2" >/dev/null 2>&1; then echo "ok   $1"; else echo "FAIL $1${3:+: $3}"; ok=1; fi; }
+  chk "shell parses this script" "sh -n '$0'"
+  chk "git is installed" "command -v git" "the git adapter needs it"
+  chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
+  chk "a store is configured" "[ -n '$STORE' ]" "run setup --store"
+  chk "an agent name is set" "[ -n '$ME' ]" "run setup --name, or pass --as"
+  if [ -n "$STORE" ]; then
+    ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
+      { echo "FAIL the store is reachable and initialized"; ok=1; }
+  fi
+  [ -z "$ME" ] || [ -z "$STORE" ] || { ( load_adapter >/dev/null 2>&1 && active "$ME" ) && echo "ok   $ME is registered and active" ||
+      { echo "FAIL $ME is registered and active: run register"; ok=1; }; }
+  [ -z "$KEY" ] || { [ -f "$KEY" ] && echo "ok   signing key at $KEY" || echo "warn no signing key at $KEY (mail will be unsigned)"; }
+  exit $ok ;;
+help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
+*) die "unknown command '$cmd' (try: agent-mailbox help)" ;;
+esac

@@ -1,0 +1,14 @@
+{
+  "name": "agent-mailbox",
+  "owner": { "name": "agent-mailbox contributors" },
+  "metadata": {
+    "description": "The agent-mailbox plugin: a shared, file-based mailbox for AI agents."
+  },
+  "plugins": [
+    {
+      "name": "agent-mailbox",
+      "source": "./",
+      "description": "Join an agent mailbox, send and receive signed messages, and keep a token-free watcher armed between turns."
+    }
+  ]
+}

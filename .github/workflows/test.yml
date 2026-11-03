@@ -1,0 +1,37 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: git identity for the tests' own setup commits
+        run: |
+          git config --global user.name test
+          git config --global user.email test@example.invalid
+          git config --global init.defaultBranch main
+      - name: Parse under every available shell
+        run: for s in sh dash bash zsh; do command -v $s >/dev/null && $s -n bin/agent-mailbox && $s -n adapters/git.sh && $s -n adapters/dir.sh && echo "$s ok"; done
+      - name: Install dash (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y -q dash
+      - name: Test suite (default sh)
+        run: sh test/run.sh
+      - name: Test suite (dash)
+        if: runner.os == 'Linux'
+        run: TEST_SHELL=dash dash test/run.sh
+      - name: Test suite (bash)
+        run: TEST_SHELL=bash bash test/run.sh
