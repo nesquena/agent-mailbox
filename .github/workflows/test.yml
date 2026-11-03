@@ -24,7 +24,14 @@ jobs:
           git config --global user.email test@example.invalid
           git config --global init.defaultBranch main
       - name: Parse under every available shell
-        run: for s in sh dash bash zsh; do command -v $s >/dev/null && $s -n bin/agent-mailbox && $s -n adapters/git.sh && $s -n adapters/dir.sh && echo "$s ok"; done
+        run: |
+          for s in sh dash bash zsh; do
+            command -v "$s" >/dev/null || { echo "$s not installed, skipped"; continue; }
+            for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh install.sh test/run.sh; do
+              "$s" -n "$f" || { echo "$s can't parse $f"; exit 1; }
+            done
+            echo "$s ok"
+          done
       - name: Install dash (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y -q dash
