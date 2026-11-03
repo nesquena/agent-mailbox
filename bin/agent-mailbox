@@ -74,7 +74,8 @@ one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't ho
 valid_name() { one_line name "$1"; echo "$1" | grep -Eq "$NAME_RE" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
 stamp_iso() { echo "$1" | sed -E 's/^(....)(..)(..)T(..)(..)(..)Z$/\1-\2-\3T\4:\5:\6Z/'; }
-have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -q 'sign\|usage'; }
+# OpenSSH 8+ lists `ssh-keygen -Y sign` in its usage; older versions don't (ERE, so BSD grep reads it the same)
+have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)'; }
 # header value of a field from a front-matter file (first occurrence, inside the --- block only)
 field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
   NR > 1 { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k && !done) { v = substr($0, i + 1); sub(/^ /, "", v); print v; done = 1 } }' "$2"; }
@@ -117,6 +118,7 @@ rel() { echo "${1#"$AD_DIR"/}"; }
 verify_file() {
   f=$1 inb=${2:-}
   from=$(field from "$f"); to=$(field to "$f")
+  echo "$from" | grep -Eq "$NAME_RE" && echo "$to" | grep -Eq "$NAME_RE" || { echo bad; return; }
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
   [ -f "$f.sig" ] || { echo unsigned; return; }
   rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
@@ -329,6 +331,7 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
+      echo "$rec" | grep -Eq "$ITEM_RE" && field from "$tmpd/m" | grep -Eq "$NAME_RE" || continue
       v=$(verify_file "$tmpd/m" "$ME")
       [ -z "$strict" ] || [ "$v" = verified ] || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
@@ -347,8 +350,9 @@ holds)
   echo "$latest" | awk -v want="$version" '
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
-    { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")" }
-    END { exit bad ? 5 : 0 }' ;;
+    { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
+    END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true makes holds tamper-proof" > "/dev/stderr"
+          exit bad ? 5 : 0 }' ;;
 watch)
   need_me; interval=120 max=7000 except="" pos=0
   while [ $# -gt 0 ]; do

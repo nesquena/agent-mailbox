@@ -29,9 +29,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y -q dash
       - name: Test suite (default sh)
-        run: sh test/run.sh
+        run: REQUIRE_SSH=1 sh test/run.sh
       - name: Test suite (dash)
         if: runner.os == 'Linux'
-        run: TEST_SHELL=dash dash test/run.sh
+        run: REQUIRE_SSH=1 TEST_SHELL=dash dash test/run.sh
       - name: Test suite (bash)
-        run: TEST_SHELL=bash bash test/run.sh
+        run: REQUIRE_SSH=1 TEST_SHELL=bash bash test/run.sh

@@ -9,7 +9,9 @@
 # <state>/sessions/<session id> and the watcher's pid under <state>/run/<name>.pid. A pid counts as alive only if
 # that process is still an agent-mailbox watcher, so a reused pid can't fool it. stop_hook_active (a stop that a
 # hook already continued) lets the stop through, so it never loops. It fails open: without jq, a session id, or a
-# record of a watcher, it allows the stop.
+# record of a watcher, it allows the stop. It finds the records through the same state path the CLI uses
+# (AGENT_MAILBOX_STATE, else XDG_STATE_HOME, else ~/.local/state): a watcher started with a custom state path needs
+# the same variable in the hook's environment, or the hook can't see it and allows the stop.
 command -v jq >/dev/null 2>&1 || exit 0
 input=$(cat)
 [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = true ] && exit 0
