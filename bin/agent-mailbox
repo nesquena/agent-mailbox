@@ -37,6 +37,8 @@ PROTOCOL=1
 NS=agent-mailbox
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
+# a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
+MSG_RE='^[A-Za-z0-9._-]+\.md$'
 
 die() { echo "agent-mailbox: $*" >&2; exit 1; }
 warn() { echo "agent-mailbox: $*" >&2; }
@@ -110,7 +112,10 @@ need_store() {
 require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
 record() { echo "$M/agents/$1.md"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
-inbox_files() { [ -d "$M/inbox/$1" ] || return 0; find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort; }
+inbox_files() { [ -d "$M/inbox/$1" ] || return 0
+  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
+    basename "$p" | grep -Eq "$MSG_RE" && echo "$p"; done; }
+valid_msg() { echo "$1" | grep -Eq "$MSG_RE" || die "'$1' isn't a message file name"; }
 rel() { echo "${1#"$AD_DIR"/}"; }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
@@ -261,7 +266,7 @@ send)
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   active "$ME" || die "'$ME' (you) isn't an active agent in this mailbox: register first"
   if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
-  for c in $consume; do [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+  for c in $consume; do valid_msg "$c"; [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   stamp=$(date -u +%Y%m%dT%H%M%SZ); f="$M/inbox/$to/$stamp-$ME-$topic.md"
   [ -e "$f" ] && die "$(rel "$f") exists (one message per topic per second)"
   mkdir -p "$M/inbox/$to"; paths=""
@@ -303,7 +308,7 @@ consume)
   paths=""
   for a in "$@"; do
     b=$(basename "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
-    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
+    valid_msg "$b"; [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
   for a in "$@"; do b=$(basename "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
   # shellcheck disable=SC2086
@@ -376,8 +381,9 @@ watch)
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
   trap 'rm -f "$STATE/run/$ME.pid"' EXIT
   trap 'exit 130' INT TERM
-  check() { ad_peek "$ROOT/inbox/$ME" | grep '\.md$' | while read -r p; do
-              case " $except " in (*" $(basename "$p") "*) ;; (*) echo "$p" ;; esac; done; }
+  check() { ad_peek "$ROOT/inbox/$ME" | while IFS= read -r p; do
+              b=$(basename "$p"); echo "$b" | grep -Eq "$MSG_RE" || continue
+              case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""
   mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
   # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
