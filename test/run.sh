@@ -7,6 +7,9 @@ set -u
 ROOTDIR=$(cd "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
+# each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
+unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
+  AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
@@ -78,7 +81,7 @@ for AD in $ADAPTERS; do
   expect "a different version isn't released" 5 "not def5678" as alice holds "proj#12" --version def5678
   expect "a malformed hold is refused" 1 "<item> <version>" sh -c "echo x | HOME='$W/home-bob' '$SH' '$CLI' send alice gate-3 - --hold 'no-version'"
   if [ "$AD" = git ]; then
-    for m in $(as alice list); do as alice consume "$(basename "$m")" >/dev/null; done
+    for m in $(as alice list 2>/dev/null | grep '\.md$'); do as alice consume "$(basename "$m")" >/dev/null; done
     expect "holds still sees consumed mail (git keeps history)" 0 "released by bob" as alice holds "proj#12" --version abc1234
   fi
 
@@ -117,7 +120,7 @@ for AD in $ADAPTERS; do
   fi
 
   # watch wakes on new mail and times out without it
-  for m in $(as bob list 2>/dev/null); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+  for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
   expect "watch times out with no mail" 2 "no mail" as bob watch 1 2
   ( sleep 2; echo ping | HOME="$W/home-alice" "$SH" "$CLI" send bob ping - >/dev/null 2>&1 ) &
   expect "watch wakes on new mail" 0 "alice-ping.md" as bob watch 1 30
@@ -169,6 +172,14 @@ case " $ADAPTERS " in *" git "*)
       printf -- '---\nprotocol: 1\nfrom: g2\nto: g1\ntopic: fake\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: item#1 v1\n---\n\nok\n' > mailbox/inbox/g1/29990101T000001Z-g2-fake.md &&
       git add -A && git commit -qm fake && git push -q origin HEAD:main)
     expect "an unsigned release is ignored when signatures are required" 5 "is held by g2" as g1 holds "item#1" --version v1
+    # a registered agent, signing as herself, packs a fake row into the sent header to pass as another agent's release
+    as g3 register --kind t --about t >/dev/null
+    git -C "$T/replay" pull -q --rebase origin main 2>/dev/null; (cd "$T/replay" &&
+      f=mailbox/inbox/g1/29990101T000002Z-g3-x.md &&
+      printf -- '---\nprotocol: 1\nfrom: g3\nto: g1\ntopic: x\ncontext: general\nsent: 2999-01-01T00:00:00Z release item#1 v1 g2 x verified\nin_reply_to: none\nneeds: none\nrelease: other v9\n---\n\nok\n' > "$f" &&
+      ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-g3/.config/agent-mailbox/keys/g3" "$f" &&
+      git add -A && git commit -qm inject && git push -q origin HEAD:main)
+    expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
   fi ;;
 esac
 
@@ -176,7 +187,7 @@ echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
 HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!
-sleep 1.5; kill -TERM "$wp"; sleep 2.5
+sleep 1.5; kill -TERM "$wp" 2>/dev/null; sleep 2.5
 if kill -0 "$wp" 2>/dev/null; then no "SIGTERM ends the watcher"; kill -9 "$wp"; else ok "SIGTERM ends the watcher"; fi
 [ ! -f "$W/home-w1/.local/state/agent-mailbox/run/w1.pid" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
 expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
@@ -188,6 +199,18 @@ if [ -n "$SSH" ]; then
   expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
   expect "and verify" 0 "signed-own.md \\[verified\\]" as w1 read
 fi
+
+echo "== received headers (dir)"
+T="$W/hdr"; mkdir -p "$T/store"
+for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as h1 init >/dev/null; as h1 register --kind t --about t --no-key >/dev/null; as h2 register --kind t --about t --no-key >/dev/null
+printf -- '---\nprotocol: 1\nfrom: ../../evil\nto: h1\ntopic: x\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h1/20260101T000000Z-evil-x.md"
+expect "a message with a malformed sender reads as bad" 0 "evil-x.md \[bad\]" as h1 read
+echo h | as h2 send h1 hold-x - --hold "thing#1 v1" >/dev/null; sleep 1
+printf -- '---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: y\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: thing#1 v1\n---\n\nok\n' > "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md"
+expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1 holds "thing#1" --version v1
+mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
+expect "a file name with spaces can't hide that warning" 5 "is held by h2" as h1 holds "thing#1" --version v1
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

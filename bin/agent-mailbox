@@ -331,7 +331,10 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
-      echo "$rec" | grep -Eq "$ITEM_RE" && field from "$tmpd/m" | grep -Eq "$NAME_RE" || continue
+      # every column of the row below is validated, so no header value can shift the others
+      echo "$rec" | grep -Eq "$ITEM_RE" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
+        field sent "$tmpd/m" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' &&
+        basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       v=$(verify_file "$tmpd/m" "$ME")
       [ -z "$strict" ] || [ "$v" = verified ] || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
