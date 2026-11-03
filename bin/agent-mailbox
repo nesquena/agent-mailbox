@@ -80,10 +80,18 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
   NR > 1 { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k && !done) { v = substr($0, i + 1); sub(/^ /, "", v); print v; done = 1 } }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 put() { tmp="$1.tmp.$$"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
+# set_cfg <key> <value>: replace or add one line of the config file
+set_cfg() {
+  one_line "$1" "$2"; mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
+  rest=$( [ -f "$CONFIG" ] && grep -v "^$1[[:space:]]*=" "$CONFIG" ); put "$CONFIG" "$(printf '%s\n%s = %s' "$rest" "$1" "$2" | sed '/^$/d')"
+}
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; else shasum -a 256 | cut -c1-16; fi; }
 
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
+  echo "$ROOT" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' && ! echo "/$ROOT/" | grep -q '/\.\./' ||
+    die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..'), not '$ROOT'"
+  echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || die "bad branch name '$BRANCH'"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   echo "$ADAPTER" | grep -Eq '^[a-z0-9-]+$' || die "bad adapter name '$ADAPTER'"
   [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
@@ -185,6 +193,8 @@ register|update)
     if [ -n "$keyfile" ]; then
       [ -f "$keyfile" ] || die "no such key file $keyfile"
       pub=$(cut -d' ' -f1,2 "$keyfile"); KEY="${keyfile%.pub}"
+      [ -f "$KEY" ] || die "the private key ${KEY} (beside $keyfile) is missing"
+      set_cfg key "$(cd "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
     elif have_ssh; then
       if [ ! -f "$KEY" ]; then
         mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
@@ -269,7 +279,7 @@ send)
 list)
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
-  for p in $mail; do rel "$p"; done ;;
+  echo "$mail" | while IFS= read -r p; do rel "$p"; done ;;
 read)
   need_me; except=""
   while [ $# -gt 0 ]; do
@@ -277,15 +287,15 @@ read)
                  *) die "unknown option $1" ;; esac
   done
   load_adapter; ad_sync; need_store
-  n=0
-  for p in $(inbox_files "$ME"); do
+  shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
-    n=$((n+1)); v=$(verify_file "$p" "$ME")
+    v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # a body line can't pass for a boundary: it is indented, and each message ends with its own marker
     sed 's/^=====/ =====/' "$p"; printf '===== end %s\n\n' "$(rel "$p")"
-  done
-  [ "$n" -gt 0 ] || { echo "no mail for $ME"; exit 3; } ;;
+  done)
+  [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
+  printf '%s\n' "$shown" ;;
 consume)
   [ $# -ge 1 ] || die "usage: consume <file>..."; need_me; load_adapter; ad_sync; need_store
   paths=""
@@ -357,7 +367,8 @@ watch)
   mkdir -p "$STATE/run" "$STATE/sessions"
   [ -z "$SESSION" ] || echo "$ME" > "$STATE/sessions/$SESSION"
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
-  trap 'rm -f "$STATE/run/$ME.pid"' EXIT INT TERM
+  trap 'rm -f "$STATE/run/$ME.pid"' EXIT
+  trap 'exit 130' INT TERM
   check() { ad_peek "$ROOT/inbox/$ME" | grep '\.md$' | while read -r p; do
               case " $except " in (*" $(basename "$p") "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""

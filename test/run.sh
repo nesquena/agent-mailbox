@@ -8,7 +8,8 @@ ROOTDIR=$(cd "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
 ADAPTERS="${*:-git dir}"
-W=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-test.XXXXXX")
+# a space in every path, as in a macOS home folder like "/Users/Jo Smith"
+W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
 trap 'rm -rf "$W"' EXIT
 pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
@@ -168,6 +169,23 @@ case " $ADAPTERS " in *" git "*)
     expect "an unsigned release is ignored when signatures are required" 5 "is held by g2" as g1 holds "item#1" --version v1
   fi ;;
 esac
+
+echo "== watcher lifecycle and keys (dir)"
+T="$W/life"; mkdir -p "$T"
+as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
+HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!
+sleep 1.5; kill -TERM "$wp"; sleep 2.5
+if kill -0 "$wp" 2>/dev/null; then no "SIGTERM ends the watcher"; kill -9 "$wp"; else ok "SIGTERM ends the watcher"; fi
+[ ! -f "$W/home-w1/.local/state/agent-mailbox/run/w1.pid" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
+expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
+if [ -n "$SSH" ]; then
+  ssh-keygen -q -t ed25519 -N '' -f "$T/own" -C own
+  as w2 setup --store "$T/store" --adapter dir --name w2 >/dev/null
+  expect "register with your own key" 0 "register: w2" as w2 register --kind t --about t --key "$T/own.pub"
+  expect "the key path is kept in the config" 0 "^key = .*/own$" grep '^key' "$W/home-w2/.config/agent-mailbox/config"
+  expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
+  expect "and verify" 0 "signed-own.md \\[verified\\]" as w1 read
+fi
 
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
