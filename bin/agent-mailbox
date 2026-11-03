@@ -40,7 +40,12 @@ ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 
 die() { echo "agent-mailbox: $*" >&2; exit 1; }
 warn() { echo "agent-mailbox: $*" >&2; }
-here() { cd "$(dirname "$0")" && pwd -P; }
+# this script's real folder, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
+here() {
+  p=$0
+  while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
+  cd "$(dirname "$p")" && pwd -P
+}
 SELF_DIR=$(here)
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 

@@ -212,6 +212,16 @@ expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1
 mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
 expect "a file name with spaces can't hide that warning" 5 "is held by h2" as h1 holds "thing#1" --version v1
 
+echo "== installed link (install.sh)"
+T="$W/inst"; mkdir -p "$T"
+expect "install.sh links the CLI" 0 "linked" env HOME="$W/home-i1" "$SH" "$ROOTDIR/install.sh" --prefix "$T/prefix"
+# a link to a link, as a package manager's shim might add
+ln -s "$T/prefix/bin/agent-mailbox" "$T/shim"
+for link in "$T/prefix/bin/agent-mailbox" "$T/shim"; do
+  expect "the linked CLI finds its adapters ($(basename "$link"))" 0 "initialized" \
+    env HOME="$W/home-i-$(basename "$link")" AGENT_MAILBOX_STORE="$T/store-$(basename "$link")" AGENT_MAILBOX_ADAPTER=dir "$SH" "$link" init
+done
+
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
