@@ -45,10 +45,13 @@ warn() { echo "agent-mailbox: $*" >&2; }
 # this script's real folder, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
 here() {
   p=$0
+  # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
+  case "$p" in (*/*) ;; (*) [ -f "$p" ] || return 1 ;; esac
   while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
   CDPATH= cd -P -- "$(dirname "$p")" && pwd -P
 }
 SELF_DIR=$(here) || SELF_DIR=""
+lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
 # --- configuration: flags > environment > config file > defaults ------------------------------------------------
@@ -97,7 +100,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
-  [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ] || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
+  lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
   echo "$ROOT" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' && ! echo "/$ROOT/" | grep -q '/\.\./' ||
     die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..'), not '$ROOT'"
   echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || die "bad branch name '$BRANCH'"
@@ -216,7 +219,7 @@ register|update)
       [ -f "$keyfile" ] || die "no such key file $keyfile"
       pub=$(cut -d' ' -f1,2 "$keyfile"); KEY="${keyfile%.pub}"
       [ -f "$KEY" ] || die "the private key ${KEY} (beside $keyfile) is missing"
-      set_cfg key "$(cd "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
+      set_cfg key "$(CDPATH= cd -P -- "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
     elif have_ssh; then
       if [ ! -f "$KEY" ]; then
         mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
@@ -430,6 +433,7 @@ doctor)
   chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
   chk "a store is configured" "[ -n '$STORE' ]" "run setup --store"
   chk "an agent name is set" "[ -n '$ME' ]" "run setup --name, or pass --as"
+  chk "the CLI finds its adapter" 'lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
       { echo "FAIL the store is reachable and initialized"; ok=1; }

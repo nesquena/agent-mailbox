@@ -5,7 +5,7 @@
 set -u
 prefix="$HOME/.local"
 [ "${1:-}" = --prefix ] && { [ $# -ge 2 ] || { echo "usage: install.sh [--prefix <dir>]" >&2; exit 2; }; prefix=$2; }
-src="$(cd "$(dirname "$0")" && pwd -P)/bin/agent-mailbox"
+src="$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)/bin/agent-mailbox"
 dest="$prefix/bin/agent-mailbox"
 mkdir -p "$prefix/bin" || exit 1
 if [ -e "$dest" ] && [ ! -L "$dest" ]; then echo "install.sh: $dest exists and isn't a link; leaving it alone" >&2; exit 1; fi

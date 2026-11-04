@@ -16,3 +16,6 @@ First version.
 - **The end-to-end test suite** (`test/run.sh`), run on Linux and macOS in CI.
 - **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
   link instead of beside the script (#1).
+- **Fix:** `install.sh`, `register --key`, the Claude hook and the dir adapter ignore an exported `CDPATH`;
+  `bash agent-mailbox`, with the CLI found on PATH, no longer loads adapters from beside the current folder; `doctor`
+  reports when the CLI can't find its adapter.
