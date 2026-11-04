@@ -455,7 +455,8 @@ pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h13\ncontext: ge
 echo r | as u2 send u1 r-13 - --release "item#13 v1" >/dev/null
 pl sh -c 'f=mailbox/inbox/u1/20000101T000000Z-u2-h13.md && sed "s/^sent: .*/sent: 2999-01-01T00:00:08Z/" "$f" > "$f.t" && mv "$f.t" "$f"'
 expect "a hold whose rewrite changes only its sent line still counts" 5 "item#13 is held by u2" as u1 holds "item#13" --version v1
-# 5. a merge whose inbox tree drops the hold, so a simplified history walk never visits the commit that added it
+# 5. a merge whose inbox tree drops the hold, so a history walk with neither -m nor --full-history never visits the commit
+# that added it
 echo r | as u2 send u1 r-2 - --release "item#2 v1" >/dev/null
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null) && base=$(git -C "$T/plant" rev-parse HEAD)
 sleep 1; echo h | as u2 send u1 h-2 - --hold "item#2 v1" >/dev/null
@@ -478,6 +479,10 @@ sed -i.bak '/diffMerges/d; /^\[log\]$/d' "$W/home-u1/.gitconfig"; rm -f "$W/home
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h12\ncontext: general\nsent: 2999-01-01T00:00:07Z\nin_reply_to: none\nneeds: none\nhold: item#12 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000007Z-u2-h12.md"
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r12\ncontext: general\nsent: 2999-01-01T00:00:07Z\nin_reply_to: none\nneeds: none\nrelease: item#12 v1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000007Z-u2-r12.md"
 expect "on an equal sent time, a hold beats a later release" 5 "item#12 is held by u2" as u1 holds "item#12" --version v1
+# 7b. the same, with the release first in history
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r16\ncontext: general\nsent: 2999-01-01T00:00:10Z\nin_reply_to: none\nneeds: none\nrelease: item#16 v1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000010Z-u2-r16.md"
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h16\ncontext: general\nsent: 2999-01-01T00:00:10Z\nin_reply_to: none\nneeds: none\nhold: item#16 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000010Z-u2-h16.md"
+expect "on an equal sent time, a hold beats an earlier release" 5 "item#16 is held by u2" as u1 holds "item#16" --version v1
 # 8. two releases with the same sent time naming different versions conflict: neither counts
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14a\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14a.md"
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14b\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v2\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14b.md"
@@ -494,6 +499,19 @@ rows=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOT
 [ "$rows" = 1 ] && ok "a hold under several merges is read once" || no "a hold under merges was listed $rows times"
 sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
+# 10. in a store that requires signatures, a copy of a signed hold committed without its signature (an old-dated side
+# branch merged in, so history lists the copy first) doesn't stand in for the signed one
+if [ -n "$SSH" ]; then
+  T="$W/rules-strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  for a in sg1 sg2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as sg1 init --require-signatures >/dev/null; for a in sg1 sg2; do as $a register --kind t --about t >/dev/null; done
+  echo r | as sg2 send sg1 r-1 - --release "item#1 v1" >/dev/null; sleep 1; echo h | as sg2 send sg1 h-1 - --hold "item#1 v1" >/dev/null
+  git clone -q -b main "$T/store.git" "$T/plant" && (cd "$T/plant" && git config user.email e@e && git config user.name e &&
+    f=$(ls mailbox/inbox/sg1/*-sg2-h-1.md) && cp "$f" ../h.md && git checkout -q -b side "$(git log --format=%H --diff-filter=A -- "$f")^" &&
+    cp ../h.md "$f" && git add "$f" && GIT_COMMITTER_DATE=2001-01-01T00:00:00Z GIT_AUTHOR_DATE=2001-01-01T00:00:00Z git commit -qm side &&
+    git checkout -q main && git merge -q --no-edit side && git push -q origin HEAD:main)
+  expect "an unsigned copy of a signed hold doesn't hide it" 5 "item#1 is held by sg2" as sg1 holds "item#1" --version v1
+fi
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

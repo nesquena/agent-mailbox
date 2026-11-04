@@ -103,10 +103,11 @@ ad_peek() {
 # --no-renames counts a renamed file as added; A, M and T count added, rewritten and retyped files. A pattern (git
 # log -G, an extended regex, searching every file as plain text) narrows only the added versions, whose whole content
 # is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
-# unique per path and content, so merges can't multiply the work; the CLI checks every listed file.
+# unique per path, content and signature (the <path>.sig at that commit), so merges can't multiply the work and no
+# copy of a file under another signature can stand in for it; the CLI checks every listed file.
 ad_history() {
   [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  { [ -z "${2:-}" ] || ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
+  AD_ROWS=$({ [ -z "${2:-}" ] || ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
       --format='C %H' --text --no-textconv "-G$2" HEAD -- "$1/" 2>/dev/null | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
       --format='C %H' HEAD -- "$1/" 2>/dev/null; } |
@@ -114,7 +115,15 @@ ad_history() {
       $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
       $1 == "C" && NF == 2 { c = $2; next }
       /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
-             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[p " " f[4]]++) print c, p }'
+             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
+  [ -n "$AD_ROWS" ] || return 0
+  # the signature blob of each row, one line per row ("<name> missing" when there is none); a row left without
+  # one (cat-file failed) is still listed
+  { printf '%s\n' "$AD_ROWS"; echo =
+    printf '%s\n' "$AD_ROWS" | awk -F'\t' '{ print $1 ":" $2 ".sig" }' | ad_git cat-file --batch-check='%(objectname)'; } |
+    awk -F'\t' '!s { if ($0 == "=") s = 1; else r[++m] = $0; next }
+                 { split(r[++n], f, "\t"); b = /^[0-9a-f]+$/ ? $0 : "-"; if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
+                 END { while (n < m) { split(r[++n], f, "\t"); print f[1], f[2] } }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>
 ad_show() { ad_git show "$1:$2" 2>/dev/null; }

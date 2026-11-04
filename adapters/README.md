@@ -23,7 +23,7 @@ call the CLI's `die` and `warn`. It defines:
 | `ad_commit <message> <path>...` | Publish exactly these paths, relative to `AD_DIR`, as one atomic change: files that exist are added or updated, files that don't are removed. On a conflict with other writers, retry. Exit 4 when the change is saved locally but couldn't be published, so the next command retries it. |
 | `ad_poll` | Print a short token that changes whenever the store changes. Called every watch interval, so it must be cheap (one small round trip). |
 | `ad_peek <dir>` | List the files under `<dir>` in the store's latest state, one path per line, without changing `AD_DIR`. |
-| `ad_history <dir> [<ERE>]` | Print `<ref> <path>` for every file ever added under `<dir>`, oldest first, including removed ones. An adapter without history prints the current files, with `-` as the ref. With a pattern, it may leave out files that were added without a line matching it; listing more is fine, since the CLI checks each file. |
+| `ad_history <dir> [<ERE>]` | Print `<ref> <path>` for every version of every file ever under `<dir>`, oldest first, including removed ones: each time a file was added, rewritten or retyped. An adapter without history prints the current files, with `-` as the ref. With a pattern, it may leave out an added version with no line matching it, but never a rewritten one. It may list a version once when a later row has the same path, content and `<path>.sig`. Listing more is fine, since the CLI checks each file. |
 | `ad_show <ref> <path>` | Print a file's content as of `<ref>`; for `-`, its current content. |
 
 The CLI writes every file to a temporary name, then renames it into place, inside `AD_DIR`, before calling
