@@ -349,17 +349,24 @@ expect "doctor flags a malformed adapter name" 1 "FAIL the CLI finds its adapter
   env HOME="$W/home-o1" AGENT_MAILBOX_ADAPTER=../adapters/dir "$SH" "$CLI" doctor
 echo "dash body" > "$T/--as"
 expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' && cd \"O'Brien\" && HOME='$W/home-o1' '$SH' '$CLI' send o2 dash-body --as"
-expect "an --except value starting with - is a file name" 0 "dash-body" as o2 read --except --as
+# a message whose name starts with '-': --except must take it as a file name and hide it
+cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
+out=$(as o2 read --except -x.md 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md' && ! printf '%s\n' "$out" | grep -q -e '/-x\.md' -e basename &&
+  ok "an --except value starting with - is a file name" || no "an --except value starting with - is a file name (exit $rc)" "$out"
 expect "trust refuses a misplaced --as" 1 "goes before the command" as o1 trust o2 --as o2
 expect "an error quotes a value as given" 1 "v1.cZ" as o1 send o2 h - --hold 'p#1 v1\cZ'
 # a mailbox folder starting with '-' is refused (find and basename would read it as an option)
 as o3 setup --store "$T/store-dash" --adapter dir --root -mb --name o3 >/dev/null
 expect "a root part starting with - is refused" 1 "root must be" as o3 init
+expect "and doctor says why" 1 "FAIL the mailbox folder \(root\) is valid" as o3 doctor
+expect "a root part named .git is refused" 1 "root must be" env HOME="$W/home-o3" AGENT_MAILBOX_ROOT=x/.git "$SH" "$CLI" init
 # a backslash in the store path (paths are printed with printf, never echo)
 for a in o4 o5; do as $a setup --store "$T/st\tore" --adapter dir --name $a >/dev/null; done
 as o4 init >/dev/null; as o4 register --kind t --about t --no-key >/dev/null; as o5 register --kind t --about t --no-key >/dev/null
 expect "a backslash in the store path works" 0 "^sent " sh -c "echo hi | HOME='$W/home-o4' '$SH' '$CLI' send o5 bs -"
-expect "and the mail is listed" 0 "o4-bs.md" as o5 list
+expect "and the mail is listed" 0 '^mailbox/inbox/o5/[^/]*-o4-bs\.md$' as o5 list
+expect "and read" 0 '^===== mailbox/inbox/o5/[^/]*-o4-bs\.md \[' as o5 read
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

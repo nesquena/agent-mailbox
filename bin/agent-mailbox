@@ -60,6 +60,9 @@ here() {
   CDPATH= cd -P -- "$(dirname "$p")" && pwd -P
 }
 SELF_DIR=$(here) || SELF_DIR=""
+# the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
+root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
+  case "/$ROOT/" in (*/../*|*/.git/*) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
@@ -110,8 +113,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
   lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
-  matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" && case "/$ROOT/" in (*/../*) false ;; (*) true ;; esac ||
-    die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..', no part starting with '-'), not '$ROOT'"
+  root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git', or starting with '-'), not '$ROOT'"
   matches '^[A-Za-z0-9._/-]+$' "$BRANCH" || die "bad branch name '$BRANCH'"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
@@ -188,7 +190,7 @@ setup)
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
 }")"
-  echo "wrote $CONFIG" ;;
+  printf 'wrote %s\n' "$CONFIG" ;;
 init)
   req=false title="agent mailbox"
   while [ $# -gt 0 ]; do
@@ -236,7 +238,7 @@ register|update)
       if [ ! -f "$KEY" ]; then
         mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
         ssh-keygen -q -t ed25519 -N '' -C "$NS:$ME" -f "$KEY" || die "ssh-keygen failed"
-        echo "generated a signing key at $KEY (keep the private half on this machine only)"
+        printf 'generated a signing key at %s (keep the private half on this machine only)\n' "$KEY"
       fi
       pub=$(cut -d' ' -f1,2 "$KEY.pub")
     else
@@ -449,9 +451,9 @@ watch)
   echo "no mail for $ME after ${max}s"; exit 2 ;;
 whoami)
   [ $# -eq 0 ] || unknown "$1"
-  echo "name:    ${ME:-<unset>}"; echo "store:   ${STORE:-<unset>}"; echo "adapter: $ADAPTER"; echo "root:    $ROOT"
-  echo "branch:  $BRANCH"; echo "config:  $CONFIG"; echo "key:     ${KEY:-<none>}$( [ -n "$KEY" ] && [ -f "$KEY" ] || echo ' (missing)')"
-  echo "state:   $STATE" ;;
+  printf 'name:    %s\nstore:   %s\nadapter: %s\nroot:    %s\nbranch:  %s\nconfig:  %s\nkey:     %s%s\nstate:   %s\n' \
+    "${ME:-<unset>}" "${STORE:-<unset>}" "$ADAPTER" "$ROOT" "$BRANCH" "$CONFIG" "${KEY:-<none>}" \
+    "$( [ -n "$KEY" ] && [ -f "$KEY" ] || echo ' (missing)')" "$STATE" ;;
 doctor)
   [ $# -eq 0 ] || unknown "$1"
   ok=0
@@ -461,6 +463,7 @@ doctor)
   chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
   chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
+  chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git', or starting with '-'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
@@ -468,7 +471,7 @@ doctor)
   fi
   [ -z "$ME" ] || [ -z "$STORE" ] || { ( load_adapter >/dev/null 2>&1 && active "$ME" ) && echo "ok   $ME is registered and active" ||
       { echo "FAIL $ME is registered and active: run register"; ok=1; }; }
-  [ -z "$KEY" ] || { [ -f "$KEY" ] && echo "ok   signing key at $KEY" || echo "warn no signing key at $KEY (mail will be unsigned)"; }
+  [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command '$cmd' (try: agent-mailbox help)" ;;
