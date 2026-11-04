@@ -4,7 +4,7 @@
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8+) and are skipped without it. Exit 0 when all pass.
 # Run it with a specific shell to test that shell: `dash test/run.sh`, `bash test/run.sh`.
 set -u
-ROOTDIR=$(cd "$(dirname "$0")/.." && pwd -P)
+ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
@@ -246,6 +246,27 @@ else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
 for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
 expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 2
+
+echo "== installed link (install.sh)"
+T="$W/inst"; mkdir -p "$T"
+expect "install.sh links the CLI" 0 "linked" env HOME="$W/home-i1" "$SH" "$ROOTDIR/install.sh" --prefix "$T/prefix"
+# a link to a link, as a package manager's shim might add
+ln -s "$T/prefix/bin/agent-mailbox" "$T/shim"
+for link in "$T/prefix/bin/agent-mailbox" "$T/shim"; do
+  expect "the linked CLI finds its adapters ($(basename "$link"))" 0 "initialized" \
+    env HOME="$W/home-i-$(basename "$link")" AGENT_MAILBOX_STORE="$T/store-$(basename "$link")" AGENT_MAILBOX_ADAPTER=dir "$SH" "$link" init
+done
+# a relative link with '..' to the script, reached through a linked folder, as a package installs it on a merged /usr
+# (/bin -> usr/bin, /usr/bin/x -> ../share/x/bin/x): '..' must resolve physically, from usr/bin, not from bin
+mkdir -p "$T/usr/bin" "$T/usr/share/am"; cp -R "$ROOTDIR/bin" "$ROOTDIR/adapters" "$T/usr/share/am/"
+ln -s usr/bin "$T/bin"; ln -s ../share/am/bin/agent-mailbox "$T/usr/bin/am"
+# a decoy at the logical (wrong) path: a CLI that resolves '..' logically sources it, in every shell
+mkdir -p "$T/share/am/bin" "$T/share/am/adapters"; printf 'echo decoy adapter >&2; exit 9\n' > "$T/share/am/adapters/dir.sh"
+expect "a relative link through a linked folder finds its adapters" 0 "initialized" \
+  env HOME="$W/home-i-rel" AGENT_MAILBOX_STORE="$T/store-rel" AGENT_MAILBOX_ADAPTER=dir "$SH" "$T/bin/am" init
+# a relative invocation with CDPATH exported: cd mustn't print or jump elsewhere
+expect "an exported CDPATH doesn't break the lookup" 0 "initialized" env CDPATH=. HOME="$W/home-i-cdp" \
+  AGENT_MAILBOX_STORE="$T/store-cdp" AGENT_MAILBOX_ADAPTER=dir sh -c "cd '$ROOTDIR' && '$SH' bin/agent-mailbox init"
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

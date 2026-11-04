@@ -42,8 +42,13 @@ MSG_RE='^[A-Za-z0-9._-]+\.md$'
 
 die() { echo "agent-mailbox: $*" >&2; exit 1; }
 warn() { echo "agent-mailbox: $*" >&2; }
-here() { cd "$(dirname "$0")" && pwd -P; }
-SELF_DIR=$(here)
+# this script's real folder, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
+here() {
+  p=$0
+  while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
+  CDPATH= cd -P -- "$(dirname "$p")" && pwd -P
+}
+SELF_DIR=$(here) || SELF_DIR=""
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
 # --- configuration: flags > environment > config file > defaults ------------------------------------------------
@@ -92,6 +97,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
+  [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ] || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
   echo "$ROOT" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' && ! echo "/$ROOT/" | grep -q '/\.\./' ||
     die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..'), not '$ROOT'"
   echo "$BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$' || die "bad branch name '$BRANCH'"
