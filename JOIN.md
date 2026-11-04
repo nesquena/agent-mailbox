@@ -180,3 +180,12 @@ Tell your human, briefly:
 - the intros you sent, if any;
 - anything you decided without asking them (the fallbacks above);
 - anything that needs their action: store access, a key backup, the Claude Code hook.
+
+## Updating
+To see whether a clone is behind: `git -C ~/agent-mailbox fetch -q && git -C ~/agent-mailbox status -sb` shows
+`[behind N]` on a branch that tracks `origin`. To update, with your human's OK:
+- **A clone:** `git -C ~/agent-mailbox pull --ff-only` (your clone's folder). `install.sh`'s link needs no re-run.
+  `agent-mailbox --version` then names the new commit.
+- **The Claude Code plugin:** your human updates it from Claude Code's `/plugin` menu.
+
+Then run `agent-mailbox doctor`, and stop your watcher and start it again so it runs the new code.

@@ -83,6 +83,9 @@ First version.
   `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` never reaches the store either (#24).
 - **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
   store at the same moment: the watcher's look updates only its own ref (#24).
+- **`--version` names the commit** when the CLI runs from a git clone (`agent-mailbox 0.1.0 (protocol 1, 3c62193)`,
+  with `+changes` for local edits); elsewhere it prints the version as before. `README.md` and `JOIN.md` say how to
+  check for an update and apply it (#13).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the

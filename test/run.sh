@@ -565,6 +565,43 @@ wait
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
 
+echo "== the CLI's version, and updating it"
+T="$W/upd"; mkdir -p "$T/seed" "$T/copy/bin" "$T/nogit" "$T/dotseed/tools" "$T/lone/bin"
+# a clone of the CLI with an upstream, made from this checkout's files so the tests run the code as it is now; its
+# folder's name has a space and a quote
+C="$T/O'Neil clone"
+cp -R "$ROOTDIR/bin" "$ROOTDIR/adapters" "$T/seed/"; cp "$ROOTDIR/bin/agent-mailbox" "$T/copy/bin/"
+# repositories that track a copy but aren't clones of the CLI: one vendors it below its top, one has no adapters
+cp -R "$ROOTDIR/bin" "$ROOTDIR/adapters" "$T/dotseed/tools/"; cp "$ROOTDIR/bin/agent-mailbox" "$T/lone/bin/"
+for r in seed dotseed lone; do
+  (cd "$T/$r" && git init -q && git config user.email s@s && git config user.name s && git add -A && git commit -qm v1)
+done
+git clone -q --bare "$T/seed" "$T/up.git"; git clone -q "$T/up.git" "$C"
+git clone -q --bare "$T/dotseed" "$T/dots.git"; git clone -q "$T/dots.git" "$T/dots"
+U="$C/bin/agent-mailbox"; sha=$(git -C "$C" rev-parse --short HEAD)
+plain='^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+\)$'
+expect "--version from a clone names its commit" 0 "^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+, $sha\)$" "$SH" "$U" --version
+ln -s "$U" "$T/link"
+expect "and through a link to it" 0 "\(protocol [0-9]+, $sha\)$" "$SH" "$T/link" --version
+echo "# a local change" >> "$C/adapters/dir.sh"
+expect "--version marks local changes" 0 "\(protocol [0-9]+, $sha\+changes\)$" "$SH" "$U" --version
+git -C "$C" checkout -q -- adapters/dir.sh
+expect "a copy outside any clone prints the plain version" 0 "$plain" "$SH" "$T/copy/bin/agent-mailbox" --version
+expect "even run from inside a clone" 0 "$plain" in_dir "$C/bin" "$SH" "$T/copy/bin/agent-mailbox" --version
+expect "or with GIT_DIR naming one" 0 "$plain" env GIT_DIR="$C/.git" GIT_WORK_TREE="$T/copy" "$SH" "$T/copy/bin/agent-mailbox" --version
+mkdir -p "$C/extra"; cp "$U" "$C/extra/"
+expect "a copy inside a clone that doesn't track it prints the plain version" 0 "$plain" "$SH" "$C/extra/agent-mailbox" --version
+rm -rf "$C/extra"
+expect "a copy another repository tracks below its top prints the plain version" 0 "$plain" "$SH" "$T/dots/tools/bin/agent-mailbox" --version
+expect "and so does a tracked bin/agent-mailbox without adapters/git.sh" 0 "$plain" "$SH" "$T/lone/bin/agent-mailbox" --version
+for c in dirname basename readlink; do ln -s "$(command -v $c)" "$T/nogit/$c"; done
+out=$(PATH="$T/nogit" "$(command -v "$SH")" "$U" --version 2>&1); want=$("$SH" "$T/copy/bin/agent-mailbox" --version)
+[ "$out" = "$want" ] && ok "without git, --version prints the plain version and nothing else" ||
+  no "without git, --version prints the plain version and nothing else" "$out"
+# the update steps in README.md: fast-forward the clone, then --version names the new commit
+echo news > "$T/seed/NEWS"; (cd "$T/seed" && git add NEWS && git commit -qm v2 && git push -q "$T/up.git" HEAD)
+expect "the documented update fast-forwards the clone" 0 - git -C "$C" pull -q --ff-only
+expect "after the update, --version names the new commit" 0 "\(protocol [0-9]+, $(git -C "$T/seed" rev-parse --short HEAD)\)$" "$SH" "$U" --version
 echo "== text from the store is shown, never obeyed by the terminal (dir)"
 T="$W/esc"; mkdir -p "$T"
 for a in x1 x2 x3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
