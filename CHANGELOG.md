@@ -39,8 +39,8 @@ First version.
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
 - **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators
   and tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the
-  cursor, overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line with an
-  `=` before its first space is indented, and a message's last line always ends before its end marker, so no body
+  cursor, overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose
+  first `=` follows nothing visible is indented, and a message's last line always ends before its end marker, so no body
   line can start like a message boundary. `agents` cuts a record's status, kind and
   about to 200 bytes. `verify <name>` looks for the name only in your own inbox (#22).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session

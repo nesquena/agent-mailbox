@@ -376,10 +376,10 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # a body line can't pass for a boundary: a line with an = before its first space, whatever else is around it
-    # (invisible characters included), is indented; a last line without its newline gets one, and each message ends
-    # with its own marker
-    clean 's/^[^ ]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p")" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
+    # a body line can't pass for a boundary: a line whose first = comes after nothing but invisible bytes (anything
+    # outside printable ASCII, so no visible text) is indented; a last line without its newline gets one, and each
+    # message ends with its own marker
+    clean 's/^[^ -~]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
