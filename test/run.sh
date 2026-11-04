@@ -77,11 +77,47 @@ for AD in $ADAPTERS; do
   if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
+  expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
+  expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
+  expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
+  expect "sent refuses a bad name" 1 "isn't a valid name" as alice sent Bob
+  expect "and a misplaced --as" 1 "goes before the command" as alice sent --as bob
+  expect "sent with nothing waiting exits 3" 3 "no mail from bob waiting" as bob sent
   f=$(as bob list | head -n 1); fb=$(basename "$f")
 
   echo "yes" > "$T/reply"
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
   expect "the consumed message is gone" 3 "no mail" as bob list
+  expect "and no longer listed by its sender's sent" 3 "no mail from alice waiting" as alice sent
+  expect "a reply with needs none shows no needs" 0 "^mailbox/inbox/alice/[^ ]*-bob-review-1-reply\.md to alice age [0-9]+[sm]$" as bob sent
+  # sent counts a message only when its file name's sender and its from: header are both the sender; planted by
+  # someone with write access: mail from alice, long ago and with no valid sent time; a name or a header claiming
+  # alice alone; one in a subfolder; one in another inbox
+  rm -rf "$T/ps"; mkdir -p "$T/ps/bob/sub" "$T/ps/carol"
+  pm() { printf -- '---\nprotocol: 1\nfrom: %s\nto: %s\ntopic: x\ncontext: general\nsent: %s\nin_reply_to: none\nneeds: %s\n---\n\nhi\n' "$2" "$3" "$4" "$5" > "$T/ps/$3/$1"; }
+  pm 20200101T000000Z-alice-old.md alice bob 2020-01-01T00:00:00Z "an answer"
+  pm 20200101T000001Z-carol-name.md alice bob 2020-01-01T00:00:00Z none
+  pm 20200101T000002Z-alice-header.md carol bob 2020-01-01T00:00:00Z none
+  pm 20200101T000003Z-alice-nosent.md alice bob yesterday none
+  pm sub/20200101T000004Z-alice-sub.md alice bob 2020-01-01T00:00:00Z none
+  pm 20200101T000005Z-alice-else.md alice carol 2020-01-01T00:00:00Z none
+  # either side of 24 hours (the test's date: GNU -d or BSD -v)
+  ago() { date -u -d "-$1 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-"$1"H +%Y-%m-%dT%H:%M:%SZ; }
+  pm 20200101T000006Z-alice-h25.md alice bob "$(ago 25)" none
+  pm 20200101T000007Z-alice-h23.md alice bob "$(ago 23)" none
+  tamper "cp -R '$T/ps/.' mailbox/inbox/"
+  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /')
+  want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an answer
+mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
+mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
+mailbox/inbox/bob/20200101T000006Z-alice-h25.md to bob age 1d1h stale
+mailbox/inbox/bob/20200101T000007Z-alice-h23.md to bob age 23h"
+  [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
+    no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
+  out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23)" ] &&
+    ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
+  tamper "rm -rf mailbox/inbox/carol mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins

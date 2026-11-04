@@ -46,6 +46,9 @@ First version.
 - **Fix:** every value the CLI validates goes through `printf`, not `echo`, and no value with a line break or
   carriage return passes; under dash and macOS's `/bin/sh`, `echo` read backslash escapes, so a value could pass
   validation cut short.
+- **`sent [<to>]`** lists the mail you sent that's still in a recipient's inbox, oldest first, with its age, its
+  `needs`, and `stale` once it's unconsumed after 24 hours, so a sender can raise stale mail as `PROTOCOL.md` asks.
+  A message counts when its file name and its `from:` header both name you; signatures aren't checked (#XXXX).
 - **Retiring** clears this session's watch marker, and acting as a retired agent says how to come back.
 - **Fix:** `doctor` runs every check when a path contains `'`, and flags a malformed adapter name; error messages
   print values as given; a message body file, or an `--except`/`--consume`/`--in-reply-to` value, may start with `-`;

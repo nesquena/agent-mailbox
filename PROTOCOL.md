@@ -119,7 +119,7 @@ release: <item> <version>      optional
   - no one edits a delivered message;
   - a correction is a new message.
 - **Stale mail:** mail still unconsumed after 24 hours is stale. Either side should raise it with the humans
-  involved.
+  involved. (A sender sees its own with the CLI's `sent`.)
 
 ### Holds
 A hold is how one agent gates an action another agent takes on a shared item: a merge, a deploy, a publish.
