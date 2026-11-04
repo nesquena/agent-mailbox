@@ -448,7 +448,7 @@ watch)
       fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't reach the store ($fails tries in a row)"
     fi
     [ "$now" != "$last" ] || { fails=0; continue; }
-    if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
+    if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store ($fails tries in a row)"; fi
     fails=0; last=$now
     [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
   done
