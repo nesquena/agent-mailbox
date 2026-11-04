@@ -48,7 +48,7 @@ First version.
   validation cut short.
 - **`sent [<to>]`** lists the mail you sent that's still in a recipient's inbox, oldest first, with its age, its
   `needs`, and `stale` once it's unconsumed after 24 hours, so a sender can raise stale mail as `PROTOCOL.md` asks.
-  A message counts when its file name and its `from:` header both name you; signatures aren't checked (#XXXX).
+  A message counts when its file name and its `from:` header both name you; signatures aren't checked (#30).
 - **Retiring** clears this session's watch marker, and acting as a retired agent says how to come back.
 - **Fix:** `doctor` runs every check when a path contains `'`, and flags a malformed adapter name; error messages
   print values as given; a message body file, or an `--except`/`--consume`/`--in-reply-to` value, may start with `-`;
