@@ -23,7 +23,7 @@ ad_open() {
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
-    err=$(git clone -q --no-checkout "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(echo "$err" | ad_gist)"; }
+    err=$(git clone -q --no-checkout -- "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
     # check out the mailbox branch itself, whatever the store's default branch is; a new store gets an empty one
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
@@ -44,7 +44,7 @@ ad_open() {
 ad_pull() {
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error
-    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1 && { echo "$ferr"; return 1; }
+    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1 && { printf '%s\n' "$ferr"; return 1; }
     return 0; }
   ad_remote_has_branch || return 0
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
@@ -58,14 +58,14 @@ ad_push() {
   n=0
   until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
     n=$((n+1))
-    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(echo "$perr" | ad_gist)); re-run any command to publish it, don't resend"; exit 4; }
+    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run any command to publish it, don't resend"; exit 4; }
     ad_jitter
-    rerr=$(ad_pull) || { warn "written locally, not published: $(echo "$rerr" | ad_gist); re-run any command, don't resend"; exit 4; }
+    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run any command, don't resend"; exit 4; }
   done
 }
 
 ad_sync() {
-  err=$(ad_pull) || die "can't update from the store: $(echo "$err" | ad_gist)"
+  err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"

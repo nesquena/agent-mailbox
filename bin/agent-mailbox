@@ -113,7 +113,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
   lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
-  root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git', or starting with '-'), not '$ROOT'"
+  root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git' in any case, or starting with '-'), not '$ROOT'"
   matches '^[A-Za-z0-9._/-]+$' "$BRANCH" || die "bad branch name '$BRANCH'"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
@@ -364,7 +364,9 @@ consume)
   echo "consumed" ;;
 verify)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
-  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"; [ -f "$f" ] || f=$(find "$M/inbox" -name "$(basename "$1")" -type f | head -n 1)
+  # by path, by path in the store, or by message file name (searched in every inbox; a name only, never a pattern)
+  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"
+  if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && f=$(find "$M/inbox" -name "$b" -type f | head -n 1); fi
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
   v=$(verify_file "$f"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)
@@ -463,7 +465,7 @@ doctor)
   chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
   chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
-  chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git', or starting with '-'"
+  chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||

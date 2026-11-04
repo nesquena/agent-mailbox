@@ -25,6 +25,8 @@ SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq '
 # as <agent> <args...>: run the CLI as that agent, in its own home
 as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
        AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
+# in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
+in_dir() { (d=$1; shift; cd "$d" && "$@"); }
 # block <agent> <text>: the part of <agent>'s read output for the message whose path contains <text>
 block() { as "$1" read 2>/dev/null | awk -v t="$2" '/^===== / && index($0, t) { on = 1 } on && /^===== end/ { on = 0 } on'; }
 expect() { # expect <description> <exit code> <grep pattern or -> <command...>
@@ -252,12 +254,12 @@ printf -- "${spoof}spoofed body\n" > "$T/store/mailbox/inbox/h1/2026 a [verified
 printf -- "${spoof}bracketed body\n" > "$T/store/mailbox/inbox/h1/2026a[verified].md"
 # read still succeeds and shows the real mail, but neither spoofed file's name nor its body
 out=$(as h1 read 2>&1); rc=$?
-if [ "$rc" != 0 ] || ! echo "$out" | grep -q -- '-h2-hold-x\.md'; then no "read ignores a file that isn't a message id (exit $rc, or real mail missing)" "$out"
-elif echo "$out" | grep -qF -e '2026 a [verified].md' -e 'spoofed body' -e '2026a[verified].md' -e 'bracketed body'; then
+if [ "$rc" != 0 ] || ! printf '%s\n' "$out" | grep -q -- '-h2-hold-x\.md'; then no "read ignores a file that isn't a message id (exit $rc, or real mail missing)" "$out"
+elif printf '%s\n' "$out" | grep -qF -e '2026 a [verified].md' -e 'spoofed body' -e '2026a[verified].md' -e 'bracketed body'; then
   no "read ignores a file that isn't a message id (it was shown)" "$out"
 else ok "read ignores a file that isn't a message id"; fi
 out=$(as h1 list 2>&1); rc=$?
-if [ "$rc" = 0 ] && echo "$out" | grep -q -- '-h2-hold-x\.md' && ! echo "$out" | grep -qF -e '2026 a [verified].md' -e '2026a[verified].md'; then
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- '-h2-hold-x\.md' && ! printf '%s\n' "$out" | grep -qF -e '2026 a [verified].md' -e '2026a[verified].md'; then
   ok "list leaves it out"
 else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
@@ -343,7 +345,7 @@ T="$W/odd/O'Brien"; mkdir -p "$T"
 for a in o1 o2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
 as o1 init >/dev/null; for a in o1 o2; do as $a register --kind t --about t --no-key >/dev/null; done
 out=$(as o1 doctor 2>&1)
-echo "$out" | grep -q "ok   a store is configured" && echo "$out" | grep -q "ok   the CLI finds its adapter" &&
+printf '%s\n' "$out" | grep -q "ok   a store is configured" && printf '%s\n' "$out" | grep -q "ok   the CLI finds its adapter" &&
   ok "doctor runs every check with a ' and a space in the store path" || no "doctor with a ' in the store path" "$out"
 expect "doctor flags a malformed adapter name" 1 "FAIL the CLI finds its adapter" \
   env HOME="$W/home-o1" AGENT_MAILBOX_ADAPTER=../adapters/dir "$SH" "$CLI" doctor
@@ -377,7 +379,34 @@ for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" setup --store "$T/bs.git" --na
 HOME="$W/h\tq-q1" "$SH" "$CLI" init >/dev/null
 for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" register --kind t --about t >/dev/null 2>&1; done
 expect "a backslash in the home folder works (git adapter)" 0 "^sent " sh -c "echo hi | HOME='$W/h\tq-q1' '$SH' '$CLI' send q2 hq -"
-expect "and the mail is read" 0 '^===== mailbox/inbox/q2/[^/]*-q1-hq\.md \[' env HOME="$W/h\tq-q2" "$SH" "$CLI" read
+if [ -n "$SSH" ]; then st=verified; else st=unsigned; fi
+expect "and the mail is read, $st" 0 "^===== mailbox/inbox/q2/[^/]*-q1-hq\\.md \\[$st\\]" env HOME="$W/h\tq-q2" "$SH" "$CLI" read
+# options' values starting with '-': --in-reply-to and --consume take them as file names; verify too
+mv "$T/store/mailbox/inbox/o2/-x.md" "$T/store/mailbox/inbox/o2/-y.md" 2>/dev/null || cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-y.md"
+expect "send --consume takes a value starting with - as a file name" 0 "^sent " sh -c "echo r | HOME='$W/home-o2' '$SH' '$CLI' send o1 c-y - --in-reply-to -y.md --consume -y.md"
+[ ! -e "$T/store/mailbox/inbox/o2/-y.md" ] && ok "and consumes it" || no "send --consume left -y.md in the inbox"
+# --in-reply-to alone, with a value starting with '-'
+cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-w.md"
+echo r | as o2 send o1 c-w - --in-reply-to -w.md >/dev/null
+expect "send --in-reply-to alone takes a value starting with - as a file name" 0 "in_reply_to: -w\.md" block o1 c-w
+expect "verify refuses a misplaced --as" 1 "goes before the command" as o1 verify x.md --as o2
+expect "verify takes a name, never a pattern" 1 "no such message" as o1 verify '*.md'
+cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/-z.md"
+expect "verify takes a name starting with - as a file name" 6 "^(unsigned|nokey)$" env HOME="$W/home-o1" "$SH" "$CLI" verify -z.md
+# a dir store given by a relative path starting with '-'
+mkdir -p "$T/rel2"
+for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done
+(cd "$T/rel2" && HOME="$W/home-d1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-d1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
+  HOME="$W/home-d2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-d1" "$SH" "$CLI" send d2 dd - >/dev/null 2>&1)
+expect "a dir store at a relative path starting with - lists mail" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list
+# watch must notice mail that arrives while it waits (its poll reads the store too)
+in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" consume "$(basename "$(in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list | grep d1-dd)")" >/dev/null
+( sleep 2; echo hi | in_dir "$T/rel2" env HOME="$W/home-d1" "$SH" "$CLI" send d2 dd2 - >/dev/null 2>&1 ) &
+expect "and watch wakes on new mail" 0 "d1-dd2\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" watch 1 8
+wait
+# a git store given by a path starting with '-' is a path, never an option to git clone
+mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
+expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
