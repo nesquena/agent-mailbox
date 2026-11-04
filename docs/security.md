@@ -15,7 +15,7 @@ time this reader first pinned it. Concretely:
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
   the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
-  hold, and, where the agent holds its key, refuses to republish a record whose key isn't that key.
+  hold, and, where the agent holds its key, refuses to republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
 

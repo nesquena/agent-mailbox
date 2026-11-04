@@ -156,14 +156,19 @@ for AD in $ADAPTERS; do
     tamper "rm -f mailbox/agents/ka.md mailbox/agents/ka.md.sig $m $m.sig"
     expect "registering again restores the record" 0 "register: ka \(active\), signing key" as ka register --kind t --about t
     expect "then update works" 0 "update: ka \(active\)" as ka update --about back
+    # a record left with no key is republished as it is
     tamper "sed -i.bak 's|^key: .*|key: |' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
-    expect "update refuses a record whose key was removed while it holds one" 1 "no signing key.*register again" as ka update --about x
+    expect "update republishes a record whose key was removed" 0 "update: ka \(active\)" as ka update --about x
     # an agent registered without a key keeps its update, even with a key file at its key path from another mailbox
     as kd setup --store "$STORE" --adapter "$AD" --name kd >/dev/null; mkdir -p "$W/home-kd/.config/agent-mailbox/keys"
     cp "$W/home-kb/.config/agent-mailbox/keys/kb" "$W/home-kd/.config/agent-mailbox/keys/kd"
     cp "$W/home-kb/.config/agent-mailbox/keys/kb.pub" "$W/home-kd/.config/agent-mailbox/keys/kd.pub"
     as kd register --kind t --about t --no-key >/dev/null
     expect "an agent registered without a key can still update" 0 "update: kd \(retired\)" as kd update --status retired
+    # and so does one that registered with a key once, left, and came back without one
+    tamper "rm -f mailbox/agents/kc.md mailbox/agents/kc.md.sig"
+    as kc register --kind t --about t --no-key >/dev/null
+    expect "an agent that came back without a key can update" 0 "update: kc \(active\)" as kc update --about back
     # with its private key but not the .pub beside it, update still knows the key it holds
     mv "$W/home-ka/.config/agent-mailbox/keys/ka.pub" "$T/ka.pub"
     tamper "sed -i.bak 's|^key: .*|key: $KB|' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"

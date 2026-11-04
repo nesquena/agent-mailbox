@@ -40,7 +40,7 @@ First version.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
-- **Fix:** where you hold your signing key, `update` refuses when your registry record's key isn't that key (or was
-  removed), and says how to restore the record, instead of republishing it under your signature; `update` never
+- **Fix:** where you hold your signing key, `update` refuses when your registry record names a different key, and
+  says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
