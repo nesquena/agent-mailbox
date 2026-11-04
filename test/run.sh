@@ -171,6 +171,34 @@ for AD in $ADAPTERS; do
     got=$(as carol list 2>/dev/null | grep -c '\-n-d')
     [ ! -s "$T/conc.fail" ] && [ "$got" = 15 ] && ok "5 agents x 3 concurrent sends: 15/15 delivered" ||
       no "concurrent sends: $got/15 delivered, $(wc -l < "$T/conc.fail" 2>/dev/null || echo 0) failed" "$(cat "$T/conc.err" 2>/dev/null)"
+
+    # a failed peek (a network blip, a lost ref race) is retried, never read as "no mail". failpeek <n> <agent> <args...>:
+    # run the CLI with a git on PATH whose n-th peek fetch runs, then reports failure
+    mkdir -p "$W/failpeek"; printf '%s\n' '#!/bin/sh' \
+      'case " $* " in (*" fetch "*refs/agent-mailbox/peek*) n=$(($(cat "$PEEKS" 2>/dev/null || echo 0) + 1)); echo "$n" > "$PEEKS"' \
+      '  [ "$n" = "$FAILAT" ] && { "$REAL_GIT" "$@"; exit 1; } ;; esac' 'exec "$REAL_GIT" "$@"' > "$W/failpeek/git"
+    chmod +x "$W/failpeek/git"; real_git=$(command -v git)
+    failpeek() { (FAILAT=$1 REAL_GIT=$real_git PEEKS="$T/peeks" PATH="$W/failpeek:$PATH"
+      export FAILAT REAL_GIT PEEKS PATH; rm -f "$PEEKS"; shift; as "$@"); }
+    retried() { [ "$(cat "$T/peeks" 2>/dev/null)" -gt "$1" ] 2>/dev/null && ok "$2" || no "$2 (no peek ran after the failing one)"; }
+    for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+    as alice send bob fp-1 "$T/body" >/dev/null 2>&1
+    expect "watch retries a failed first peek, and wakes for mail already there" 0 "alice-fp-1\.md" failpeek 1 bob watch 1 4
+    retried 1 "the first peek failed and was retried"
+    for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+    ( sleep 2; as alice send bob fp-2 "$T/body" >/dev/null 2>&1 ) &
+    expect "watch retries a failed peek after the store moves, and wakes" 0 "alice-fp-2\.md" failpeek 2 bob watch 1 8
+    wait; retried 2 "the peek after the store moved failed and was retried"
+
+    # two agents sharing one checkout (--as): each commit carries its own name, and no command rewrites the checkout's
+    # git config (concurrent commands raced to lock it, and one could commit under the other's name)
+    for C in "$W/home-carol/.local/state/agent-mailbox/checkouts/"*; do :; done
+    git -C "$C" config user.name stale; git -C "$C" config user.email stale@example.invalid
+    echo hi | as carol --as d1 send bob shared - >/dev/null 2>&1
+    expect "a commit from a shared checkout carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
+      git --git-dir="$STORE" log -1 --format='%an <%ae>' main
+    [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
+      no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
 done
 

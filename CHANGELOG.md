@@ -37,6 +37,12 @@ First version.
   or home path no longer breaks `register` or `send` under dash or macOS's `/bin/sh`.
 - **Fix:** a dir store at a relative path starting with `-` works (`list` said "no mail" and `watch` never woke);
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
+- **Fix:** `watch` no longer misses mail when a look at the store fails (a network blip, or another command in the
+  same checkout updating it at that moment); it tries again at the next poll, and 10 failed reads in a row end it with
+  an error, as 10 failed polls do (#XXXX).
+- **Fix:** commands no longer rewrite the git config of a store's checkout each time, which failed with "could not
+  lock config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the
+  other's name; each command's commits take its agent's name from its own environment (#XXXX).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
