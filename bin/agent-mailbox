@@ -234,8 +234,9 @@ register|update)
   if [ "$cmd" = update ]; then
     # an agent holding its key never re-signs a record whose key someone else changed; without it (a machine that
     # lost its key) the record is republished as it is, and nothing is pinned below
-    pub=$(field key "$rec"); [ -f "$KEY" ] && [ -f "$KEY.pub" ] && own=$(cut -d' ' -f1,2 "$KEY.pub")
-    if [ -n "$own" ] && [ "$pub" != "$own" ]; then
+    pub=$(field key "$rec"); [ -f "$KEY" ] && own=$( { cat "$KEY.pub" 2>/dev/null || ssh-keygen -y -P '' -f "$KEY" 2>/dev/null; } | cut -d' ' -f1,2)
+    # a record with no key is yours to republish unless this machine pinned your name to a key in this store
+    if [ -n "$own" ] && [ "$pub" != "$own" ] && { [ -n "$pub" ] || [ -f "$STATE/pins/$STORE_ID/$ME" ]; }; then
       fix="if someone else changed it, check with your human, then remove $ROOT/agents/$ME.md and its .sig from the store and run register again"
       if [ -z "$pub" ]; then die "your registry record has no signing key, and yours is at $KEY.pub: $fix"
       else die "your registry record's key isn't yours ($KEY.pub), so update won't republish it: $fix"; fi
