@@ -21,7 +21,7 @@
 #        [--hold|--release "<item> <version>"]
 #                                       deliver a message; --consume also removes mail you're answering
 #   list                                your inbox, oldest first (exit 0: some, 3: none)
-#   sent [<to>]                         your mail still waiting in others' inboxes (not yet consumed), oldest first,
+#   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age, and stale past 24 h (exit 0 / 3); it goes by file names and
 #                                       from: headers, not signatures
 #   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
@@ -440,7 +440,7 @@ list)
 sent)
   for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
   [ $# -le 1 ] || die "usage: sent [<to>]"
-  to=${1:-}; [ -z "$to" ] || valid_name "$to"
+  [ $# -eq 0 ] || valid_name "$1"; to=${1:-}
   need_me; load_adapter; ad_sync; need_store
   # mail from you is a message whose file name's sender field and from: header both name you, so another writer's
   # file can't pass by one alone. Signatures aren't checked: a writer could plant both. Rows: <id> <path> <to> <sent>

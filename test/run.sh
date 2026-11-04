@@ -81,6 +81,7 @@ for AD in $ADAPTERS; do
   expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
   expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
   expect "sent refuses a bad name" 1 "isn't a valid name" as alice sent Bob
+  expect "and an empty one" 1 "isn't a valid name" as alice sent ''
   expect "and a misplaced --as" 1 "goes before the command" as alice sent --as bob
   expect "sent with nothing waiting exits 3" 3 "no mail from bob waiting" as bob sent
   f=$(as bob list | head -n 1); fb=$(basename "$f")
@@ -91,11 +92,11 @@ for AD in $ADAPTERS; do
   expect "and no longer listed by its sender's sent" 3 "no mail from alice waiting" as alice sent
   expect "a reply with needs none shows no needs" 0 "^mailbox/inbox/alice/[^ ]*-bob-review-1-reply\.md to alice age [0-9]+[sm]$" as bob sent
   # sent counts a message only when its file name's sender and its from: header are both the sender; planted by
-  # someone with write access: mail from alice, long ago and with no valid sent time; a name or a header claiming
-  # alice alone; one in a subfolder; one in another inbox
+  # someone with write access: mail from alice, long ago (its needs carrying a terminal escape, printed spelled out)
+  # and with no valid sent time; a name or a header claiming alice alone; one in a subfolder; one in another inbox
   rm -rf "$T/ps"; mkdir -p "$T/ps/bob/sub" "$T/ps/carol"
   pm() { printf -- '---\nprotocol: 1\nfrom: %s\nto: %s\ntopic: x\ncontext: general\nsent: %s\nin_reply_to: none\nneeds: %s\n---\n\nhi\n' "$2" "$3" "$4" "$5" > "$T/ps/$3/$1"; }
-  pm 20200101T000000Z-alice-old.md alice bob 2020-01-01T00:00:00Z "an answer"
+  pm 20200101T000000Z-alice-old.md alice bob 2020-01-01T00:00:00Z "$(printf 'an\033[2Janswer')"
   pm 20200101T000001Z-carol-name.md alice bob 2020-01-01T00:00:00Z none
   pm 20200101T000002Z-alice-header.md carol bob 2020-01-01T00:00:00Z none
   pm 20200101T000003Z-alice-nosent.md alice bob yesterday none
@@ -107,7 +108,7 @@ for AD in $ADAPTERS; do
   pm 20200101T000007Z-alice-h23.md alice bob "$(ago 23)" none
   tamper "cp -R '$T/ps/.' mailbox/inbox/"
   out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /')
-  want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an answer
+  want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an\\x1b[2Janswer
 mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
 mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
 mailbox/inbox/bob/20200101T000006Z-alice-h25.md to bob age 1d1h stale
