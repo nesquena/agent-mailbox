@@ -352,8 +352,9 @@ expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' 
 # a message whose name starts with '-': --except must take it as a file name and hide it
 cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
 out=$(as o2 read --except -x.md 2>&1); rc=$?
-[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md' && ! printf '%s\n' "$out" | grep -q -e '/-x\.md' -e basename &&
-  ok "an --except value starting with - is a file name" || no "an --except value starting with - is a file name (exit $rc)" "$out"
+hit=$(printf '%s\n' "$out" | grep -c -e '/-x\.md' -e basename)
+if [ "$rc" = 0 ] && [ "$hit" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md'; then ok "an --except value starting with - is a file name"
+else no "an --except value starting with - is a file name (exit $rc)" "$out"; fi
 expect "trust refuses a misplaced --as" 1 "goes before the command" as o1 trust o2 --as o2
 expect "an error quotes a value as given" 1 "v1.cZ" as o1 send o2 h - --hold 'p#1 v1\cZ'
 # a mailbox folder starting with '-' is refused (find and basename would read it as an option)
