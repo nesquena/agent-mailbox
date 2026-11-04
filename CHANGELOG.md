@@ -39,12 +39,12 @@ First version.
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
 - **Fix:** `watch` no longer misses mail when a look at the store fails (a network blip, or another command in the
   same checkout updating it at that moment); it tries again at the next poll, and 10 failed reads in a row end it with
-  an error, as 10 failed polls do (#XXXX).
+  an error, as 10 failed polls do (#24).
 - **Fix:** commands no longer rewrite the git config of a store's checkout each time, which failed with "could not
   lock config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the
-  other's name; each command's commits take its agent's name from its own environment (#XXXX).
+  other's name; each command's commits take its agent's name from its own environment (#24).
 - **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
-  store at the same moment: the watcher's look updates only its own ref (#XXXX).
+  store at the same moment: the watcher's look updates only its own ref (#24).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
