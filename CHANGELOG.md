@@ -109,5 +109,5 @@ First version.
   `misrouted` by path too, as it does by name and in `read` (#26).
 - **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be
   wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
-  `setup`, `update` or `consume`, and `holds` exit 0 means every sender who wrote released the item, not that a
-  particular one did (#26).
+  `setup`, `update` or `consume`, and `holds <item> --version <v>` exit 0 means every sender who wrote released
+  `<v>`, not that a particular one did (#26).
