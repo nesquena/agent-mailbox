@@ -690,6 +690,7 @@ expect "and reads one addressed to someone else as misrouted, as read does" 6 "^
 # by path, a message is checked against the inbox it sits in
 expect "verify by store path reads a misrouted copy as misrouted" 6 "^misrouted$" as x1 verify mailbox/inbox/x1/20260101T000012Z-x2-mis.md
 expect "and by absolute path" 6 "^misrouted$" as x1 verify "$I/20260101T000012Z-x2-mis.md"
+expect "and by a path with a leading //" 6 "^misrouted$" as x1 verify "/$I/20260101T000012Z-x2-mis.md"
 expect "and by a path relative to the current folder" 6 "^misrouted$" in_dir "$I" env HOME="$W/home-x1" "$SH" "$CLI" verify ./20260101T000012Z-x2-mis.md
 expect "verify by path reads a message in the right inbox as before" 6 "^unsigned$" as x1 verify "$I/20260101T000004Z-x2-md.md"
 cp "$I/20260101T000012Z-x2-mis.md" "$T/mis-copy.md"
@@ -838,6 +839,8 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or the CLI's config" "$C/config"
 refused "or its signing key" "$C/keys/sec1"
 refused "or a file in its state folder" "$S/note"
+refused "or one named with a leading //" "/$H/.ssh/id_ed25519"
+expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI"
 for f in own own.pub; do
   expect "or a signing key kept elsewhere ($f)" 1 "refusing to send" env HOME="$H" AGENT_MAILBOX_KEY="$T/own" "$SH" "$CLI" send sec2 "sec-$f" "$T/$f"
 done
@@ -855,6 +858,8 @@ echo "notes" > "$H/.ssh-notes.md"
 expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
 expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
 expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"
+ln -s kloop "$T/kloop"
+expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

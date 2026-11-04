@@ -61,10 +61,10 @@ NL='
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
 # phys <folder>: its physical path. real <file>: the file's physical path, following links to it too (plain readlink is
 # on Linux, macOS, BSD); a relative path starting with '-' gets a ./ so no tool reads it as an option
-phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pwd -P); }
+phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
 real() {
   rp=$1; case "$rp" in (-*) rp=./$rp ;; esac
-  while [ -L "$rp" ]; do rl=$(readlink "$rp") || break; case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
+  n=0; while [ -L "$rp" ] && [ "$n" -lt 40 ]; do n=$((n+1)); rl=$(readlink "$rp") || break; case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
   rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
 }
 # this script's real path, following links (install.sh links it onto PATH)
@@ -409,7 +409,7 @@ send)
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
   # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
-  [ "$body" = /dev/stdin ] || ! secret_file "$body" ||
+  ! secret_file "$body" ||
     die "refusing to send $body: it's in ~/.ssh or this CLI's config or state folder, or is its config or signing key (never put secrets in mail)"
   text=$(cat -- "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
   ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" || die "refusing to send: the body holds a private key (never put secrets in mail)"

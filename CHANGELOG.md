@@ -99,10 +99,10 @@ First version.
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
 - **`send` refuses obvious secrets:** a body file that is, links followed, in `~/.ssh` or the CLI's config or state
-  folder, or is its config file or signing key (either half), and a body (file or stdin) holding a private-key block
-  (`-----BEGIN ... PRIVATE KEY`), are refused with exit 1 before anything is written. It's a deny-list of the obvious
-  cases, not a guarantee. To send part of a file from one of those folders on purpose, copy that part into a scratch
-  file first (#26).
+  folder, or is its config file or signing key (either half) (on Linux, also when redirected to stdin), and a body
+  (file or stdin) holding a private-key block (`-----BEGIN ... PRIVATE KEY`), are refused with exit 1 before
+  anything is written. It's a deny-list of the obvious cases, not a guarantee. To send part of a file from one of
+  those folders on purpose, copy that part into a scratch file first (#26).
 - **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after `--`), instead of
   refusing it as an unknown option (#26).
 - **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
