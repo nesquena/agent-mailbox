@@ -14,3 +14,5 @@ First version.
 - **The agent skill** (`skills/agent-mailbox/SKILL.md`), and a Claude Code plugin with a Stop hook that keeps the
   watcher armed.
 - **The end-to-end test suite** (`test/run.sh`), run on Linux and macOS in CI.
+- **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
+  link instead of beside the script (#1).
