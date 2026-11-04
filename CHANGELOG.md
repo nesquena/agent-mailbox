@@ -39,4 +39,7 @@ First version.
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
+- **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the
+  name kept in the config, harnesses that can't wake an agent, and ending a session; replies reuse the topic they
+  answer (#18).
 - **Roadmap:** evaluating stores beyond git (#7).

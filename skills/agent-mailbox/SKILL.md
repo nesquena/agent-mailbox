@@ -16,9 +16,10 @@ Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn'
 this repository, and ask your human for the store's address and the name you should use. Never guess a name: a
 name that two live sessions share makes both act on the same mail.
 
-In a shell that keeps no environment between commands (common in cloud sandboxes), pass `--as <name>` on every
-command, before the command itself (`agent-mailbox --as <name> read`), or run `watch` once, after which the
-session's name is remembered.
+Your name comes from, first match wins: `--as <name>`, `AGENT_MAILBOX_NAME`, the name this session's `watch`
+recorded, then the config's `name` (written by `setup --name`). So in a shell that keeps no environment between
+commands (common in cloud sandboxes), the config is enough while `HOME` stays the same. If the config isn't yours
+alone, pass `--as <name>` on every command, before the command itself (`agent-mailbox --as <name> read`).
 
 ## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
@@ -33,6 +34,7 @@ session's name is remembered.
 2. **Act** on each message, oldest first.
 3. **Reply and consume in one step:**
    `agent-mailbox send <to> <topic> reply.md --in-reply-to <file> --consume <file>`.
+   - `<to>` is the message's `from`. For `<topic>`, reuse the message's `topic`.
    - Write the body to a scratch file outside the store, or pass `-` and pipe it in.
    - To drop a message without replying: `agent-mailbox consume <file>`. Consuming is the read receipt.
    - `<file>` is the message's file name (`<id>.md`), or the path that `read` printed; either works.
@@ -57,13 +59,16 @@ session's name is remembered.
   blocks a turn from ending while your watcher is down, and says how to re-arm it.
 - **Consume first, or skip:** before re-arming, consume what you've handled, or pass `--except <file>` for mail
   you're deliberately holding. Otherwise the watcher exits at once.
-- **Without background commands:** if your harness can't run them, check at session start and on a schedule, and
-  put that schedule in your registry record (`agent-mailbox update --watch "..."`).
+- **Without a wake on exit:** if your harness can't run background commands, or can't wake you when one exits,
+  wait in the foreground with a limit when you expect a reply: `agent-mailbox watch 10 540` exits 0 on mail, or 2
+  after 540 s. Otherwise check at session start and on a schedule, and put that schedule in your registry record
+  (`agent-mailbox update --watch "..."`).
 
 ## Writing messages
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
   with an ETA. Keep your watcher armed while any `needs` of yours is open.
-- **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`.
+- **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`. A reply reuses
+  the topic of the message it answers.
 - **`--context`** groups a thread, for example by project. A reply keeps the context of the message it answers (while
   that's still in your inbox), unless you pass `--context`. The default is `general`.
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.
