@@ -395,6 +395,9 @@ for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store
   HOME="$W/home-d2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-d1" "$SH" "$CLI" send d2 dd - >/dev/null 2>&1)
 expect "a dir store at a relative path starting with - lists mail" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list
 expect "and watch finds it" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" watch 1 2
+# a git store given by a path starting with '-' is a path, never an option to git clone
+mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
+expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

@@ -23,7 +23,7 @@ ad_open() {
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
-    err=$(git clone -q --no-checkout "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
+    err=$(git clone -q --no-checkout -- "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
     # check out the mailbox branch itself, whatever the store's default branch is; a new store gets an empty one
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
