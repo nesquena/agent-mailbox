@@ -99,17 +99,22 @@ ad_peek() {
 # ad_history <dir> [<ERE>]: "<ref> <path>" for every version of every file that was ever under <dir>, oldest first
 # (consumed files included), however it got there. holds builds a security gate on this, so no git history filter
 # may hide a version: --full-history and -m visit every commit and both sides of every merge (history
-# simplification could skip a commit), --no-renames counts a renamed file as added, A and M count added and rewritten
-# files, and --text --no-textconv search every file as plain text (an attribute or a NUL byte could otherwise make
-# git skip it as binary). With a pattern, only versions whose change adds a line matching it (git log -G, an
-# extended regex) are listed; every listed file is still checked by the CLI. log.diffMerges is pinned, so a user's
-# setting can't turn off -m's merge diffs; rows are unique per path and content, so merges can't multiply the work.
+# simplification could skip a commit), with log.diffMerges pinned so a user's setting can't turn -m off;
+# --no-renames counts a renamed file as added; A, M and T count added, rewritten and retyped files. A pattern (git
+# log -G, an extended regex, searching every file as plain text) narrows only the added versions, whose whole content
+# is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
+# unique per path and content, so merges can't multiply the work; the CLI checks every listed file.
 ad_history() {
   [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev --format='C %H' \
-    ${2:+--text --no-textconv "-G$2"} HEAD -- "$1/" 2>/dev/null |
-    awk '$1 == "C" && NF == 2 { c = $2; next }
-         /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " "); if (!seen[p " " f[4]]++) print c, p }'
+  { [ -z "${2:-}" ] || ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
+      --format='C %H' --text --no-textconv "-G$2" HEAD -- "$1/" 2>/dev/null | sed 's/^/G /'
+    ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
+      --format='C %H' HEAD -- "$1/" 2>/dev/null; } |
+    awk -v g="${2:+1}" '
+      $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
+      $1 == "C" && NF == 2 { c = $2; next }
+      /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
+             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[p " " f[4]]++) print c, p }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>
 ad_show() { ad_git show "$1:$2" 2>/dev/null; }

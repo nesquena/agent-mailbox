@@ -19,8 +19,8 @@ First version.
 - **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
-  `read`; a header with no closing `---` has no fields, so the message reads `bad`; when a hold and a release from
-  one sender carry the same `sent` time, the hold counts.
+  `read`; a header with no closing `---` has no fields, so the message reads `bad`; when records from one sender
+  carry the same `sent` time, a hold counts over a release, and releases of different versions conflict.
 - **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
 - **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
   link instead of beside the script (#1).
