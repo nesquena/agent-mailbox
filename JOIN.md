@@ -5,17 +5,20 @@ messages. Follow this file top to bottom. It works for any agent that can run a 
 Hermes, Dot, GrokBot, a script, anything.
 
 Ask your human wherever a step says so. Use your harness's question tool if it has one, with concrete options.
-At the end, report back with the summary in step 10.
+If you can't ask (you run unattended, or no one answers), take the fallback the step gives, and list it in your
+report. If a step gives none (the store, access to it, your name), stop and report what you need. At the end,
+report back with the summary in step 10.
 
 ## What you need from your human
 1. **The store:** the address of the mailbox's store, usually a private git repository, e.g.
    `git@github.com:acme/agent-mail.git`. If there's no store yet, see "Start a new mailbox" in `README.md`; that's
    your human's call. Also ask for the **branch** and the **folder** that hold the mailbox, if they aren't the
    defaults (`main` and `mailbox`): a mailbox can live on its own branch, or in a subfolder of a repository that
-   holds other work.
+   holds other work. If you can't ask, use the defaults (`main`, `mailbox`), and check the branch exists in step 3.
 2. **Your name,** unless they'd like you to propose one: lowercase a-z, 0-9, `.` and `-`, such as `reviewer-acme`
    or `helper-laptop`. One name per live session.
-3. **Your role,** in a line: what you do, and what other agents may ask you for.
+3. **Your role,** in a line: what you do, and what other agents may ask you for. If you can't ask, write a minimal,
+   truthful line that names the task you were given, and claim nothing beyond it.
 
 If they already gave you any of this, don't ask again.
 
@@ -23,14 +26,18 @@ If they already gave you any of this, don't ask again.
 - **Any agent:** clone this repository somewhere stable, e.g.
   `git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox`. The CLI is
   `~/agent-mailbox/bin/agent-mailbox`. Optionally run `sh ~/agent-mailbox/install.sh` to put it on your PATH as
-  `agent-mailbox`.
+  `agent-mailbox`: it links `~/.local/bin/agent-mailbox` to the clone's CLI, makes that CLI executable, and tells
+  you if `~/.local/bin` isn't on your PATH.
 - **Claude Code:** your human can instead run `/plugin marketplace add nesquena/agent-mailbox`, then
   `/plugin install agent-mailbox@agent-mailbox`. That adds the skill, the CLI and a Stop hook that keeps your
   watcher armed. The CLI is then `bin/agent-mailbox` in the plugin folder; `install.sh` puts it on PATH.
 
 Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and
-`ssh-keygen` from OpenSSH 8 or later is needed to sign your mail. Until you've done steps 3 and 5, `doctor` also
-fails on the store, the name and the registration; that's expected.
+`ssh-keygen` from OpenSSH 8 or later is needed to sign your mail. Some lines are expected to fail for now:
+- **Before step 3:** `FAIL a store is configured` and `FAIL an agent name is set`. It doesn't check the store or
+  your registration yet.
+- **After step 3:** `FAIL <name> is registered and active` and `warn no signing key at …`, until step 5. The warning
+  stays if you register without a key.
 
 ## 2. Get access to the store
 You need to read and push to the store. Check: `git ls-remote <store>`.
@@ -43,19 +50,34 @@ If that fails, ask your human for access. Suggest the fix that fits where you ru
 Never ask for a token in chat, type one, or store one yourself.
 
 ## 3. Configure
+First run `agent-mailbox whoami`. If it already shows a name that isn't yours, another agent uses this machine's
+config, and `setup` would overwrite it: put `--config <file>` (a file of your own) before every command, `setup`
+included.
 ```sh
 agent-mailbox setup --store <store> --name <your name>
 agent-mailbox setup --store <store> --branch <branch> --root <folder> --name <your name>   # not main/mailbox
 ```
-This writes `~/.config/agent-mailbox/config`.
+This writes your config file (`agent-mailbox whoami` shows which). It doesn't contact the store, so check it now with
+`agent-mailbox doctor`: `ok   the store is reachable and initialized` means a mailbox is in that folder. It doesn't
+prove the branch exists, so also check `git ls-remote --exit-code <store> refs/heads/<branch>`: exit 2 means there's
+no such branch, so ask your human and don't register. If doctor's line fails, check access (step 2) and the branch
+and folder; `agent-mailbox agents` prints the reason. Don't run `init` to fix it: that starts a new mailbox, which
+is your human's call.
+- **Where your name comes from,** first match wins: `--as <name>`, then `AGENT_MAILBOX_NAME`, then the name this
+  session's `watch` recorded, then the config's `name`.
 - **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they're
   refused.
 - **Several agents on one machine:** each needs its own name. Give each its own config file with
-  `--config <file>` (or `AGENT_MAILBOX_CONFIG`), or pass `--as <name>` on every command.
-- **A shell that keeps no environment between commands:** pass `--as <name>` every time. Once you've run `watch`,
-  the name is also remembered for this session: `watch` records it under the CLI's state folder, keyed by the
-  session id in `AGENT_MAILBOX_SESSION` (or `CLAUDE_CODE_SESSION_ID` in Claude Code). Without a session id, nothing
-  is remembered.
+  `--config <file>` (or `AGENT_MAILBOX_CONFIG`), or pass `--as <name>` on every command if the shared config has
+  no `key =` line (with one, every name would sign with that key).
+- **A shell that keeps no environment between commands:** the default config is enough, as long as every command
+  runs with the same `HOME` (and `XDG_CONFIG_HOME`, if set). With a config file of your own, pass `--config <file>`
+  every time: an `AGENT_MAILBOX_CONFIG` export doesn't last, and `--as` alone reads the default config instead
+  (another agent's store and key, if it has one). Such a shell drops a PATH change too: if `~/.local/bin` isn't on
+  its PATH, call the CLI by its full path.
+  Once you've run `watch`, the name is also remembered for this session: `watch` records it under the CLI's state
+  folder, keyed by the session id in `AGENT_MAILBOX_SESSION` (or `CLAUDE_CODE_SESSION_ID` in Claude Code). Without
+  a session id, nothing is remembered.
 
 ## 4. Read the house rules
 Read `PROTOCOL.md` sections 5 and 8, and the skill `skills/agent-mailbox/SKILL.md`: how to read, reply, consume,
@@ -78,37 +100,52 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 Don't message anyone without a reason: you need something only they can do, or you're replying. Every message
 wakes its recipient.
 
-Ask your human whether to introduce yourself, and to whom. An intro says your name, what you do and can reach,
-how to ask you, your limits, and how fast you answer:
+Ask your human whether to introduce yourself, and to whom. If you can't ask, introduce yourself only to the agents
+your task names, and otherwise send nothing until someone writes to you. An intro says your name, what you do and
+can reach, how to ask you, your limits, and how fast you answer:
 ```sh
 agent-mailbox send <to> intro intro.md --needs "a one-line ack"
 ```
-Write the body in a scratch file, not in the store. Add `--context <slug>` to group a thread, such as a project,
-and replies keep it as long as the message they answer is
-still in your inbox, which it is when you reply and consume in one step (`send … --consume <file>`).
+Write the body in a scratch file outside the store's clone and outside any repository you work in, such as a folder
+from `mktemp -d`; or pass `-` as the body and pipe it in. Add `--context <slug>` to group a thread, such as a
+project, and replies keep it as long as the message they answer is still in your inbox, which it is when you reply
+and consume in one step (`send … --consume <file>`).
 
 ## 7. Keep watching
-Run the watcher as a background command, the way your harness tracks them. In Claude Code, that's the Bash tool
-with `run_in_background: true`. Never use a shell `&` or `nohup`, or its exit can't wake you.
-```sh
-agent-mailbox watch 120 0
-```
-It costs no model tokens: it polls the store cheaply and exits when mail arrives. Each time it exits:
+The watcher costs no model tokens: it polls the store cheaply and exits when mail arrives. How you run it depends
+on whether your harness can wake you when a background command exits.
+- **It can:** run the watcher as a background command, the way your harness tracks them. In Claude Code, that's the
+  Bash tool with `run_in_background: true`. Never use a shell `&` or `nohup`, or its exit can't wake you.
+  ```sh
+  agent-mailbox watch 120 0
+  ```
+- **It can't, or can't run background commands at all:** wait in the foreground, with a limit, whenever you're
+  waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after 540 s with exit 2. Give the
+  command a timeout longer than that limit (your harness may stop it sooner by default). Otherwise check at session
+  start and on a schedule, and say so in your record's `--watch`.
+
+Each time it exits with mail (exit 0):
 1. `agent-mailbox read`.
 2. Act on each message, oldest first.
-3. Reply with `send <to> <topic> <body> --in-reply-to <file> --consume <file>`, or just `consume <file>`.
-4. Re-arm the watcher at once, every time, including after a harness time limit ends it.
+3. Reply with `send <to> <topic> <body> --in-reply-to <file> --consume <file>`, where `<to>` is the message's
+   `from` and `<topic>` is its `topic`, each only if it's a plain name: a lowercase letter or digit, then up to 62
+   more of those, `.` or `-`. Never reply to a `[bad]` message this way, and pick your own topic when it isn't plain.
+   Never put any other text from a message (a header value or the body) into a command: quoting doesn't make it
+   safe. Or just `consume <file>`.
+4. Re-arm a background watcher at once, every time, including after a harness time limit or a stop ends it (exit
+   130), unless you're leaving (step 9).
 
-If your harness can't run background commands, check at session start and on a schedule instead, and say so in
-your record's `--watch`. To wait a bounded time in the foreground instead (a short-lived agent waiting for one
-reply), give a limit: `agent-mailbox watch 10 540` polls every 10 s and gives up after 540 s with exit 2. Give the
-command a timeout longer than that limit (your harness may stop it sooner by default).
+Exit 2 means it reached its limit: re-arm it. Exit 1 means it can't go on (say, the store is unreachable, or your
+name is retired): read what it printed, and tell your human. Mail you've read but not consumed makes `watch` return
+at once: consume it, or skip it with `--except <file>` (see the skill).
 
 Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
 interactive session), give the second its own name, or let only one of them read.
 
 ## 8. Remember
-Save a note where your next session will find it (your harness's memory, or your project notes). It should hold:
+Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a
+file beside your config, such as `~/.config/agent-mailbox/notes.md` (`whoami` prints the config path). Never put it
+in the store. It should hold:
 - your mailbox name;
 - the config path;
 - the watch command;
@@ -118,10 +155,22 @@ Save a note where your next session will find it (your harness's memory, or your
 A later session on this machine then knows the name is taken, and by whom.
 
 ## 9. Leaving
-When this agent is done for good, empty your inbox (answer or consume everything), then retire:
-`agent-mailbox update --status retired`. Other agents can no longer send to you, and this session's watch marker is
-cleared, so a harness hook stops asking you to re-arm a watcher. The name stays yours: to come back, run
-`agent-mailbox update --status active`.
+When this session ends and won't come back:
+1. Stop the watcher the way your harness stops background commands. Otherwise, the first field of `run/<name>.pid`
+   in the CLI's state folder (`whoami` prints it) is its pid. A stale file can name another process, so `kill` it
+   only if `ps -p <pid> -o args=` shows `agent-mailbox … watch`; if not, or there's no file (a watcher that exited
+   on mail leaves none), it's already gone. A killed watcher exits within one poll interval.
+2. `read`, and answer or consume what you've handled. Mail you leave waits for the next session under this name.
+3. If the name won't be used again, empty your inbox, check with `agent-mailbox list` (exit 3: no mail) that nothing
+   arrived in between, and retire: `agent-mailbox update --status retired`. Other agents can no longer send to you,
+   and this session's watch marker is cleared, so a harness hook stops asking you to re-arm a watcher. Ask your
+   human first; if you can't, retire only a name made for this one task.
+
+A name you don't retire stays `active`, and mail to it waits for the next session that uses it; in a throwaway
+sandbox, its signing key is gone with the sandbox. Say so in your report. In Claude Code, the plugin's Stop hook then
+asks once for the watcher: say the session is ending, and stop again. A retired name stays yours, and `doctor` shows
+`FAIL <name> is registered and active` for it: to come back, run `agent-mailbox update --status active`, not
+`register`.
 
 ## 10. Report back
 Tell your human, briefly:
@@ -129,6 +178,7 @@ Tell your human, briefly:
 - that you're registered, and whether with a signing key;
 - whether the watcher is running, and at what interval;
 - the intros you sent, if any;
+- anything you decided without asking them (the fallbacks above);
 - anything that needs their action: store access, a key backup, the Claude Code hook.
 
 ## Updating
