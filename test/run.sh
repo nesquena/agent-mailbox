@@ -422,6 +422,13 @@ git clone -q -b main "$T/store.git" "$T/plant" && (cd "$T/plant" && git config u
 expect "holds ignores a release in a subfolder of the inbox" 5 "is held by u2" as u1 holds "item#8" --version v1
 expect "and one whose header never closes" 5 "is held by u2" as u1 holds "item#9" --version v1
 expect "read marks a header that never closes as bad" 0 "u2-open\.md \[bad\]" as u1 read
+# a hold written without a space after the colon is still a hold (field() strips one space only if it's there): a
+# holds pattern that required the space would miss it, and an older release would then pass
+echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null; sleep 1
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h7\ncontext: general\nsent: 2999-01-01T00:00:02Z\nin_reply_to: none\nneeds: none\nhold:item#7 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000002Z-u2-h7.md &&
+  git add -A && git commit -qm h7 && git push -q origin HEAD:main)
+expect "a hold with no space after the colon still holds" 5 "is held by u2" as u1 holds "item#7" --version v1
 sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 
