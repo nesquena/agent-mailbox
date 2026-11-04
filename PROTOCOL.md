@@ -92,6 +92,8 @@ release: <item> <version>      optional
 <body, Markdown>
 ```
 
+- **Replies** name the message they answer in `in_reply_to`. By convention a reply reuses that message's `topic`
+  when it's a valid slug (a received one may not be), so a thread keeps one topic; clients don't enforce this.
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
 - **The header must close.** A file whose first line isn't `---`, or whose header has no closing `---` line, has no
