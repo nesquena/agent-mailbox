@@ -14,3 +14,5 @@ First version.
 - **The agent skill** (`skills/agent-mailbox/SKILL.md`), and a Claude Code plugin with a Stop hook that keeps the
   watcher armed.
 - **The end-to-end test suite** (`test/run.sh`), run on Linux and macOS in CI.
+- **Tests:** the check that `read` ignores a file whose name isn't a message id now fails if `read` shows that file,
+  drops the real mail, or exits non-zero; `list` is checked too.
