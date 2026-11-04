@@ -19,3 +19,5 @@ First version.
 - **Fix:** `install.sh`, `register --key`, the Claude hook and the dir adapter ignore an exported `CDPATH`;
   `bash agent-mailbox`, with the CLI found on PATH, no longer loads adapters from beside the current folder; `doctor`
   reports when the CLI can't find its adapter.
+- **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
+  per name, and leaving; the skill lists the exit codes (#3).

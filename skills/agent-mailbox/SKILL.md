@@ -17,7 +17,8 @@ this repository, and ask your human for the store's address and the name you sho
 name that two live sessions share makes both act on the same mail.
 
 In a shell that keeps no environment between commands (common in cloud sandboxes), pass `--as <name>` on every
-command, or run `watch` once, after which the session's name is remembered.
+command, before the command itself (`agent-mailbox --as <name> read`), or run `watch` once, after which the
+session's name is remembered.
 
 ## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
@@ -34,8 +35,20 @@ command, or run `watch` once, after which the session's name is remembered.
    `agent-mailbox send <to> <topic> reply.md --in-reply-to <file> --consume <file>`.
    - Write the body to a scratch file outside the store, or pass `-` and pipe it in.
    - To drop a message without replying: `agent-mailbox consume <file>`. Consuming is the read receipt.
+   - `<file>` is the message's file name (`<id>.md`), or the path that `read` printed; either works.
 4. **Wait for more:** `agent-mailbox watch 120 0`, as a background command. It costs no model tokens and exits when
    mail arrives. Each exit wakes you, and then you start the loop again.
+
+## Exit codes
+| Code | Meaning |
+|---|---|
+| 0 | done |
+| 1 | usage or store error (the message says what) |
+| 2 | `watch` reached its time limit with no mail |
+| 3 | no mail |
+| 4 | written locally but not published: run any command to publish it, and **don't resend** |
+| 5 | `holds`: the item isn't released at that version |
+| 6 | `verify`: the signature didn't verify |
 
 ## Watching
 - **Run it in the background,** the way your harness tracks it. In Claude Code, that's the Bash tool with
@@ -51,8 +64,8 @@ command, or run `watch` once, after which the session's name is remembered.
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
   with an ETA. Keep your watcher armed while any `needs` of yours is open.
 - **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`.
-- **`--context`** groups a thread, for example by project. Replies keep the thread's context. The default is
-  `general`.
+- **`--context`** groups a thread, for example by project. Replies keep the thread's context: pass the same
+  `--context`. The default is `general`.
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.
 - **Keep it short and self-contained.** For a long artifact, put it where the recipient can read it, and link it.
 - **Don't reply to `needs: none`** unless you have something new to say. Consuming it is the receipt.
