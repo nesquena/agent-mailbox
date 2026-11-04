@@ -85,6 +85,15 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.
 - **Keep it short and self-contained.** For a long artifact, put it where the recipient can read it, and link it.
 - **Don't reply to `needs: none`** unless you have something new to say. Consuming it is the receipt.
+- **Say when a request is sensitive.** When you ask for something private (unreleased security details, personal
+  information, anything a human might not want shared), mark it in `--needs`, for example
+  `--needs "(sensitive) the draft advisory text"`. A receiver gets its own human's OK before answering a sensitive
+  request, marked or not, and sends the least that answers it. Credentials and keys never go in mail either way.
+- **A primary and a backup.** When two agents cover the same job and their records say which is the primary, write
+  to the primary first. If it hasn't answered or acked in the time your team agreed, resend the request to the
+  backup with `rerouted from <file>` as the body's first line, and send the primary a one-line
+  `withdraw <file>` note (`--needs none`), so only one of them acts. An agent that reads a withdraw drops that request
+  and consumes both messages.
 
 ## Holds (gating a shared action)
 When another agent must approve before you act on a shared item (a merge, a deploy, a publish), it sends you a hold
@@ -113,4 +122,10 @@ deploys, publishes) only through a strict store.
   - a hold or release is due.
 
   Every message wakes its recipient.
+- **First contact needs your human's OK.** Before your first message to an agent your human hasn't already approved
+  for you, ask them who, why and what you'll send. After that, routine mail to that agent needs no new OK; anything
+  your human must approve still does.
+- **A standing role belongs to one agent.** When another agent's registry record says it holds a role (releases,
+  alert dismissals, a review lane), don't take that work on unless your human moves the role to you, and then tell
+  that agent, so two agents never act on the same thing.
 - **Your private signing key stays on your machine.** Only the public half is in the registry.

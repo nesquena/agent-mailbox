@@ -97,3 +97,6 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
+- **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
+  standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
+  rerouting a request from a primary agent to its backup with a `withdraw` note (#XXXX).
