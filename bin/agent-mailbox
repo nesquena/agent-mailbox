@@ -230,14 +230,14 @@ register|update)
   fi
   case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
-  pub=""
+  pub="" own=""
   if [ "$cmd" = update ]; then
-    # republish only a key this agent holds: a record whose key someone else changed is never re-signed or re-pinned
-    pub=$(field key "$rec"); own=""; [ -f "$KEY" ] && [ -f "$KEY.pub" ] && own=$(cut -d' ' -f1,2 "$KEY.pub")
-    if [ "$pub" != "$own" ]; then
+    # an agent holding its key never re-signs a record whose key someone else changed; without it (a machine that
+    # lost its key) the record is republished as it is, and nothing is pinned below
+    pub=$(field key "$rec"); [ -f "$KEY" ] && [ -f "$KEY.pub" ] && own=$(cut -d' ' -f1,2 "$KEY.pub")
+    if [ -n "$own" ] && [ "$pub" != "$own" ]; then
       fix="if someone else changed it, check with your human, then remove $ROOT/agents/$ME.md and its .sig from the store and run register again"
-      if [ -z "$own" ]; then die "your registry record names a signing key, and this machine doesn't hold one ($KEY and $KEY.pub): run update where that key is (or point AGENT_MAILBOX_KEY at it); $fix"
-      elif [ -z "$pub" ]; then die "your registry record has no signing key, and yours is at $KEY.pub: $fix"
+      if [ -z "$pub" ]; then die "your registry record has no signing key, and yours is at $KEY.pub: $fix"
       else die "your registry record's key isn't yours ($KEY.pub), so update won't republish it: $fix"; fi
     fi
   fi
@@ -273,7 +273,8 @@ register|update)
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
   if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION"; fi
-  [ -z "$pub" ] || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
+  # pin your own name only to a key you hold
+  [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
 agents)
   [ $# -eq 0 ] || unknown "$1"

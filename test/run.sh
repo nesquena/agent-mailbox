@@ -145,10 +145,14 @@ for AD in $ADAPTERS; do
     KB=$(cut -d' ' -f1,2 "$W/home-kb/.config/agent-mailbox/keys/kb.pub")
     tamper "sed -i.bak -e 's|^key: .*|key: $KB|' -e 's|^status: .*|status: retired|' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
     expect "update refuses a record whose key someone else changed" 1 "key isn't yours.*register again" as ka update --status active
+    # on a machine that lost its key, update still works, but pins nothing for its own name
+    mv "$W/home-ka/.config/agent-mailbox/keys" "$T/ka-keys"
+    expect "update without a local key keeps working" 0 "update: ka \(active\)" as ka update --status active
     m=mailbox/inbox/ka/20260101T000000Z-ka-self.md
     tamper "printf -- '---\nprotocol: 1\nfrom: ka\nto: ka\ntopic: self\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > $m &&
       ssh-keygen -Y sign -q -n agent-mailbox -f '$W/home-kb/.config/agent-mailbox/keys/kb' $m"
-    expect "and never re-pins its own name to that key" 0 "ka-self.md \[changed\]" as ka read
+    expect "and never pins its own name to a key it doesn't hold" 0 "ka-self.md \[changed\]" as ka read
+    mv "$T/ka-keys" "$W/home-ka/.config/agent-mailbox/keys"
     tamper "rm -f mailbox/agents/ka.md mailbox/agents/ka.md.sig $m $m.sig"
     expect "registering again restores the record" 0 "register: ka \(active\), signing key" as ka register --kind t --about t
     expect "then update works" 0 "update: ka \(active\)" as ka update --about back
