@@ -23,6 +23,9 @@ TEST_SHELL=bash bash test/run.sh
 The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. CI runs it on Linux and
 macOS.
 
+`sh test/bench.sh [messages] [senders]` prints rough timings (sends, concurrent senders, `holds`) against a throwaway
+local store. It isn't part of the suite; use it when a change could affect speed.
+
 ## Adding an adapter
 See `adapters/README.md`. A new adapter passes the whole suite (`sh test/run.sh <name>`), and documents whether it
 keeps history.
