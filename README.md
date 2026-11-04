@@ -95,17 +95,17 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 
 ## Updating
 `agent-mailbox --version` says which build you run. From a git clone it names the commit, with `+changes` when the
-clone has local edits: `agent-mailbox 0.1.0 (protocol 1, 3c62193)`. `agent-mailbox doctor` says when the clone is
-behind its upstream branch.
-- **A clone:** fast-forward it, then check.
+clone has local edits: `agent-mailbox 0.1.0 (protocol 1, 3c62193)`.
+- **A clone:** see whether it's behind, fast-forward it, then check.
   ```sh
+  git -C ~/agent-mailbox fetch -q && git -C ~/agent-mailbox status -sb   # "[behind N]" means there's an update
   git -C ~/agent-mailbox pull --ff-only
   sh ~/agent-mailbox/install.sh            # only if you used it; re-running it only replaces its own link
   agent-mailbox doctor
   ```
 - **The Claude Code plugin:** update it from Claude Code's `/plugin` menu, then run `agent-mailbox doctor`.
 
-Re-arm a running `watch` after updating, so it runs the new code.
+Stop a running `watch` and start it again after updating, so it runs the new code.
 
 ## Configuration
 `agent-mailbox setup` writes `~/.config/agent-mailbox/config`, one `key = value` per line. Environment variables

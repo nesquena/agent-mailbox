@@ -487,32 +487,6 @@ doctor)
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
-  # whether the CLI's clone is behind its upstream branch: a notice, never a failure, and no line at all when the CLI
-  # isn't a clone, has no upstream, or can't fetch it (offline, or no answer within 10 s)
-  ( self_clone || exit 0
-    up=$(git -C "$SELF_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || exit 0
-    # never wait on a prompt: none for https, and ssh in batch mode unless ssh is configured for git
-    [ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$SELF_DIR" config core.sshCommand 2>/dev/null)" ] ||
-      { GIT_SSH_COMMAND='ssh -o BatchMode=yes'; export GIT_SSH_COMMAND; }
-    GIT_TERMINAL_PROMPT=0 git -C "$SELF_DIR" fetch -q >/dev/null 2>&1 & f=$!
-    # a watchdog stops git after 10 s; stopped first, it stops (and reaps) its own sleep, so nothing is left running.
-    # ceiling: on a timeout, git's transport (ssh, git-remote-https, a local upload-pack) can outlive doctor until its
-    # own timeout; stopping git's whole process group needs job control or timeout(1), which stock macOS lacks
-    ( s=; trap '[ -z "$s" ] || { kill "$s"; wait "$s"; } 2>/dev/null; exit 0' TERM; sleep 10 & s=$!; wait "$s"; kill "$f" ) >/dev/null 2>&1 & k=$!
-    wait "$f"; r=$?; kill "$k" 2>/dev/null; [ "$r" -eq 0 ] || exit 0
-    # <ahead> <behind>: commits only the clone has, and commits only the upstream has
-    # shellcheck disable=SC2046
-    set -- $(git -C "$SELF_DIR" rev-list --left-right --count "HEAD...@{u}" 2>/dev/null); [ $# -eq 2 ] || exit 0
-    commits() { if [ "$1" -eq 1 ]; then echo "1 commit"; else echo "$1 commits"; fi; }
-    # the clone's folder, quoted for sh, so the advice can be pasted as printed
-    top=$(git -C "$SELF_DIR" rev-parse --show-toplevel | sed "s/'/'\\\\''/g")
-    if [ "$2" -eq 0 ]; then printf 'ok   the CLI is up to date with %s\n' "$up"
-    elif [ "$1" -eq 0 ]; then
-      printf "warn the CLI is %s behind %s: update it with git -C '%s' pull --ff-only (README.md, \"Updating\")\n" "$(commits "$2")" "$up" "$top"
-    else
-      printf "warn the CLI is %s behind %s, and its clone '%s' has %s of its own: merge or rebase them by hand\n" \
-        "$(commits "$2")" "$up" "$top" "$(commits "$1")"
-    fi )
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
       { echo "FAIL the store is reachable and initialized"; ok=1; }

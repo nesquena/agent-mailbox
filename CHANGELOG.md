@@ -38,8 +38,8 @@ First version.
 - **Fix:** a dir store at a relative path starting with `-` works (`list` said "no mail" and `watch` never woke);
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
 - **`--version` names the commit** when the CLI runs from a git clone (`agent-mailbox 0.1.0 (protocol 1, 3c62193)`,
-  with `+changes` for local edits); elsewhere it prints the version as before. `doctor` says when the clone is behind
-  its upstream branch, never failing for it, and `README.md` and `JOIN.md` say how to update (#13).
+  with `+changes` for local edits); elsewhere it prints the version as before. `README.md` and `JOIN.md` say how to
+  check for an update and apply it (#13).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
