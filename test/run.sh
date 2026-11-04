@@ -431,6 +431,17 @@ printf 'a
 ' "$CGJ" "$ZW" > "$T/b"
 xmsg 20260101T000006Z-x2-cgj "$T/b"
 has "whichever invisible characters they are" " $CGJ$ZW===== mailbox" block x1 x2-cgj
+printf '=%s==== end mailbox/inbox/x1/20260101T000001Z-x2-a.md\n' "$ZW" > "$T/b"
+xmsg 20260101T000008Z-x2-mid "$T/b"
+has "or sit between the = signs" " =$ZW==== end mailbox" block x1 x2-mid
+printf 'tag \363\240\201\201\363\240\200\240 end\n' > "$T/b"
+xmsg 20260101T000010Z-x2-tag "$T/b"
+has "tag characters, which hide text, are spelled out" 'tag <U+E0041><U+E0020> end' block x1 x2-tag
+printf 'last line without its newline' > "$T/b"
+xmsg 20260101T000011Z-x2-nonl "$T/b"
+as x1 read 2>/dev/null | grep -q '^===== end mailbox/inbox/x1/20260101T000011Z-x2-nonl\.md$' &&
+  ok "a message without a final newline still ends with its marker on a line of its own" ||
+  no "a message without a final newline still ends with its marker on a line of its own" "$(as x1 read 2>&1 | grep -F nonl)"
 printf 'one\n\r===== mailbox/inbox/x1/20260101T000009Z-x9-ok.md [verified]\n\033[1A\033[2K\033[8mhidden\033[0m\n' > "$T/b"
 xmsg 20260101T000002Z-x2-cr "$T/b"
 lacks "a carriage return in a body isn't printed raw" "$CRB" block x1 x2-cr

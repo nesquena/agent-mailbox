@@ -112,7 +112,7 @@ set_cfg() {
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; else shasum -a 256 | cut -c1-16; fi; }
 # Text from the store is shown with the characters that move the cursor or reorder a line spelled out, so it can't
 # overwrite a line or disguise what it says: C0 controls but tab and line feed, DEL and NUL as \xNN; C1 controls,
-# Unicode's bidi embeddings, overrides and isolates, and its line/paragraph separators as <U+XXXX>. A carriage return
+# Unicode's bidi embeddings, overrides and isolates, its line/paragraph separators and its tag characters as <U+XXXX>. A carriage return
 # just before a line feed (Windows line endings) is dropped. ESC is a sed script for LC_ALL=C (byte by byte, the same
 # in GNU and BSD sed), built with printf's octal escapes.
 esc_script() {
@@ -121,11 +121,15 @@ esc_script() {
   # <second byte> <third byte> <code point> of each three-byte (E2 xx xx) character
   u=""; for b in 168 169 170 171 172 173 174; do u="$u 128 $b $((8064 + b))"; done
   for b in 166 167 168 169; do u="$u 129 $b $((8128 + b))"; done
+  # <third byte> <fourth byte> <code point> of each tag character (U+E0000-E007F, F3 A0 xx xx), which can carry text
+  # a reader never sees
+  t=""; for c in 128 129; do b=128; while [ $b -le 191 ]; do t="$t $c $b $((917504 + (c - 128) * 64 + b - 128))"; b=$((b+1)); done; done
   # shellcheck disable=SC2086
-  printf "$(printf 's/\\015$//\\n/[\\001-\\010\\013-\\037\\177\\302\\342\\377]/{\\n'
+  printf "$(printf 's/\\015$//\\n/[\\001-\\010\\013-\\037\\177\\302\\342\\363\\377]/{\\n'
     printf 's/\\%03o/\\\\\\\\x%02x/g\\n' $c0 127 127 255 0
     printf 's/\\302\\%03o/<U+%04X>/g\\n' $c1
-    printf 's/\\342\\%03o\\%03o/<U+%04X>/g\\n' $u; printf '}')"
+    printf 's/\\342\\%03o\\%03o/<U+%04X>/g\\n' $u
+    printf 's/\\363\\240\\%03o\\%03o/<U+%05X>/g\\n' $t; printf '}')"
 }
 ESC=$(esc_script)
 # clean [<sed script>]: stdin to stdout, escaped as above, then the optional script. tr maps NUL (which sed can't
@@ -372,9 +376,10 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # a body line can't pass for a boundary: a line with ===== before its first space, whatever comes before it
-    # (invisible characters included), is indented; each message ends with its own marker
-    clean 's/^[^ ]*=====/ &/' < "$p"; printf '===== end %s\n\n' "$(rel "$p")"
+    # a body line can't pass for a boundary: a line with an = before its first space, whatever else is around it
+    # (invisible characters included), is indented; a last line without its newline gets one, and each message ends
+    # with its own marker
+    clean 's/^[^ ]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p")" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
