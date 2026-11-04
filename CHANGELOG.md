@@ -42,10 +42,11 @@ First version.
   it comes from `setup --branch`, the config file or `AGENT_MAILBOX_BRANCH`. With git, most such names made commands
   retry their push for several seconds and exit 4. `setup` no longer writes one, and `doctor` says when it's
   invalid (#19).
-- **Changed:** a git mailbox on a branch named `HEAD` or starting with `-` worked before and is now refused. Move it
-  to a new branch, then point each agent at it:
-  `git --git-dir=<store> update-ref refs/heads/<new> refs/heads/<old>`, then
-  `agent-mailbox setup --store <store> --branch <new>`.
+- **Changed:** a git mailbox on a branch named `HEAD` or starting with `-` worked before and is now refused. Copy it
+  to a new branch, then change the `branch =` line in each agent's config to it:
+  `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`.
+  Keys are pinned per branch, so each sender's key is trusted afresh on the new one. The dir adapter doesn't use the
+  branch: set `branch = main` there.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
