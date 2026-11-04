@@ -55,6 +55,20 @@ First version.
   or home path no longer breaks `register` or `send` under dash or macOS's `/bin/sh`.
 - **Fix:** a dir store at a relative path starting with `-` works (`list` said "no mail" and `watch` never woke);
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
+- **Fix:** a branch name git refuses (`a/../b`, `a//b`, a leading or trailing `/`, a final `.`, a part starting with
+  `.` or ending in `.lock`, a leading `-`, or `HEAD`) is refused as a `bad branch name` with every adapter, whether
+  it comes from `setup --branch`, the config file or `AGENT_MAILBOX_BRANCH`. With git, most such names made commands
+  retry their push for several seconds and exit 4. `setup` no longer writes one, and `doctor` says when it's
+  invalid (#19).
+- **Changed:** a git mailbox on a branch named `HEAD` or starting with `-` worked before and is now refused. Copy it
+  to a new branch, then change the `branch =` line in each agent's config to it:
+  `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`.
+  Keys are pinned per branch, so each sender's key is trusted afresh on the new one. The dir adapter doesn't use the
+  branch: set `branch = main` there; its pinned keys are trusted afresh too.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
+- **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the
+  name kept in the config, harnesses that can't wake an agent, and ending a session; replies reuse the topic they
+  answer when it's a plain slug, and no other text from a message goes into a command; check the branch exists
+  before registering, keep separate configs for agents that share a machine, and what each `watch` exit means (#18).
 - **Roadmap:** evaluating stores beyond git (#7).
