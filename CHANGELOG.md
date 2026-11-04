@@ -25,3 +25,4 @@ First version.
   take no options and acting as the configured agent (#3).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
+- **Roadmap:** evaluating stores beyond git (#7).
