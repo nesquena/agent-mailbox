@@ -40,7 +40,7 @@ First version.
 - **Fix:** `read`, `list`, `watch` and `agents` show control and invisible characters from the store spelled out
   (`\x1b`, `<U+200B>`), so mail or a registry record can't move the cursor, overwrite a line, or make a body line
   look like a message boundary; such a line is indented like any body line starting with `=====`. `agents` cuts a
-  record's status, kind and about to 200 bytes. `verify <name>` looks for the name only in your own inbox (#XXXX).
+  record's status, kind and about to 200 bytes. `verify <name>` looks for the name only in your own inbox (#22).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
