@@ -408,6 +408,23 @@ wait
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
 
+echo "== holds and header rules (git)"
+T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+as u1 init >/dev/null; for a in u1 u2; do as $a register --kind t --about t --no-key >/dev/null; done
+echo h | as u2 send u1 h-8 - --hold "item#8 v1" >/dev/null; echo h | as u2 send u1 h-9 - --hold "item#9 v1" >/dev/null
+# planted by someone with write access: a release in a subfolder of the inbox, and one in a header that never closes
+git clone -q -b main "$T/store.git" "$T/plant" && (cd "$T/plant" && git config user.email e@e && git config user.name e &&
+  mkdir -p mailbox/inbox/u1/sub &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: item#8 v1\n---\n\nok\n' > mailbox/inbox/u1/sub/29990101T000000Z-u2-r.md &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: open\ncontext: general\nsent: 2999-01-01T00:00:01Z\nin_reply_to: none\nneeds: none\nrelease: item#9 v1\n\nno closing line\n' > mailbox/inbox/u1/29990101T000001Z-u2-open.md &&
+  git add -A && git commit -qm plant && git push -q origin HEAD:main)
+expect "holds ignores a release in a subfolder of the inbox" 5 "is held by u2" as u1 holds "item#8" --version v1
+expect "and one whose header never closes" 5 "is held by u2" as u1 holds "item#9" --version v1
+expect "read marks a header that never closes as bad" 0 "u2-open\.md \[bad\]" as u1 read
+sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
+expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
+
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor

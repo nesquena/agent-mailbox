@@ -99,8 +99,10 @@ stamp_iso() { echo "$1" | sed -E 's/^(....)(..)(..)T(..)(..)(..)Z$/\1-\2-\3T\4:\
 # OpenSSH 8+ lists `ssh-keygen -Y sign` in its usage; older versions don't (ERE, so BSD grep reads it the same)
 have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)'; }
 # header value of a field from a front-matter file (first occurrence, inside the --- block only)
-field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
-  NR > 1 { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k && !done) { v = substr($0, i + 1); sub(/^ /, "", v); print v; done = 1 } }' "$2"; }
+# a header that never closes isn't a header (PROTOCOL.md section 5): every field reads empty
+field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { closed = 1; exit }
+  NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
+  END { if (closed && done) print v }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 put() { tmp="$1.tmp.$$"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
 # set_cfg <key> <value>: replace or add one line of the config file
@@ -379,9 +381,12 @@ holds)
   load_adapter; ad_sync; need_store
   strict=""; require_sigs && strict=1
   tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd"
-  # every message ever delivered to you, in delivery order (consumed mail included): <ref> <path>
-  records=$(ad_history "$ROOT/inbox/$ME" | while read -r ref p; do
+  # every message ever delivered to you that may carry a hold or release, in delivery order (consumed mail
+  # included): <ref> <path>. The pattern lets an adapter skip the rest; each record is still checked below. Files in
+  # a subfolder of the inbox aren't messages (PROTOCOL.md section 2), as for read and list.
+  records=$(ad_history "$ROOT/inbox/$ME" '^(hold|release): ' | while read -r ref p; do
       case "$p" in (*.md) ;; (*) continue ;; esac
+      case "${p#"$ROOT/inbox/$ME/"}" in (*/*) continue ;; esac
       ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || continue
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }

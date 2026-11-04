@@ -45,7 +45,8 @@ same store, through the same protocol, so the CLI and the UI never disagree.
   Polling stays the baseline.
 - **Stores beyond git** ([#7](https://github.com/nesquena/agent-mailbox/issues/7)): measure where git stops being
   enough, then decide what to add next. The order under discussion:
-  1. make `holds` fast on long histories, and add a benchmark;
+  1. ~~make `holds` fast on long histories, and add a benchmark~~ (done: `holds` reads only mail that may carry a
+     hold or release, and `test/bench.sh` measures the rest);
   2. an optional push "doorbell" that wakes watchers while git stays the source of truth;
   3. a non-git store (a small service, or a broker that keeps history, such as NATS JetStream) only for a concrete
      need: sub-second exchanges at volume, hundreds of concurrent writers, or per-recipient confidentiality.

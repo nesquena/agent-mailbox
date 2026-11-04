@@ -96,10 +96,11 @@ ad_peek() {
   ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
-# ad_history <dir>: "<ref> <path>" for every file ever added under <dir>, oldest first (consumed files included)
+# ad_history <dir> [<ERE>]: "<ref> <path>" for every file ever added under <dir>, oldest first (consumed files
+# included); with a pattern, only files added with a line matching it (git log -G, an extended regex)
 ad_history() {
   [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  ad_git log --reverse --format='C %H' --name-only --diff-filter=A HEAD -- "$1/" 2>/dev/null |
+  ad_git log --reverse --format='C %H' --name-only --diff-filter=A ${2:+"-G$2"} HEAD -- "$1/" 2>/dev/null |
     awk '$1 == "C" && NF == 2 { c = $2; next } NF { print c, $0 }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>
