@@ -31,6 +31,7 @@
 #                                       wait for mail without spending model tokens; exits 0 with the mail listed,
 #                                       2 after max seconds (0 = no limit). Run it in the background.
 #   whoami | doctor                     show the resolved config | check this machine's setup
+#   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
 # Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 written locally but not published
 # (re-run any command to publish; don't resend); 5 not released; 6 signature not verified.
@@ -66,13 +67,14 @@ real() {
   while [ -L "$rp" ]; do rl=$(readlink "$rp") || break; case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
   rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
 }
-# this script's real folder, following links (install.sh links it onto PATH)
+# this script's real path, following links (install.sh links it onto PATH)
 here() {
   # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
   case "$0" in (*/*) ;; (*) [ -f "$0" ] || return 1 ;; esac
-  r=$(real "$0") && dirname "$r"
+  real "$0"
 }
-SELF_DIR=$(here) || SELF_DIR=""
+SELF=$(here) || SELF=""
+SELF_DIR=${SELF%/*} SELF_NAME=${SELF##*/}; [ -z "$SELF" ] || [ -n "$SELF_DIR" ] || SELF_DIR=/
 # the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
 root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
   case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
@@ -83,6 +85,24 @@ branch_ok() { matches '^[A-Za-z0-9._/-]+$' "$1" &&
   case "/$1/" in (*/.*|*.lock/*|*..*|*//*|*./|/-*|/HEAD/) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
+# self_clone: succeeds when this script is bin/agent-mailbox in a clone of agent-mailbox: a repository that tracks it
+# there, at its top, beside adapters/git.sh (not one that vendors a copy elsewhere). Never a repository the current
+# folder or the environment names: it unsets git's repository variables, so run it in a subshell.
+self_clone() {
+  # (with no folder, `git -C ""` would use the current one); without git, the commands below fail quietly
+  [ -n "$SELF_DIR" ] && [ "$SELF_NAME" = agent-mailbox ] || return 1
+  # shellcheck disable=SC2046
+  unset $(git rev-parse --local-env-vars 2>/dev/null)
+  [ "$(git -C "$SELF_DIR" rev-parse --show-prefix 2>/dev/null)" = bin/ ] &&
+    git -C "$SELF_DIR" ls-files --error-unmatch -- agent-mailbox ../adapters/git.sh >/dev/null 2>&1
+}
+# the commit this CLI runs from, with "+changes" when the clone's tracked files are modified; fails outside a clone
+self_rev() { (
+  self_clone || exit 1
+  rev=$(git -C "$SELF_DIR" rev-parse --short HEAD 2>/dev/null) || exit 1
+  [ -z "$(GIT_OPTIONAL_LOCKS=0 git -C "$SELF_DIR" status --porcelain -uno 2>/dev/null)" ] || rev="$rev+changes"
+  printf '%s\n' "$rev"
+) }
 
 # --- configuration: flags > environment > config file > defaults ------------------------------------------------
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox"
@@ -93,7 +113,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --as) [ $# -ge 2 ] || die "--as needs a name"; AS=$2; shift 2 ;;
     --config) [ $# -ge 2 ] || die "--config needs a file"; CONFIG=$2; shift 2 ;;
-    --version) echo "agent-mailbox $VERSION (protocol $PROTOCOL)"; exit 0 ;;
+    --version) rev=$(self_rev) || rev=""; printf 'agent-mailbox %s (protocol %s%s)\n' "$VERSION" "$PROTOCOL" "${rev:+, $rev}"; exit 0 ;;
     *) break ;;
   esac
 done
