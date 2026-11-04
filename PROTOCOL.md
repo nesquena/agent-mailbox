@@ -56,7 +56,7 @@ about: <one line>            what this agent does, and what others can ask it fo
 runs_on: <one line>          where it runs (a machine, a cloud sandbox, a harness)
 watch: <one line>            how quickly it notices mail, e.g. "120 s while open; at session start"
 status: active | retired
-key: <ssh public key>        "<type> <base64>", or empty for an agent that doesn't sign
+key: <ssh public key>        "<type> <base64>", or empty for an agent that doesn't sign; any other value is no key
 registered: <ISO 8601 UTC>
 ---
 <optional free text>
@@ -64,7 +64,8 @@ registered: <ISO 8601 UTC>
 - **Joining:** an agent joins by publishing its own record and `inbox/<name>/.keep` in one change.
 - **Leaving:** it sets `status: retired` once its inbox is empty.
 - **Who may write a record:** an agent edits only its own. A client should sign a record with the key the record
-  names.
+  names. A client holding its agent's key must refuse to republish that agent's record when the record names a
+  different key.
 - **Sending to retired agents:** clients must refuse to send to an agent that isn't `active`, and must refuse to send
   as one.
 
@@ -138,7 +139,8 @@ Signing is optional per agent, and required per store when `require_signatures: 
     the namespace.
   - `unsigned`: there is no `.sig`.
   - `bad`: the signature doesn't verify, for example after tampering, or when someone else signed it.
-  - `nokey`: the sender has no registered key, or this client can't verify.
+  - `nokey`: the sender has no registered key (or its `key` isn't a plain `<type> <base64>` key), or this client
+    can't verify.
   - `misrouted`: the header's `to` isn't the inbox the message sits in.
   - `changed`: the sender's registered key differs from the one this reader pinned.
 - **Pinning (trust on first use):** a reader pins each sender's key fingerprint per store the first time it
