@@ -110,8 +110,8 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
   lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
-  matches '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' "$ROOT" && case "/$ROOT/" in (*/../*) false ;; (*) true ;; esac ||
-    die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..'), not '$ROOT'"
+  matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" && case "/$ROOT/" in (*/../*) false ;; (*) true ;; esac ||
+    die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..', no part starting with '-'), not '$ROOT'"
   matches '^[A-Za-z0-9._/-]+$' "$BRANCH" || die "bad branch name '$BRANCH'"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
@@ -128,14 +128,14 @@ need_store() {
   [ "$v" -le "$PROTOCOL" ] || die "this mailbox uses protocol $v; this client speaks $PROTOCOL (upgrade agent-mailbox)"
 }
 require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
-record() { echo "$M/agents/$1.md"; }
+record() { printf '%s\n' "$M/agents/$1.md"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
 inbox_files() { [ -d "$M/inbox/$1" ] || return 0
   find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
-    basename "$p" | grep -Eq "$MSG_RE" && echo "$p"; done; }
+    basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done; }
 # no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
 # so a link a writer plants in a shared store can't redirect writes outside it
 no_link() {
@@ -145,7 +145,7 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
-rel() { echo "${1#"$AD_DIR"/}"; }
+rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
 # verify_file <message path> [<expected from>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
@@ -330,7 +330,7 @@ list)
   [ $# -eq 0 ] || unknown "$1"
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
-  echo "$mail" | while IFS= read -r p; do rel "$p"; done ;;
+  printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done ;;
 read)
   except=""
   while [ $# -gt 0 ]; do
@@ -433,7 +433,7 @@ watch)
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
               case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""
-  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
   # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
   while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
@@ -444,7 +444,7 @@ watch)
     [ "$now" != "$last" ] || continue
     if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
     last=$now
-    [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+    [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
   done
   echo "no mail for $ME after ${max}s"; exit 2 ;;
 whoami)
