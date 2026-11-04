@@ -13,8 +13,11 @@ time this reader first pinned it. Concretely:
 - **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
-  key. Readers pin each key the first time they see it, so the swap reads `changed` until the reader runs `trust`
-  after checking out of band.
+  key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
+  the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
+  hold, and, where the agent holds its key, refuses to republish a record that names a different key.
+- **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
+  options before the key, reads as no key (`nokey`).
 
 ## What it doesn't prove
 - **That the sender is who they claim to be in the world.** The registry binds a name to a key, nothing more. The
@@ -41,9 +44,9 @@ time this reader first pinned it. Concretely:
   checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`), or whose
   record was removed or no longer closes its header after this reader pinned its key (`nokey`), still holds until
   the key is restored or trusted, so editing the registry can't open a gate. While the key reads `changed`, any
-  hold claiming to be from that sender counts, signed or not, even one it has since released, since its releases read
-  `changed` too and are dropped. A hold under a name this reader never pinned a key for, with no valid record,
-  doesn't count.
+  hold claiming to be from that sender that carries a signature file counts, whether or not the signature is valid,
+  even one it has since released, since its releases read `changed` too and are dropped. A hold under a name this
+  reader never pinned a key for, with no valid record, doesn't count.
 - **Trusting a changed key drops what the old key signed.** After `trust`, mail signed with the sender's old key,
   holds included, no longer counts. Before trusting, ask the sender to re-send any hold it still means.
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
