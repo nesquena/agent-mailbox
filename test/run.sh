@@ -311,7 +311,9 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   expect "an existing checkout still reads" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and holds the message byte for byte" || no "the existing checkout's copy differs from the store's"
   # a checkout made before this rule took on the store's line endings: its next command checks the files out again
-  rm -f "$C/.git/info/attributes"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  # and, as in real use, its index was written again later, so git trusts the files' stat data
+  find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
   grep -q "$(printf '\r')" "$C/$f" && ok "(an older checkout took on the store's line endings)" || no "the older-checkout setup kept LF"
   expect "an older checkout the store's attributes changed reads again" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and holds the message as stored again" || no "the older checkout still differs from the store's"
