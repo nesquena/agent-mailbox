@@ -239,7 +239,8 @@ for b in main mail team/inbox v1.2 a_b-c a./b x.lockx; do
   expect "branch '$b' works" 0 "^w1 " env HOME="$W/home-w1" AGENT_MAILBOX_BRANCH="$b" "$SH" "$CLI" agents
 done
 cp "$W/home-w1/.config/agent-mailbox/config" "$T/w1.config"; printf 'branch = a/../b\n' >> "$T/w1.config"
-expect "a bad branch in the config file is refused" 1 "bad branch name 'a/\.\./b'" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" agents
+expect "a bad branch in the config file is refused" 1 "bad branch name 'a/\.\./b' \(from the config\)" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" agents
+expect "and one from AGENT_MAILBOX_BRANCH says so" 1 "bad branch name 'a//b' \(from AGENT_MAILBOX_BRANCH" env HOME="$W/home-w1" AGENT_MAILBOX_BRANCH=a//b "$SH" "$CLI" --config "$T/w1.config" agents
 expect "and doctor says why" 1 "FAIL the branch name is valid" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" doctor
 expect "setup refuses a bad branch" 1 "bad branch name 'a//b'" as wb setup --store "$T/store" --adapter dir --branch a//b --name wb
 [ ! -e "$W/home-wb/.config/agent-mailbox/config" ] && ok "and writes no config" || no "setup wrote a config with a bad branch"

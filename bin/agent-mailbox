@@ -119,7 +119,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 load_adapter() {
   lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
   root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git' in any case, or starting with '-'), not '$ROOT'"
-  branch_ok "$BRANCH" || die "bad branch name '$BRANCH'"
+  branch_ok "$BRANCH" || die "bad branch name '$BRANCH' (from ${AGENT_MAILBOX_BRANCH:+AGENT_MAILBOX_BRANCH, which overrides }the config)"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
   [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
@@ -472,7 +472,7 @@ doctor)
   chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
-  chk "the branch name is valid" 'branch_ok "$BRANCH"' "set it with setup --branch: a name git accepts, of letters, digits, '.', '_', '-' and '/'"
+  chk "the branch name is valid" 'branch_ok "$BRANCH"' "set it with setup --branch${AGENT_MAILBOX_BRANCH:+ and unset AGENT_MAILBOX_BRANCH}: a name git accepts, of letters, digits, '.', '_', '-' and '/'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||

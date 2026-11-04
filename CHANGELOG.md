@@ -46,7 +46,7 @@ First version.
   to a new branch, then change the `branch =` line in each agent's config to it:
   `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`.
   Keys are pinned per branch, so each sender's key is trusted afresh on the new one. The dir adapter doesn't use the
-  branch: set `branch = main` there.
+  branch: set `branch = main` there; its pinned keys are trusted afresh too.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
