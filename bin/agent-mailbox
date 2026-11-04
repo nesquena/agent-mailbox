@@ -407,7 +407,7 @@ holds)
   # every message ever delivered to you that may carry a hold or release, in delivery order (consumed mail
   # included): <ref> <path>. The pattern lets an adapter skip the rest; each record is still checked below. Files in
   # a subfolder of the inbox aren't messages (PROTOCOL.md section 2), as for read and list.
-  records=$(ad_history "$ROOT/inbox/$ME" '^(hold|release):' | while read -r ref p; do
+  records=$(ad_history "$ROOT/inbox/$ME" '^(hold|release):' | while IFS= read -r p; do ref=${p%% *} p=${p#* }
       [ "$ref" != '!' ] || { echo '!'; continue; }
       case "$p" in (*.md) ;; (*) continue ;; esac
       case "${p#"$ROOT/inbox/$ME/"}" in (*/*) continue ;; esac

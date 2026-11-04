@@ -572,6 +572,11 @@ T="$W/rules"
   git update-index --add --cacheinfo "160000,$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x,mailbox/inbox/u1/29990101T000020Z-u2-gl.md" &&
   git commit -qm "gitlink $x" || exit 1; done && git push -q origin HEAD:main)
 expect "a gitlink named like a message doesn't stop holds" 0 "item#9 released by u2" as u1 holds "item#9" --version v1
+# 13. a file whose name ends in a space isn't a message: it's skipped, never read under a trimmed name
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: sp\ncontext: general\nsent: 2999-01-01T00:00:21Z\nin_reply_to: none\nneeds: none\nhold: item#9 v1\n---\n\nheld\n' > "mailbox/inbox/u1/29990101T000021Z-u2-sp.md " &&
+  git add -A && git commit -qm sp && git rm -q "mailbox/inbox/u1/29990101T000021Z-u2-sp.md " && git commit -qm unsp && git push -q origin HEAD:main)
+expect "a file name ending in a space doesn't stop holds" 0 "item#9 released by u2" as u1 holds "item#9" --version v1
 # 13. a store that can't be reached: holds won't decide from the clone it last synced, which still shows the release
 echo r | as u2 send u1 r-18 - --release "item#18 v1" >/dev/null; as u1 holds "item#18" --version v1 >/dev/null 2>&1
 echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" "$T/store.away"
