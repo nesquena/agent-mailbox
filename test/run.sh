@@ -503,6 +503,8 @@ if printf '%s\n' "$row" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 && case "$row"
 mkdir -p "$T/store/mailbox/inbox/x3"; cp "$T/b" "$T/store/mailbox/inbox/x3/20260101T000005Z-x2-other.md"
 expect "verify by name doesn't pick a message from another inbox" 1 "no such message" as x1 verify 20260101T000005Z-x2-other.md
 expect "it finds one in yours" 6 "^unsigned$" as x1 verify 20260101T000004Z-x2-md.md
+sed 's/^to: x1$/to: x3/' "$I/20260101T000004Z-x2-md.md" > "$I/20260101T000012Z-x2-mis.md"
+expect "and reads one addressed to someone else as misrouted, as read does" 6 "^misrouted$" as x1 verify 20260101T000012Z-x2-mis.md
 echo "== holds and header rules (git)"
 T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
