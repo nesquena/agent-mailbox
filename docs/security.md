@@ -38,8 +38,9 @@ time this reader first pinned it. Concretely:
   decides the result, but it can't prevent the forgery.
 - **A strict store stays strict, and keeps its holds.** A reader that has seen `require_signatures: true` keeps
   treating the store as strict even if `store.md` is edited to say otherwise; `trust --relax` ends that, after
-  checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`) or removed
-  (`nokey`) still holds until the key is restored or trusted, so editing the registry can't open a gate.
+  checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`), or whose
+  record was removed or no longer closes its header (`nokey`), still holds until the key is restored or trusted, so
+  editing the registry can't open a gate.
 - **holds fails closed:** if it can't read the store's full history, it stops with an error rather than decide from
   part of it.
 - **History must not be rewritten.** With the git adapter, `holds` reads every version of every file ever in an

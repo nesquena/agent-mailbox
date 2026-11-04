@@ -290,13 +290,14 @@ expect "a retired agent is told how to come back" 1 "update --status active" sh 
 if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
-for a in k1 k2 k3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
-as k1 init --require-signatures >/dev/null; for a in k1 k2 k3; do as $a register --kind t --about t >/dev/null; done
+for a in k1 k2 k3 k4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+as k1 init --require-signatures >/dev/null; for a in k1 k2 k3 k4; do as $a register --kind t --about t >/dev/null; done
 git clone -q -b main "$T/store.git" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e
 wr() { (cd "$T/w" && git pull -q --rebase origin main 2>/dev/null && "$@" && git add -A && git commit -qm w && git push -q origin HEAD:main); }
 # k3 releases and k2 holds the same version; k1 has checked holds once, so it has pinned both keys
 echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k1 ha - --hold "a#1 v1" >/dev/null
 echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
+echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
 # someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
@@ -306,6 +307,9 @@ expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1
+# ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
+wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
+expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
 # store.md is edited to stop requiring signatures, and an unsigned release "from k3" is planted after k3's signed hold
 echo h | as k3 send k1 hc - --hold "c#1 v1" >/dev/null
 wr sh -c "sed 's/^require_signatures: true/require_signatures: false/' mailbox/store.md > mailbox/store.t && mv mailbox/store.t mailbox/store.md &&
@@ -314,9 +318,16 @@ expect "a store seen strict stays strict after store.md is edited" 5 "c#1 is hel
 expect "and says so" 5 "still treating this store as strict" as k1 holds "c#1" --version v1
 expect "trust --relax ends that" 0 "strict for you only while" as k1 trust --relax
 expect "after which the store's own setting applies" 0 "c#1 released by k3" as k1 holds "c#1" --version v1
-# a history git can't read in full stops holds, rather than deciding from part of it
-mkdir -p "$T/shim"; printf '#!/bin/sh\nfor a; do case "$a" in -G*) exit 128 ;; esac; done\nexec "%s" "$@"\n' "$(command -v git)" > "$T/shim/git"; chmod +x "$T/shim/git"
-expect "holds stops when it can't read the history" 1 "can't read this store's full history" env PATH="$T/shim:$PATH" HOME="$W/home-k1" "$SH" "$CLI" holds "a#1" --version v1
+# a history git can't read in full stops holds, rather than deciding from part of it. The shim fails each git command
+# whose arguments match one of the patterns in GIT_FAIL, and with GIT_SHALLOW set calls the checkout shallow
+mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
+  'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
+gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full history" gf '*-G*'
+expect "or the walk over every version fails" 1 "can't read this store's full history" gf '*--reverse*'
+expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full history" gf '*--unshallow*' 1
+expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full history" gf '*--reverse* *cat-file*'
+expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 fi
 
 echo "== installed link (install.sh)"
@@ -544,6 +555,12 @@ if [ -n "$SSH" ]; then
     git checkout -q main && git merge -q --no-edit side && git push -q origin HEAD:main)
   expect "an unsigned copy of a signed hold doesn't hide it" 5 "item#1 is held by sg2" as sg1 holds "item#1" --version v1
 fi
+# 11. a release sent in the same second as the sender's hold isn't lost to the tie rule: send waits for the next
+# second. The clock shim gives the first two stamps the same second, and later ones the next
+mkdir -p "$W/dshim"; printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then n=$(($(cat "$DCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$DCOUNT"' \
+  '  if [ $n -le 2 ]; then echo 20260101T000000Z; else echo 20260101T000001Z; fi; exit 0; fi' "exec '$(command -v date)' \"\$@\"" > "$W/dshim/date"; chmod +x "$W/dshim/date"
+for k in "--hold" "--release"; do echo x | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 "g17${k#--}" - $k "item#17 v1" >/dev/null 2>&1; done
+expect "a release right after a hold in the same second still counts" 0 "item#17 released by u2 at v1" as u1 holds "item#17" --version v1
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

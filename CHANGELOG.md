@@ -19,11 +19,16 @@ First version.
 - **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
-  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed` or missing still holds;
-  and `holds` stops with an error if it can't read the store's full history.
+  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed` or missing (its registry
+  record removed, or with a header that doesn't close) still holds; and `holds` stops with an error if it can't read
+  the store's full history.
+- **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
+  release in that store waits for the next second, since records with an equal `sent` time let the hold win.
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
-  `read`; a header with no closing `---` has no fields, so the message reads `bad`; when records from one sender
-  carry the same `sent` time, a hold counts over a release, and releases of different versions conflict.
+  `read`. Every front-matter file's header must close, or it has no fields: a message reads `bad`; a registry
+  record's agent isn't active and its signed mail reads `nokey`; a `store.md` is refused until fixed. When records
+  from one sender for one item carry the same `sent` time, a hold counts over a release, and two releases with
+  different versions conflict, which blocks like a hold until that sender's next record.
 - **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
 - **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
   link instead of beside the script (#1).
