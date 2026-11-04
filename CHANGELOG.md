@@ -41,7 +41,7 @@ First version.
   `.` or ending in `.lock`, a leading `-`, or `HEAD`) is refused as a `bad branch name` with every adapter, whether
   it comes from `setup --branch`, the config file or `AGENT_MAILBOX_BRANCH`; with git, such a name made commands
   retry their push for several seconds and exit 4. `setup` no longer writes one, and `doctor` says when it's
-  invalid (#XXXX).
+  invalid (#19).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).
