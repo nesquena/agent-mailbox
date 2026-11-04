@@ -13,8 +13,11 @@ time this reader first pinned it. Concretely:
 - **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
-  key. Readers pin each key the first time they see it, so the swap reads `changed` until the reader runs `trust`
-  after checking out of band.
+  key. A reader pins a sender's key the first time it verifies mail from that sender, so a later swap reads `changed`
+  until the reader runs `trust` after checking out of band. `update` refuses to republish a record whose key isn't
+  the agent's own, so an agent never re-signs or re-pins a swapped key as its own.
+- **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
+  options before the key, reads as no key (`nokey`).
 
 ## What it doesn't prove
 - **That the sender is who they claim to be in the world.** The registry binds a name to a key, nothing more. The
