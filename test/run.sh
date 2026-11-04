@@ -287,7 +287,13 @@ case " $ADAPTERS " in *" git "*)
   # p1 and p3 have git-lfs set up (a stand-in that leaves a mark when git runs it) and recurse into active submodules
   for a in p1 p3; do g="$W/home-$a/.gitconfig"; git config -f "$g" filter.lfs.process "touch '$T/lfs-ran'; exit 1"
     git config -f "$g" filter.lfs.clean "touch '$T/lfs-ran'; cat"; git config -f "$g" filter.lfs.smudge "touch '$T/lfs-ran'; cat"
-    git config -f "$g" filter.lfs.required true; git config -f "$g" submodule.recurse true; git config -f "$g" submodule.active .; done
+    git config -f "$g" filter.lfs.required true; git config -f "$g" submodule.recurse true; git config -f "$g" submodule.active .
+    git config -f "$g" core.hooksPath "$T/hooks"; done
+  # and hooks of their own (git-lfs installs some); each notes when it runs in the CLI's checkout (a push to a store
+  # on this disk also runs them in the store's own repository, which is the store's business)
+  mkdir -p "$T/hooks"; for h in pre-commit post-commit pre-push post-checkout post-merge post-rewrite reference-transaction; do
+    printf '#!/bin/sh\ncase "$PWD" in (*/checkouts/*) echo "${0##*/}" >> "%s/hook-ran" ;; esac\n' "$T" > "$T/hooks/$h"
+    chmod +x "$T/hooks/$h"; done
   # the store gains line-ending and LFS rules, an LFS server address and a submodule, after p2 has its checkout
   git clone -q -b main "$S" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e &&
     printf '* -text -filter\n' > "$T/w/.git/info/attributes" && (cd "$T/w" &&
@@ -304,11 +310,17 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   for C in "$W/home-p2/.local/state/agent-mailbox/checkouts/"*; do :; done
   expect "an existing checkout still reads" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and holds the message byte for byte" || no "the existing checkout's copy differs from the store's"
+  # a checkout made before this rule took on the store's line endings: its next command checks the files out again
+  rm -f "$C/.git/info/attributes"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  grep -q "$(printf '\r')" "$C/$f" && ok "(an older checkout took on the store's line endings)" || no "the older-checkout setup kept LF"
+  expect "an older checkout the store's attributes changed reads again" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and holds the message as stored again" || no "the older checkout still differs from the store's"
   expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
   for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
   cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"
   if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
   [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
+  [ ! -e "$T/hook-ran" ] && ok "and none of the agents' own git hooks ran in its checkout" || no "a git hook ran in the CLI's checkout" "$(cat "$T/hook-ran")"
 
   # a new agent clones only the mailbox branch, however much else the store holds
   (cd "$T/w" && git checkout -q -b big && echo big > big.txt && git add big.txt && git commit -qm big && git push -q origin big)

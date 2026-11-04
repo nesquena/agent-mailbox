@@ -16,20 +16,21 @@
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
 #   line-ending conversion, filters (Git LFS too) and merge and diff drivers, and git runs with submodule recursion
-#   off, so every file is checked out exactly as stored.
+#   off and without hooks, so every file is checked out exactly as stored and nothing the store names is contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" -c submodule.recurse=false "$@"; }
+ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
+ad_clone() { git -c core.hooksPath=/dev/null clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
 
-# ad_attrs: make the store's own attributes inert in this clone (an older clone gets the file on its next command)
+# ad_attrs: make the store's own attributes inert in this clone; succeeds only when it had to write the file
 AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff !merge'
 ad_attrs() {
   af="$AD_DIR/.git/info/attributes" al=
   [ ! -f "$af" ] || IFS= read -r al < "$af"
-  [ "$al" = "$AD_ATTRS" ] && return 0
+  [ "$al" = "$AD_ATTRS" ] && return 1
   mkdir -p "$AD_DIR/.git/info" && printf '%s\n' "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af" || die "can't write $af"
 }
 
@@ -39,17 +40,17 @@ ad_open() {
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
-    err=$(git clone -q --no-checkout --single-branch --branch "$BRANCH" -- "$STORE" "$AD_DIR" 2>&1) ||
-      { rm -rf "$AD_DIR"; err=$(git clone -q --no-checkout --single-branch -- "$STORE" "$AD_DIR" 2>&1); } ||
+    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"; err=$(ad_clone); } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
-    ad_attrs
+    ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; fi
-  else ad_attrs
+  # an older clone may hold files checked out under the store's attributes: check them out again, as stored
+  elif ad_attrs && ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git checkout -q -f HEAD -- . 2>/dev/null
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then

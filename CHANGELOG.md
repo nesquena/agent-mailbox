@@ -98,14 +98,16 @@ First version.
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
 - **Fix:** the git adapter's clone of the store ignores the store's own `.gitattributes` and `.lfsconfig` (no
-  line-ending conversion, no filters such as Git LFS, no merge drivers) and never recurses into submodules, so every
-  message is checked out exactly as it was stored and its signature verifies, whatever git settings the store or
-  your git config carry (#27).
+  line-ending conversion, no filters such as Git LFS, no merge drivers), never recurses into submodules and runs no
+  git hooks, so every message is checked out exactly as it was stored and its signature verifies, whatever git
+  settings the store or your git config carry. An existing checkout is checked out again once, on its next command
+  (#27).
 - **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
   for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
   (#27).
-- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store
-  (#27).
+- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store, once
+  the store has that branch (#27).
 - **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
   empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
-  initialized and `init` said a mailbox already existed (#27).
+  initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete
+  it (under `checkouts/` in the state folder `whoami` shows) (#27).
