@@ -96,14 +96,18 @@ ad_peek() {
   ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
-# ad_history <dir> [<ERE>]: "<ref> <path>" for every file ever added under <dir>, oldest first (consumed files
-# included); with a pattern, only files added with a line matching it (git log -G, an extended regex). --text and
-# --no-textconv make git search every file as plain text: a store writer could otherwise mark messages binary (in
-# .gitattributes, or with a NUL byte) and hide them from the search
+# ad_history <dir> [<ERE>]: "<ref> <path>" for every version of every file that was ever under <dir>, oldest first
+# (consumed files included), however it got there. holds builds a security gate on this, so no git history filter
+# may hide a version: --full-history and -m visit every commit and both sides of every merge (history
+# simplification could skip a commit), --no-renames counts a renamed file as added, A and M count added and rewritten
+# files, and --text --no-textconv search every file as plain text (an attribute or a NUL byte could otherwise make
+# git skip it as binary). With a pattern, only versions whose change adds a line matching it (git log -G, an
+# extended regex) are listed; every listed file is still checked by the CLI.
 ad_history() {
   [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  ad_git log --reverse --format='C %H' --name-only --diff-filter=A ${2:+--text --no-textconv "-G$2"} HEAD -- "$1/" 2>/dev/null |
-    awk '$1 == "C" && NF == 2 { c = $2; next } NF { print c, $0 }'
+  ad_git log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev --format='C %H' \
+    ${2:+--text --no-textconv "-G$2"} HEAD -- "$1/" 2>/dev/null |
+    awk '$1 == "C" && NF == 2 { c = $2; next } /^:/ { i = index($0, "\t"); p = substr($0, i + 1); if (!seen[c " " p]++) print c, p }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>
 ad_show() { ad_git show "$1:$2" 2>/dev/null; }

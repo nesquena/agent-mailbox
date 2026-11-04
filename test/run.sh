@@ -429,16 +429,36 @@ echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null; sleep 1
   printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h7\ncontext: general\nsent: 2999-01-01T00:00:02Z\nin_reply_to: none\nneeds: none\nhold:item#7 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000002Z-u2-h7.md &&
   git add -A && git commit -qm h7 && git push -q origin HEAD:main)
 expect "a hold with no space after the colon still holds" 5 "is held by u2" as u1 holds "item#7" --version v1
-# a store writer can't hide holds by making git treat messages as binary (an attribute, or a NUL byte): each hold
-# below is newer than a release of the same version, so a hidden hold would let the release pass
-echo r | as u2 send u1 r-6 - --release "item#6 v1" >/dev/null; echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null; sleep 1
-(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
-  printf '*.md -diff\n' > .gitattributes && printf '*.md binary\n' > mailbox/inbox/u1/.gitattributes &&
-  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h5\ncontext: general\nsent: 2999-01-01T00:00:03Z\nin_reply_to: none\nneeds: none\nhold: item#5 v1\n---\n\nnul \000 byte\n' > mailbox/inbox/u1/29990101T000003Z-u2-h5.md &&
-  git add -A && git commit -qm attrs && git push -q origin HEAD:main)
-echo h | as u2 send u1 h-6 - --hold "item#6 v1" >/dev/null
-expect "a hold still counts when .gitattributes marks mail binary" 5 "item#6 is held by u2" as u1 holds "item#6" --version v1
+# A store writer can't hide a hold from holds, however the file got into history. In each case below the hold is
+# newer than a release of the same version, so a hidden hold would let the release pass (exit 0).
+pl() { (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && "$@" && git add -A && git commit -qm plant && git push -q origin HEAD:main); }
+# 1. an attribute that makes git treat the hold as binary
+echo r | as u2 send u1 r-6 - --release "item#6 v1" >/dev/null; sleep 1; echo h | as u2 send u1 h-6 - --hold "item#6 v1" >/dev/null
+pl sh -c 'printf "%s -diff\n" "$(basename "$(ls mailbox/inbox/u1/*-u2-h-6.md)")" > mailbox/inbox/u1/.gitattributes'
+expect "a hold still counts when an attribute marks it binary" 5 "item#6 is held by u2" as u1 holds "item#6" --version v1
+pl rm -f mailbox/inbox/u1/.gitattributes
+# 2. a NUL byte in the hold
+echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null; sleep 1
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h5\ncontext: general\nsent: 2999-01-01T00:00:03Z\nin_reply_to: none\nneeds: none\nhold: item#5 v1\n---\n\nnul \000 byte\n' > mailbox/inbox/u1/29990101T000003Z-u2-h5.md"
 expect "a hold in a message with a NUL byte still counts" 5 "item#5 is held by u2" as u1 holds "item#5" --version v1
+# 3. an earlier release renamed to a new name and rewritten as a newer hold, in one commit
+echo r | as u2 send u1 r-4 - --release "item#4 v1" >/dev/null; sleep 1
+pl sh -c 'old=$(ls mailbox/inbox/u1/*-u2-r-4.md) && new=mailbox/inbox/u1/29990101T000004Z-u2-h4.md && git mv "$old" "$new" &&
+  sed "s/^release: item#4 v1\$/hold: item#4 v1/; s/^sent: .*/sent: 2999-01-01T00:00:04Z/" "$new" > "$new.t" && mv "$new.t" "$new"'
+expect "a hold renamed into the inbox still counts" 5 "item#4 is held by u2" as u1 holds "item#4" --version v1
+# 4. an earlier release rewritten in place as a newer hold
+echo r | as u2 send u1 r-3 - --release "item#3 v1" >/dev/null; sleep 1
+pl sh -c 'f=$(ls mailbox/inbox/u1/*-u2-r-3.md) && sed "s/^release: item#3 v1\$/hold: item#3 v1/; s/^sent: .*/sent: 2999-01-01T00:00:05Z/" "$f" > "$f.t" && mv "$f.t" "$f"'
+expect "a hold rewritten in place still counts" 5 "item#3 is held by u2" as u1 holds "item#3" --version v1
+# 5. a merge whose inbox tree drops the hold, so a simplified history walk never visits the commit that added it
+echo r | as u2 send u1 r-2 - --release "item#2 v1" >/dev/null
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null) && base=$(git -C "$T/plant" rev-parse HEAD)
+sleep 1; echo h | as u2 send u1 h-2 - --hold "item#2 v1" >/dev/null
+(cd "$T/plant" && git checkout -q -b side "$base" && echo x > note.txt && git add note.txt && git commit -qm side &&
+  git fetch -q origin main && git checkout -q -B m origin/main && { git merge -q --no-ff --no-commit side >/dev/null 2>&1 || :; } &&
+  git rm -q -r mailbox/inbox/u1 && git checkout side -- mailbox/inbox/u1 && git commit -qm merge && git push -q origin HEAD:main &&
+  git checkout -q main && git reset -q --hard origin/main)
+expect "a hold dropped by a merge still counts" 5 "item#2 is held by u2" as u1 holds "item#2" --version v1
 sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 

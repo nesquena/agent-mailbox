@@ -16,6 +16,8 @@ First version.
 - **The end-to-end test suite** (`test/run.sh`), run on Linux and macOS in CI.
 - **`holds` is fast on long histories:** it reads only mail that may carry a hold or release (the git adapter asks
   `git log -G`), instead of every message ever delivered. On a 600-message mailbox it went from 5.6 s to 0.14 s.
+- **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
+  rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
   `read`; a header with no closing `---` has no fields, so the message reads `bad`.
 - **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
