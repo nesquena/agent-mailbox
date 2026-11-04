@@ -27,6 +27,12 @@ First version.
   carriage return passes; under dash and macOS's `/bin/sh`, `echo` read backslash escapes, so a value could pass
   validation cut short.
 - **Retiring** clears this session's watch marker, and acting as a retired agent says how to come back.
+- **Fix:** `doctor` runs every check when a path contains `'`, and flags a malformed adapter name; error messages
+  print values as given; a message body file, or an `--except`/`--consume`/`--in-reply-to` value, may start with `-`;
+  `trust` and `verify` refuse a misplaced `--as` or `--config`.
+- **Fix:** a mailbox folder (`--root`) with a part starting with `-`, or named `.git`, is refused (in the first, `watch`
+  and `holds` missed all mail), and `doctor` says when the folder is invalid; a backslash in the store or home path no
+  longer breaks `register` or `send` under dash or macOS's `/bin/sh`.
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).

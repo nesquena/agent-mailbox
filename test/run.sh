@@ -16,7 +16,7 @@ W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
 trap 'rm -rf "$W"' EXIT
 pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
-no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || echo "$2" | sed 's/^/       | /'; }
+no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
 sk() { skip=$((skip+1)); echo "  skip $1"; }
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
@@ -31,7 +31,7 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
   if [ "$rc" != "$code" ]; then no "$d (exit $rc, wanted $code)" "$out"; return; fi
-  if [ "$pat" != - ] && ! echo "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
+  if [ "$pat" != - ] && ! printf '%s\n' "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
   ok "$d"
 }
 
@@ -338,6 +338,47 @@ for a in r1 r2; do (cd "$T/rel" && HOME="$W/home-$a" "$SH" "$CLI" setup --store 
 (cd "$T/rel" && HOME="$W/home-r1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-r1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
   HOME="$W/home-r2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-r1" "$SH" "$CLI" send r2 rel -)  >/dev/null 2>&1
 expect "watch on a relative dir store ignores CDPATH" 0 "r1-rel.md" sh -c "cd '$T/rel' && HOME='$W/home-r2' CDPATH='$T/rel/other' '$SH' '$CLI' watch 1 3"
+echo "== doctor, messages and odd values (dir)"
+T="$W/odd/O'Brien"; mkdir -p "$T"
+for a in o1 o2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as o1 init >/dev/null; for a in o1 o2; do as $a register --kind t --about t --no-key >/dev/null; done
+out=$(as o1 doctor 2>&1)
+echo "$out" | grep -q "ok   a store is configured" && echo "$out" | grep -q "ok   the CLI finds its adapter" &&
+  ok "doctor runs every check with a ' and a space in the store path" || no "doctor with a ' in the store path" "$out"
+expect "doctor flags a malformed adapter name" 1 "FAIL the CLI finds its adapter" \
+  env HOME="$W/home-o1" AGENT_MAILBOX_ADAPTER=../adapters/dir "$SH" "$CLI" doctor
+echo "dash body" > "$T/--as"
+expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' && cd \"O'Brien\" && HOME='$W/home-o1' '$SH' '$CLI' send o2 dash-body --as"
+# a message whose name starts with '-': --except must take it as a file name and hide it
+cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
+expect "watch --except takes a value starting with - as a file name" 2 "no mail" \
+  as o2 watch 1 2 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
+out=$(as o2 read --except -x.md 2>&1); rc=$?
+hit=$(printf '%s\n' "$out" | grep -c -e '/-x\.md' -e basename)
+if [ "$rc" = 0 ] && [ "$hit" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md'; then ok "an --except value starting with - is a file name"
+else no "an --except value starting with - is a file name (exit $rc)" "$out"; fi
+expect "trust refuses a misplaced --as" 1 "goes before the command" as o1 trust o2 --as o2
+expect "an error quotes a value as given" 1 "v1.cZ" as o1 send o2 h - --hold 'p#1 v1\cZ'
+# a mailbox folder starting with '-' is refused (find and basename would read it as an option)
+as o3 setup --store "$T/store-dash" --adapter dir --root -mb --name o3 >/dev/null
+expect "a root part starting with - is refused" 1 "root must be" as o3 init
+expect "and doctor says why" 1 "FAIL the mailbox folder \(root\) is valid" as o3 doctor
+expect "a root part named .git is refused" 1 "root must be" env HOME="$W/home-o3" AGENT_MAILBOX_ROOT=x/.git "$SH" "$CLI" init
+expect "in any case (a case-insensitive disk makes .GIT git's own folder)" 1 "root must be" env HOME="$W/home-o3" AGENT_MAILBOX_ROOT=x/.GIT "$SH" "$CLI" init
+# a backslash in the store path (paths are printed with printf, never echo)
+for a in o4 o5; do as $a setup --store "$T/st\tore" --adapter dir --name $a >/dev/null; done
+as o4 init >/dev/null; as o4 register --kind t --about t --no-key >/dev/null; as o5 register --kind t --about t --no-key >/dev/null
+expect "a backslash in the store path works" 0 "^sent " sh -c "echo hi | HOME='$W/home-o4' '$SH' '$CLI' send o5 bs -"
+expect "and the mail is listed" 0 '^mailbox/inbox/o5/[^/]*-o4-bs\.md$' as o5 list
+expect "and read" 0 '^===== mailbox/inbox/o5/[^/]*-o4-bs\.md \[' as o5 read
+# a backslash in the home folder, with the git adapter (its checkout and keys live under HOME)
+git init -q --bare "$T/bs.git"
+for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" setup --store "$T/bs.git" --name $a >/dev/null; done
+HOME="$W/h\tq-q1" "$SH" "$CLI" init >/dev/null
+for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" register --kind t --about t >/dev/null 2>&1; done
+expect "a backslash in the home folder works (git adapter)" 0 "^sent " sh -c "echo hi | HOME='$W/h\tq-q1' '$SH' '$CLI' send q2 hq -"
+expect "and the mail is read" 0 '^===== mailbox/inbox/q2/[^/]*-q1-hq\.md \[' env HOME="$W/h\tq-q2" "$SH" "$CLI" read
+
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor

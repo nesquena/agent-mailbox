@@ -40,8 +40,9 @@ ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
 MSG_RE='^[A-Za-z0-9._-]+\.md$'
 
-die() { echo "agent-mailbox: $*" >&2; exit 1; }
-warn() { echo "agent-mailbox: $*" >&2; }
+# printf, not echo, so a value quoted in a message is shown as is
+die() { printf 'agent-mailbox: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'agent-mailbox: %s\n' "$*" >&2; }
 # a global option after the command is refused with a hint wherever an option may appear (never an option's value)
 misplaced() { case "$1" in (--as|--as=*|--config|--config=*) die "${1%%=*} goes before the command: agent-mailbox ${1%%=*} <value> $cmd ...";; esac; }
 unknown() { misplaced "$1"; die "unknown option $1"; }
@@ -59,6 +60,9 @@ here() {
   CDPATH= cd -P -- "$(dirname "$p")" && pwd -P
 }
 SELF_DIR=$(here) || SELF_DIR=""
+# the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
+root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
+  case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
@@ -109,8 +113,7 @@ sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; el
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
   lib_ok || die "can't find the folder this script is in ($0); set AGENT_MAILBOX_LIB"
-  matches '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' "$ROOT" && case "/$ROOT/" in (*/../*) false ;; (*) true ;; esac ||
-    die "root must be a relative path of letters, digits, '.', '_' and '-' (no '..'), not '$ROOT'"
+  root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git', or starting with '-'), not '$ROOT'"
   matches '^[A-Za-z0-9._/-]+$' "$BRANCH" || die "bad branch name '$BRANCH'"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
@@ -127,14 +130,14 @@ need_store() {
   [ "$v" -le "$PROTOCOL" ] || die "this mailbox uses protocol $v; this client speaks $PROTOCOL (upgrade agent-mailbox)"
 }
 require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
-record() { echo "$M/agents/$1.md"; }
+record() { printf '%s\n' "$M/agents/$1.md"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
 inbox_files() { [ -d "$M/inbox/$1" ] || return 0
   find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
-    basename "$p" | grep -Eq "$MSG_RE" && echo "$p"; done; }
+    basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done; }
 # no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
 # so a link a writer plants in a shared store can't redirect writes outside it
 no_link() {
@@ -144,7 +147,7 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
-rel() { echo "${1#"$AD_DIR"/}"; }
+rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
 # verify_file <message path> [<expected from>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
@@ -187,7 +190,7 @@ setup)
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
 }")"
-  echo "wrote $CONFIG" ;;
+  printf 'wrote %s\n' "$CONFIG" ;;
 init)
   req=false title="agent mailbox"
   while [ $# -gt 0 ]; do
@@ -235,7 +238,7 @@ register|update)
       if [ ! -f "$KEY" ]; then
         mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
         ssh-keygen -q -t ed25519 -N '' -C "$NS:$ME" -f "$KEY" || die "ssh-keygen failed"
-        echo "generated a signing key at $KEY (keep the private half on this machine only)"
+        printf 'generated a signing key at %s (keep the private half on this machine only)\n' "$KEY"
       fi
       pub=$(cut -d' ' -f1,2 "$KEY.pub")
     else
@@ -271,7 +274,7 @@ agents)
     printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
   done ;;
 trust)
-  [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
+  for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
   pub=$(field key "$(record "$1")" 2>/dev/null); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
   echo "pinned $1's current key" ;;
@@ -282,8 +285,8 @@ send)
   while [ $# -gt 0 ]; do
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in
-      --context) context=$2; ctx_set=1 ;; --in-reply-to) reply=$(basename "$2") ;; --needs) needs=$2 ;;
-      --consume) consume="$consume $(basename "$2")" ;; --hold) hold=$2 ;; --release) release=$2 ;;
+      --context) context=$2; ctx_set=1 ;; --in-reply-to) reply=$(basename -- "$2") ;; --needs) needs=$2 ;;
+      --consume) consume="$consume $(basename -- "$2")" ;; --hold) hold=$2 ;; --release) release=$2 ;;
       *) unknown "$1" ;;
     esac; shift 2
   done
@@ -296,7 +299,7 @@ send)
   [ -z "$ctx_set" ] || matches "$NAME_RE" "$context" || die "context must be lowercase a-z, 0-9, '.' or '-'"
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
-  text=$(cat "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
+  text=$(cat -- "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
@@ -329,11 +332,11 @@ list)
   [ $# -eq 0 ] || unknown "$1"
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
-  echo "$mail" | while IFS= read -r p; do rel "$p"; done ;;
+  printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done ;;
 read)
   except=""
   while [ $# -gt 0 ]; do
-    case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename "$2")"; shift 2 ;;
+    case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
                  *) unknown "$1" ;; esac
   done
   need_me; load_adapter; ad_sync; need_store
@@ -360,7 +363,7 @@ consume)
   ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename "$a" .md; done | tr '\n' ' ')" $paths
   echo "consumed" ;;
 verify)
-  [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
+  for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
   f=$1; [ -f "$f" ] || f="$AD_DIR/$1"; [ -f "$f" ] || f=$(find "$M/inbox" -name "$(basename "$1")" -type f | head -n 1)
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
   v=$(verify_file "$f"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
@@ -410,7 +413,7 @@ watch)
   interval=120 max=7000 except="" pos=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename "$2")"; shift 2 ;;
+      --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
     esac
@@ -432,7 +435,7 @@ watch)
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
               case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""
-  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
   # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
   while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
@@ -443,31 +446,32 @@ watch)
     [ "$now" != "$last" ] || continue
     if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
     last=$now
-    [ -n "$mail" ] && { echo "mail for $ME:"; echo "$mail"; exit 0; }
+    [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
   done
   echo "no mail for $ME after ${max}s"; exit 2 ;;
 whoami)
   [ $# -eq 0 ] || unknown "$1"
-  echo "name:    ${ME:-<unset>}"; echo "store:   ${STORE:-<unset>}"; echo "adapter: $ADAPTER"; echo "root:    $ROOT"
-  echo "branch:  $BRANCH"; echo "config:  $CONFIG"; echo "key:     ${KEY:-<none>}$( [ -n "$KEY" ] && [ -f "$KEY" ] || echo ' (missing)')"
-  echo "state:   $STATE" ;;
+  printf 'name:    %s\nstore:   %s\nadapter: %s\nroot:    %s\nbranch:  %s\nconfig:  %s\nkey:     %s%s\nstate:   %s\n' \
+    "${ME:-<unset>}" "${STORE:-<unset>}" "$ADAPTER" "$ROOT" "$BRANCH" "$CONFIG" "${KEY:-<none>}" \
+    "$( [ -n "$KEY" ] && [ -f "$KEY" ] || echo ' (missing)')" "$STATE" ;;
 doctor)
   [ $# -eq 0 ] || unknown "$1"
   ok=0
   chk() { if eval "$2" >/dev/null 2>&1; then echo "ok   $1"; else echo "FAIL $1${3:+: $3}"; ok=1; fi; }
-  chk "shell parses this script" "sh -n '$0'"
+  chk "shell parses this script" 'sh -n "$0"'
   chk "git is installed" "command -v git" "the git adapter needs it"
   chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
-  chk "a store is configured" "[ -n '$STORE' ]" "run setup --store"
-  chk "an agent name is set" "[ -n '$ME' ]" "run setup --name, or pass --as"
-  chk "the CLI finds its adapter" 'lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
+  chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
+  chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
+  chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git', or starting with '-'"
+  chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
       { echo "FAIL the store is reachable and initialized"; ok=1; }
   fi
   [ -z "$ME" ] || [ -z "$STORE" ] || { ( load_adapter >/dev/null 2>&1 && active "$ME" ) && echo "ok   $ME is registered and active" ||
       { echo "FAIL $ME is registered and active: run register"; ok=1; }; }
-  [ -z "$KEY" ] || { [ -f "$KEY" ] && echo "ok   signing key at $KEY" || echo "warn no signing key at $KEY (mail will be unsigned)"; }
+  [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command '$cmd' (try: agent-mailbox help)" ;;
