@@ -161,6 +161,8 @@ can_sign() { [ -f "$KEY" ] && have_ssh; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
+# a global option after the command would be ignored by some commands and act as the configured agent: refuse it
+for a in "$@"; do case "$a" in --as|--config) die "$a goes before the command: agent-mailbox $a <value> $cmd ..." ;; esac; done
 case "$cmd" in
 setup)
   store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}"
@@ -264,7 +266,7 @@ trust)
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
-  context=general reply="" needs=none consume="" hold="" release=""
+  context="" reply="" needs=none consume="" hold="" release=""
   while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in
@@ -279,7 +281,7 @@ send)
   for h in "$hold" "$release"; do [ -z "$h" ] || echo "$h" | grep -Eq "$ITEM_RE" || die "a hold or release is \"<item> <version>\", not '$h'"; done
   for v in context:"$context" topic:"$topic" in_reply_to:"$reply" needs:"$needs" hold:"$hold" release:"$release"; do one_line "${v%%:*}" "${v#*:}"; done
   echo "$topic" | grep -Eq "$NAME_RE" || die "topic must be lowercase a-z, 0-9, '.' or '-'"
-  echo "$context" | grep -Eq "$NAME_RE" || die "context must be lowercase a-z, 0-9, '.' or '-'"
+  [ -z "$context" ] || echo "$context" | grep -Eq "$NAME_RE" || die "context must be lowercase a-z, 0-9, '.' or '-'"
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
   text=$(cat "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
@@ -288,6 +290,12 @@ send)
   active "$ME" || die "'$ME' (you) isn't an active agent in this mailbox: register first"
   if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
   for c in $consume; do valid_msg "$c"; [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+  # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
+  # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
+  if [ -z "$context" ] && echo "$reply" | grep -Eq "$MSG_RE" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
+    context=$(field context "$M/inbox/$ME/$reply"); echo "$context" | grep -Eq "$NAME_RE" || context=""
+  fi
+  context="${context:-general}"
   stamp=$(date -u +%Y%m%dT%H%M%SZ); f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
   no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"

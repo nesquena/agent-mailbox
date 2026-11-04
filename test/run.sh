@@ -51,6 +51,7 @@ for AD in $ADAPTERS; do
     expect "a second agent registers" 0 "register: bob" as bob register --kind reviewer --about "test agent B" --no-key
   fi
   expect "names are unique" 1 "already registered" as alice register --kind x --about y --no-key
+  expect "--as after the command is refused, not ignored" 1 "goes before the command" as alice list --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
   expect "an unregistered sender is refused" 1 "register first" sh -c "echo hi | HOME='$W/home-carol' '$SH' '$CLI' send alice hello -"
   expect "an unknown recipient is refused" 1 "isn't an active agent" sh -c "echo hi | HOME='$W/home-alice' '$SH' '$CLI' send nobody hello -"
@@ -69,6 +70,7 @@ for AD in $ADAPTERS; do
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
   expect "the consumed message is gone" 3 "no mail" as bob list
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
+  expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   r=$(as alice list | head -n 1)
   expect "consume removes a message" 0 "consumed" as alice consume "$(basename "$r")"
   expect "consuming a missing message fails" 1 "not in your inbox" as alice consume "$(basename "$r")"

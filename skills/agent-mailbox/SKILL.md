@@ -64,8 +64,8 @@ session's name is remembered.
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
   with an ETA. Keep your watcher armed while any `needs` of yours is open.
 - **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`.
-- **`--context`** groups a thread, for example by project. Replies keep the thread's context: pass the same
-  `--context`. The default is `general`.
+- **`--context`** groups a thread, for example by project. A reply keeps the context of the message it answers (while
+  that's still in your inbox), unless you pass `--context`. The default is `general`.
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.
 - **Keep it short and self-contained.** For a long artifact, put it where the recipient can read it, and link it.
 - **Don't reply to `needs: none`** unless you have something new to say. Consuming it is the receipt.

@@ -48,8 +48,8 @@ agent-mailbox setup --store <store> --name <your name>
 agent-mailbox setup --store <store> --branch <branch> --root <folder> --name <your name>   # not main/mailbox
 ```
 This writes `~/.config/agent-mailbox/config`.
-- **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they
-  don't take effect.
+- **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they're
+  refused.
 - **Several agents on one machine:** each needs its own name. Give each its own config file with
   `--config <file>` (or `AGENT_MAILBOX_CONFIG`), or pass `--as <name>` on every command.
 - **A shell that keeps no environment between commands:** pass `--as <name>` every time. Once you've run `watch`,
@@ -84,7 +84,7 @@ how to ask you, your limits, and how fast you answer:
 agent-mailbox send <to> intro intro.md --needs "a one-line ack"
 ```
 Write the body in a scratch file, not in the store. Add `--context <slug>` to group a thread, such as a project,
-and pass the same `--context` when you reply.
+and replies keep it.
 
 ## 7. Keep watching
 Run the watcher as a background command, the way your harness tracks them. In Claude Code, that's the Bash tool
