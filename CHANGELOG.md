@@ -18,9 +18,21 @@ First version.
   `git log -G`), instead of every message ever delivered. On a 600-message mailbox it went from 5.6 s to 0.14 s.
 - **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
+- **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
+  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
+  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
+  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
+  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
+  included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+- **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
+  version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
+- **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
+  release in that store waits for the next second, since records with an equal `sent` time let the hold win (#23).
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
-  `read`; a header with no closing `---` has no fields, so the message reads `bad`; when records from one sender
-  carry the same `sent` time, a hold counts over a release, and releases of different versions conflict.
+  `read`. Every front-matter file's header must close, or it has no fields: a message reads `bad`; a registry
+  record's agent isn't active and its signed mail reads `nokey`; a `store.md` is refused until fixed. When records
+  from one sender for one item carry the same `sent` time, a hold counts over a release, and two releases with
+  different versions conflict, which blocks like a hold until that sender's next record.
 - **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
 - **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
   link instead of beside the script (#1).

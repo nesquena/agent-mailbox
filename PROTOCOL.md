@@ -15,6 +15,13 @@ The key words "must", "should" and "may" are used in their usual RFC 2119 sense.
 Everything is a plain UTF-8 text file with a small front-matter header. Nothing is hidden in a database or in
 file metadata, so a store can be read, audited and repaired by hand.
 
+**Every header must close.** In every front-matter file (`store.md`, a registry record, a message), a file whose
+first line isn't `---`, or whose header has no closing `---` line, has no header: every field reads as empty. So:
+- a `store.md` without one has no valid `protocol`, and clients must refuse the mailbox until it's fixed;
+- a registry record without one has no `status` and no `key`: its agent isn't `active`, and its signed mail reads
+  `nokey` (section 6);
+- a message without one is malformed: its signature status is `bad`.
+
 ## 2. Layout
 ```
 <root>/
@@ -97,8 +104,7 @@ release: <item> <version>      optional
   when it's a valid slug (a received one may not be), so a thread keeps one topic; clients don't enforce this.
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
-- **The header must close.** A file whose first line isn't `---`, or whose header has no closing `---` line, has no
-  header: every field reads as empty, so the message is malformed (its signature status is `bad`).
+- **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -118,15 +124,25 @@ release: <item> <version>      optional
 ### Holds
 A hold is how one agent gates an action another agent takes on a shared item: a merge, a deploy, a publish.
 - **The gating agent** sends a `hold` with each new version it is still reviewing, and a `release` naming the exact
-  version it approves.
+  version it approves. Its client should never stamp a hold or release with the same `sent` as its previous one in
+  that store (`sent` is to the second; the CLI waits for the next second), so an equal time can't drop a release.
 - **The acting agent** checks right before acting, from every message ever delivered to it (consumed ones
   included, where the adapter keeps history). For each sender, the latest record for the item counts. The action
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
-  ignored, so a replayed old release can't override a newer hold. When records from that sender for that item carry
-  the same `sent`, the order of history (under a store writer's control) mustn't decide: a hold counts over a
-  release, and two releases naming different versions conflict, so neither counts.
-- **Strict stores:** where signatures are required, only `verified` records count.
+  ignored, so a replayed old release can't override a newer hold.
+- **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history
+  (under a store writer's control) mustn't decide. A hold counts over a release. Two releases from one sender with
+  the same `sent` and different versions conflict, and a conflict blocks like a hold until a later record from that
+  sender.
+- **Strict stores:** where signatures are required, only `verified` records count, with one exception that fails
+  closed: a hold whose sender's key is `changed`, or missing (`nokey`) for a sender whose key this reader has pinned,
+  still holds, since a registry edit mustn't open the gate. Until the reader accepts the new key, that brings back
+  every hold the sender ever sent, even one it has since released (its releases read `changed` too, and are dropped).
+  Once the reader accepts it, mail signed with the old key, holds included, no longer counts, so before accepting a
+  changed key, the reader should ask the sender to re-send any hold it still means. A reader that has seen a store
+  require signatures keeps treating it as strict, even if `store.md` later says otherwise, until its human decides to
+  stop.
 
 ## 6. Signatures
 Signing is optional per agent, and required per store when `require_signatures: true`.

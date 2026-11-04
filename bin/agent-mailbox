@@ -15,6 +15,8 @@
 #                                       change your own registry record
 #   agents                              list registered agents
 #   trust <name>                        accept <name>'s current key after it changed (re-pins it)
+#   trust --relax                       stop treating this store as strict after its store.md stopped requiring
+#                                       signatures (a store seen strict stays strict for you until then)
 #   send <to> <topic> <body.md|-> [--context <c>] [--in-reply-to <file>] [--needs <text>] [--consume <file>]...
 #        [--hold|--release "<item> <version>"]
 #                                       deliver a message; --consume also removes mail you're answering
@@ -168,7 +170,15 @@ need_store() {
   v=$(field protocol "$M/store.md"); case "$v" in ''|*[!0-9]*) die "store.md has no valid protocol version" ;; esac
   [ "$v" -le "$PROTOCOL" ] || die "this mailbox uses protocol $v; this client speaks $PROTOCOL (upgrade agent-mailbox)"
 }
-require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
+# a store seen requiring signatures stays strict for this reader (pinned like a key), so an edit to store.md can't
+# turn signatures off; `trust --relax` lifts the pin after checking with the store's owner
+require_sigs() {
+  pin="$STATE/pins/$STORE_ID/.strict"
+  if [ "$(field require_signatures "$M/store.md")" = true ]; then
+    [ -f "$pin" ] || { mkdir -p "$STATE/pins/$STORE_ID" && : > "$pin"; }; return 0; fi
+  [ -f "$pin" ] || return 1
+  warn "store.md no longer requires signatures; still treating this store as strict (after checking with its owner: trust --relax)"
+}
 record() { printf '%s\n' "$M/agents/$1.md"; }
 # reg_key <record file>: the key the record names, or nothing when it names none or the value isn't a plain key
 reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf '%s\n' "$rk"; }
@@ -330,10 +340,13 @@ agents)
       { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
   done ;;
 trust)
-  for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
+  for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name> | trust --relax"
+  if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict"
+    echo "this store is strict for you only while its store.md requires signatures"; exit 0; fi
+  valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
-  echo "pinned $1's current key" ;;
+  echo "pinned $1's current key; mail $1 signed with an earlier key (holds included) no longer counts" ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -367,7 +380,17 @@ send)
     context=$(field context "$M/inbox/$ME/$reply"); matches "$NAME_RE" "$context" || context=""
   fi
   context="${context:-general}"
-  stamp=$(date -u +%Y%m%dT%H%M%SZ); f="$M/inbox/$to/$stamp-$ME-$topic.md"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
+  # or release waits for the next second after this sender's previous one in this store, so the two never tie.
+  # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set
+  # back; reading the sender's latest record from the store's history would cover both
+  if [ -n "$hold$release" ]; then
+    last="$STATE/gates/$STORE_ID/$ME"
+    while [ "$(cat "$last" 2>/dev/null)" = "$stamp" ]; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
+    mkdir -p "$STATE/gates/$STORE_ID" && printf '%s\n' "$stamp" > "$last" || die "can't write $last"
+  fi
+  f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
   no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
@@ -437,14 +460,16 @@ holds)
   need_me; [ -z "$version" ] || [ -n "$item" ] || die "--version needs an item"
   load_adapter; ad_sync; need_store
   strict=""; require_sigs && strict=1
-  tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd"
+  tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd" || die "can't create $tmpd"
   # every message ever delivered to you that may carry a hold or release, in delivery order (consumed mail
   # included): <ref> <path>. The pattern lets an adapter skip the rest; each record is still checked below. Files in
   # a subfolder of the inbox aren't messages (PROTOCOL.md section 2), as for read and list.
-  records=$(ad_history "$ROOT/inbox/$ME" '^(hold|release):' | while read -r ref p; do
+  records=$(ad_history "$ROOT/inbox/$ME" '^(hold|release):' | while IFS= read -r p; do ref=${p%% *} p=${p#* }
+      [ "$ref" != '!' ] || { echo '!'; continue; }
       case "$p" in (*.md) ;; (*) continue ;; esac
       case "${p#"$ROOT/inbox/$ME/"}" in (*/*) continue ;; esac
-      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || continue
+      # a listed version it can't read stops holds, like a history it can't read
+      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || { echo '!'; continue; }
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
@@ -453,10 +478,16 @@ holds)
         field sent "$tmpd/m" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       v=$(verify_file "$tmpd/m" "$ME")
-      [ -z "$strict" ] || [ "$v" = verified ] || continue
+      # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
+      # after this reader pinned it, still holds: dropping it would let a registry edit open the gate. unsigned and bad
+      # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
+      # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
+      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] ||
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
+  case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
   [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '$3 == i')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
@@ -474,8 +505,9 @@ holds)
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
   echo "$latest" | awk -v want="$version" '
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
-    $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 ")"; bad = 1; next }
+    $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
     END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true makes holds tamper-proof" > "/dev/stderr"

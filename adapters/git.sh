@@ -104,19 +104,28 @@ ad_peek() {
 # log -G, an extended regex, searching every file as plain text) narrows only the added versions, whose whole content
 # is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
 # unique per path, content and signature (the <path>.sig at that commit), so merges can't multiply the work and no
-# copy of a file under another signature can stand in for it; the CLI checks every listed file.
+# copy of a file under another signature can stand in for it; the CLI checks every listed file. A history it can't
+# read in full (a failed fetch, which also means the store can't be reached, or a failed git log), is reported as the
+# single row "! !", never as fewer rows: holds stops
+# on it rather than decide from part of the history. A gitlink isn't a file, so it's never listed.
 ad_history() {
-  [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  AD_ROWS=$({ [ -z "${2:-}" ] || ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
-      --format='C %H' --text --no-textconv "-G$2" HEAD -- "$1/" 2>/dev/null | sed 's/^/G /'
+  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD)
+  u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
+  ad_git fetch -q $u origin "$AD_SPEC" 2>/dev/null || { echo '! !'; return 0; }
+  tip=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH") || { echo '! !'; return 0; }
+  AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
+      --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
-      --format='C %H' HEAD -- "$1/" 2>/dev/null; } |
+      --format='C %H' "$tip" -- "$1/" 2>/dev/null || echo '!'; } |
     awk -v g="${2:+1}" '
+      $1 == "!" || ($1 == "G" && $2 == "!") { print "!"; next }
       $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
       $1 == "C" && NF == 2 { c = $2; next }
       /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
-             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
+             if (f[2] == "160000" || (g && f[5] == "A" && !((c " " p) in m))) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
   [ -n "$AD_ROWS" ] || return 0
+  # every row starts with a commit id, so a row starting with "!" is a failure marker: report it, and nothing else
+  if printf '%s\n' "$AD_ROWS" | grep -q '^!'; then echo '! !'; return 0; fi
   # the signature blob of each row, one line per row ("<name> missing" when there is none); a row left without
   # one (cat-file failed) is still listed
   { printf '%s\n' "$AD_ROWS"; echo =
