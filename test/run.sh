@@ -351,6 +351,8 @@ echo "dash body" > "$T/--as"
 expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' && cd \"O'Brien\" && HOME='$W/home-o1' '$SH' '$CLI' send o2 dash-body --as"
 # a message whose name starts with '-': --except must take it as a file name and hide it
 cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
+expect "watch --except takes a value starting with - as a file name" 2 "no mail" \
+  as o2 watch 1 2 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
 out=$(as o2 read --except -x.md 2>&1); rc=$?
 hit=$(printf '%s\n' "$out" | grep -c -e '/-x\.md' -e basename)
 if [ "$rc" = 0 ] && [ "$hit" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md'; then ok "an --except value starting with - is a file name"
@@ -362,12 +364,20 @@ as o3 setup --store "$T/store-dash" --adapter dir --root -mb --name o3 >/dev/nul
 expect "a root part starting with - is refused" 1 "root must be" as o3 init
 expect "and doctor says why" 1 "FAIL the mailbox folder \(root\) is valid" as o3 doctor
 expect "a root part named .git is refused" 1 "root must be" env HOME="$W/home-o3" AGENT_MAILBOX_ROOT=x/.git "$SH" "$CLI" init
+expect "in any case (a case-insensitive disk makes .GIT git's own folder)" 1 "root must be" env HOME="$W/home-o3" AGENT_MAILBOX_ROOT=x/.GIT "$SH" "$CLI" init
 # a backslash in the store path (paths are printed with printf, never echo)
 for a in o4 o5; do as $a setup --store "$T/st\tore" --adapter dir --name $a >/dev/null; done
 as o4 init >/dev/null; as o4 register --kind t --about t --no-key >/dev/null; as o5 register --kind t --about t --no-key >/dev/null
 expect "a backslash in the store path works" 0 "^sent " sh -c "echo hi | HOME='$W/home-o4' '$SH' '$CLI' send o5 bs -"
 expect "and the mail is listed" 0 '^mailbox/inbox/o5/[^/]*-o4-bs\.md$' as o5 list
 expect "and read" 0 '^===== mailbox/inbox/o5/[^/]*-o4-bs\.md \[' as o5 read
+# a backslash in the home folder, with the git adapter (its checkout and keys live under HOME)
+git init -q --bare "$T/bs.git"
+for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" setup --store "$T/bs.git" --name $a >/dev/null; done
+HOME="$W/h\tq-q1" "$SH" "$CLI" init >/dev/null
+for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" register --kind t --about t >/dev/null 2>&1; done
+expect "a backslash in the home folder works (git adapter)" 0 "^sent " sh -c "echo hi | HOME='$W/h\tq-q1' '$SH' '$CLI' send q2 hq -"
+expect "and the mail is read" 0 '^===== mailbox/inbox/q2/[^/]*-q1-hq\.md \[' env HOME="$W/h\tq-q2" "$SH" "$CLI" read
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

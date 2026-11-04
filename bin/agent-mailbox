@@ -62,7 +62,7 @@ here() {
 SELF_DIR=$(here) || SELF_DIR=""
 # the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
 root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
-  case "/$ROOT/" in (*/../*|*/.git/*) false ;; (*) true ;; esac; }
+  case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
