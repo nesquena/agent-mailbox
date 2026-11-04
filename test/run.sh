@@ -185,6 +185,10 @@ case " $ADAPTERS " in *" git "*)
   expect "init on a store whose default branch is another" 0 initialized as e1 init
   expect "the mailbox branch holds only the mailbox" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only main | grep store.md"
   [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only main | grep app.txt)" ] && ok "trunk's history isn't pulled into main" || no "main carries trunk's files"
+  as e2 setup --store "$T/store.git" --branch team/inbox --name e2 >/dev/null
+  expect "init on a branch with a / in its name" 0 initialized as e2 init
+  expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
+  expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
 
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
@@ -227,6 +231,19 @@ sleep 1.5; kill -TERM "$wp" 2>/dev/null; sleep 2.5
 if kill -0 "$wp" 2>/dev/null; then no "SIGTERM ends the watcher"; kill -9 "$wp"; else ok "SIGTERM ends the watcher"; fi
 [ ! -f "$W/home-w1/.local/state/agent-mailbox/run/w1.pid" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
 expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
+# branch names git refuses are refused by every adapter, from the environment, the config file or setup
+for b in a/../b a..b a//b a/ /a a.lock a.lock/b a/b.lock -a .a a/.b a. HEAD 'a@{b'; do
+  expect "branch '$b' is refused" 1 "bad branch name" env HOME="$W/home-w1" AGENT_MAILBOX_BRANCH="$b" "$SH" "$CLI" agents
+done
+for b in main mail team/inbox v1.2 a_b-c a./b x.lockx; do
+  expect "branch '$b' works" 0 "^w1 " env HOME="$W/home-w1" AGENT_MAILBOX_BRANCH="$b" "$SH" "$CLI" agents
+done
+cp "$W/home-w1/.config/agent-mailbox/config" "$T/w1.config"; printf 'branch = a/../b\n' >> "$T/w1.config"
+expect "a bad branch in the config file is refused" 1 "bad branch name 'a/\.\./b'" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" agents
+expect "and doctor says why" 1 "FAIL the branch name is valid" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" doctor
+expect "setup refuses a bad branch" 1 "bad branch name 'a//b'" as wb setup --store "$T/store" --adapter dir --branch a//b --name wb
+[ ! -e "$W/home-wb/.config/agent-mailbox/config" ] && ok "and writes no config" || no "setup wrote a config with a bad branch"
+expect "setup takes a good one" 0 "^wrote " as wb setup --store "$T/store" --adapter dir --branch team/inbox --name wb
 if [ -n "$SSH" ]; then
   ssh-keygen -q -t ed25519 -N '' -f "$T/own" -C own
   as w2 setup --store "$T/store" --adapter dir --name w2 >/dev/null
