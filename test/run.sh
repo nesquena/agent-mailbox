@@ -840,7 +840,11 @@ refused "or the CLI's config" "$C/config"
 refused "or its signing key" "$C/keys/sec1"
 refused "or a file in its state folder" "$S/note"
 refused "or one named with a leading //" "/$H/.ssh/id_ed25519"
-expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI"
+# only where /dev/stdin is a link through /proc (Linux) can send see which file was redirected in
+case $(readlink /dev/stdin 2>/dev/null) in
+  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI" ;;
+  (*) sk "or one redirected to stdin (/dev/stdin isn't a link through /proc here)" ;;
+esac
 for f in own own.pub; do
   expect "or a signing key kept elsewhere ($f)" 1 "refusing to send" env HOME="$H" AGENT_MAILBOX_KEY="$T/own" "$SH" "$CLI" send sec2 "sec-$f" "$T/$f"
 done
