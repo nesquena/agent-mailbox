@@ -99,4 +99,5 @@ First version.
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
 - **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
   standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
-  rerouting a request from a primary agent to its backup with a `withdraw` note (#28).
+  rerouting a request from a primary agent to its backup with a `withdraw` note, honoured only from the
+  request's own sender (#28).
