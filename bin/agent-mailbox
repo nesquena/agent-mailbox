@@ -46,9 +46,9 @@ warn() { echo "agent-mailbox: $*" >&2; }
 here() {
   p=$0
   while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
-  cd "$(dirname "$p")" && pwd -P
+  cd -P "$(dirname "$p")" && pwd -P
 }
-SELF_DIR=$(here)
+SELF_DIR=$(here) || [ -n "${AGENT_MAILBOX_LIB:-}" ] || die "can't find the folder this script is in ($0)"
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
 
 # --- configuration: flags > environment > config file > defaults ------------------------------------------------

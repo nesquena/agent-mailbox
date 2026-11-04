@@ -246,6 +246,12 @@ for link in "$T/prefix/bin/agent-mailbox" "$T/shim"; do
   expect "the linked CLI finds its adapters ($(basename "$link"))" 0 "initialized" \
     env HOME="$W/home-i-$(basename "$link")" AGENT_MAILBOX_STORE="$T/store-$(basename "$link")" AGENT_MAILBOX_ADAPTER=dir "$SH" "$link" init
 done
+# a relative link with '..' to the script, reached through a linked folder, as a package installs it on a merged /usr
+# (/bin -> usr/bin, /usr/bin/x -> ../share/x/bin/x): '..' must resolve physically, from usr/bin, not from bin
+mkdir -p "$T/usr/bin" "$T/usr/share/am"; cp -R "$ROOTDIR/bin" "$ROOTDIR/adapters" "$T/usr/share/am/"
+ln -s usr/bin "$T/bin"; ln -s ../share/am/bin/agent-mailbox "$T/usr/bin/am"
+expect "a relative link through a linked folder finds its adapters" 0 "initialized" \
+  env HOME="$W/home-i-rel" AGENT_MAILBOX_STORE="$T/store-rel" AGENT_MAILBOX_ADAPTER=dir "$SH" "$T/bin/am" init
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
