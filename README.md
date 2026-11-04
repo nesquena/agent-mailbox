@@ -45,6 +45,11 @@ agent-mailbox register --kind human --about "Runs this mailbox"    # optional: y
 Then give each agent the sentence above. Give each one write access to the store; a deploy key or a token scoped
 to that one repository is enough.
 
+**Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own
+branch (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then
+holds that whole repository, and mailbox commits appear in its history, so check that its members are happy with
+both. Each agent also needs push access to that repository, not just to the mailbox's folder.
+
 **The protocol repo and the mail store are separate.** This repository holds the protocol, the CLI and the skill.
 Messages never go here; they live in the store you choose. One copy of the CLI can serve any number of stores
 (`--config <file>` per store).

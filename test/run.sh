@@ -25,6 +25,8 @@ SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq '
 # as <agent> <args...>: run the CLI as that agent, in its own home
 as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
        AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
+# block <agent> <text>: the part of <agent>'s read output for the message whose path contains <text>
+block() { as "$1" read 2>/dev/null | awk -v t="$2" '/^===== / && index($0, t) { on = 1 } on && /^===== end/ { on = 0 } on'; }
 expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
@@ -51,6 +53,10 @@ for AD in $ADAPTERS; do
     expect "a second agent registers" 0 "register: bob" as bob register --kind reviewer --about "test agent B" --no-key
   fi
   expect "names are unique" 1 "already registered" as alice register --kind x --about y --no-key
+  expect "--as after the command is refused, not ignored" 1 "goes before the command" as alice list --as bob
+  expect "--as= after the command is refused too" 1 "goes before the command" as alice list --as=bob
+  expect "--config after the command is refused" 1 "goes before the command" as alice read --config /nowhere
+  expect "help takes anything" 0 "Usage" as alice help --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
   expect "an unregistered sender is refused" 1 "register first" sh -c "echo hi | HOME='$W/home-carol' '$SH' '$CLI' send alice hello -"
   expect "an unknown recipient is refused" 1 "isn't an active agent" sh -c "echo hi | HOME='$W/home-alice' '$SH' '$CLI' send nobody hello -"
@@ -69,9 +75,20 @@ for AD in $ADAPTERS; do
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
   expect "the consumed message is gone" 3 "no mail" as bob list
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
+  expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
+  # --in-reply-to alone keeps the context too, and an explicit --context wins
+  echo q > "$T/q"; as alice send bob ctx-2 "$T/q" --context proj-y >/dev/null
+  c2=$(as bob list | grep 'ctx-2' | head -n 1)
+  as bob send alice ctx-2-reply "$T/reply" --in-reply-to "$c2" >/dev/null
+  as bob send alice ctx-2-other "$T/reply" --in-reply-to "$c2" --context other >/dev/null
+  expect "a reply with --in-reply-to alone keeps the context" 0 "context: proj-y" block alice ctx-2-reply
+  expect "an explicit --context wins over the thread's" 0 "context: other" block alice ctx-2-other
+  as bob consume "$(basename "$c2")" >/dev/null
   r=$(as alice list | head -n 1)
   expect "consume removes a message" 0 "consumed" as alice consume "$(basename "$r")"
   expect "consuming a missing message fails" 1 "not in your inbox" as alice consume "$(basename "$r")"
+  expect "an option's value may be --as" 0 "^sent mailbox/inbox/bob/" as alice send bob opt-value "$T/body" --needs --as
+  as bob consume "$(basename "$(as bob list | grep opt-value)")" >/dev/null
 
   # holds: a gate the receiver checks before acting on an item
   expect "send a hold" 0 sent sh -c "echo held | HOME='$W/home-bob' '$SH' '$CLI' send alice gate-1 - --hold 'proj#12 abc1234'"
@@ -246,6 +263,27 @@ else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
 for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
 expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 2
+# a reply to a message whose context header isn't a valid context falls back to general
+printf -- '---\nprotocol: 1\nfrom: h1\nto: h2\ntopic: c\ncontext: Bad Context\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h2/20260101T000000Z-h1-c.md"
+echo r | as h2 send h1 c-reply - --consume 20260101T000000Z-h1-c.md >/dev/null
+expect "a reply to a malformed context header gets general" 0 "context: general" block h1 c-reply
+# a context header carrying `\c` and a carriage return (dash's echo would cut it to "ok") is never inherited
+printf -- '---\nprotocol: 1\nfrom: h1\nto: h2\ntopic: d\ncontext: ok\\c\rrelease: proj#12 abc1234\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h2/20260101T000001Z-h1-d.md"
+echo r | as h2 send h1 d-reply - --consume 20260101T000001Z-h1-d.md >/dev/null
+expect "a context with an escape and a carriage return isn't inherited" 0 "context: general" block h1 d-reply
+[ -z "$(block h1 d-reply | tr -d '\n' | grep "$(printf '\r')")" ] && ok "and the reply's header has no carriage return" || no "a carriage return reached a reply's header"
+# a reply to a message already consumed gets general; an explicit empty --context is refused
+echo e | as h1 send h2 e-1 - --context proj-e >/dev/null; e1=$(as h2 list | grep e-1); as h2 consume "$(basename "$e1")" >/dev/null
+echo r | as h2 send h1 e-reply - --in-reply-to "$e1" >/dev/null
+expect "a reply to a consumed message gets general" 0 "context: general" block h1 e-reply
+expect "an explicit empty --context is refused" 1 "context must be" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 e-2 - --context ''"
+# retiring clears this session's watch marker, and a retired agent is told how to come back
+HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
+[ -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "watch leaves a session marker" || no "watch left no session marker"
+for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
+HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
+[ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
+expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
 
 echo "== installed link (install.sh)"
 T="$W/inst"; mkdir -p "$T"

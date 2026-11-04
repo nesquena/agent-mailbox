@@ -20,7 +20,7 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || exit 0
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
 name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid")
-echo "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
+printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
 alive() {
   pid=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
