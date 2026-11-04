@@ -4,7 +4,8 @@
 # Contract: adapters/README.md.
 
 ad_open() {
-  AD_DIR="$STORE"
+  # a relative store path starting with '-' would be read as an option by mkdir and find
+  case "$STORE" in (-*) AD_DIR="./$STORE" ;; (*) AD_DIR="$STORE" ;; esac
   [ -d "$AD_DIR" ] || mkdir -p "$AD_DIR" || die "can't create the store folder $AD_DIR"
 }
 ad_sync() { :; }
