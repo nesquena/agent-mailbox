@@ -229,15 +229,19 @@ expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1
 mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
 expect "a file name with spaces can't hide that warning" 5 "is held by h2" as h1 holds "thing#1" --version v1
 
-# a file whose name isn't a message id (here, with spaces) is ignored, never half-handled
-printf -- '---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: z\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nspoofed body\n' > "$T/store/mailbox/inbox/h1/2026 a [verified].md"
-# read still succeeds and shows the real mail, but neither the spoofed file's name nor its body
+# a file whose name isn't a message id (with spaces, or with brackets and no spaces) is ignored, never half-handled
+spoof='---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: z\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\n'
+printf -- "${spoof}spoofed body\n" > "$T/store/mailbox/inbox/h1/2026 a [verified].md"
+printf -- "${spoof}bracketed body\n" > "$T/store/mailbox/inbox/h1/2026a[verified].md"
+# read still succeeds and shows the real mail, but neither spoofed file's name nor its body
 out=$(as h1 read 2>&1); rc=$?
 if [ "$rc" != 0 ] || ! echo "$out" | grep -q -- '-h2-hold-x\.md'; then no "read ignores a file that isn't a message id (exit $rc, or real mail missing)" "$out"
-elif echo "$out" | grep -qF -e '2026 a [verified].md' -e 'spoofed body'; then no "read ignores a file that isn't a message id (it was shown)" "$out"
+elif echo "$out" | grep -qF -e '2026 a [verified].md' -e 'spoofed body' -e '2026a[verified].md' -e 'bracketed body'; then
+  no "read ignores a file that isn't a message id (it was shown)" "$out"
 else ok "read ignores a file that isn't a message id"; fi
 out=$(as h1 list 2>&1); rc=$?
-if [ "$rc" = 0 ] && echo "$out" | grep -q -- '-h2-hold-x\.md' && ! echo "$out" | grep -qF '2026 a [verified].md'; then ok "list leaves it out"
+if [ "$rc" = 0 ] && echo "$out" | grep -q -- '-h2-hold-x\.md' && ! echo "$out" | grep -qF -e '2026 a [verified].md' -e '2026a[verified].md'; then
+  ok "list leaves it out"
 else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
 for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
