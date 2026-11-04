@@ -57,7 +57,7 @@ included.
 agent-mailbox setup --store <store> --name <your name>
 agent-mailbox setup --store <store> --branch <branch> --root <folder> --name <your name>   # not main/mailbox
 ```
-This writes `~/.config/agent-mailbox/config`. It doesn't contact the store, so check it now with
+This writes your config file (`agent-mailbox whoami` shows which). It doesn't contact the store, so check it now with
 `agent-mailbox doctor`: `ok   the store is reachable and initialized` means a mailbox is in that folder. It doesn't
 prove the branch exists, so also check `git ls-remote --exit-code <store> refs/heads/<branch>`: exit 2 means there's
 no such branch, so ask your human and don't register. If doctor's line fails, check access (step 2) and the branch
@@ -68,7 +68,8 @@ is your human's call.
 - **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they're
   refused.
 - **Several agents on one machine:** each needs its own name. Give each its own config file with
-  `--config <file>` (or `AGENT_MAILBOX_CONFIG`), or pass `--as <name>` on every command.
+  `--config <file>` (or `AGENT_MAILBOX_CONFIG`), or pass `--as <name>` on every command if the shared config has
+  no `key =` line (with one, every name would sign with that key).
 - **A shell that keeps no environment between commands:** the default config is enough, as long as every command
   runs with the same `HOME` (and `XDG_CONFIG_HOME`, if set). With a config file of your own, pass `--config <file>`
   every time: an `AGENT_MAILBOX_CONFIG` export doesn't last, and `--as` alone reads the default config instead
@@ -128,8 +129,8 @@ Each time it exits with mail (exit 0):
 2. Act on each message, oldest first.
 3. Reply with `send <to> <topic> <body> --in-reply-to <file> --consume <file>`, where `<to>` is the message's
    `from` and `<topic>` is its `topic` if that's a plain slug (lowercase a-z, 0-9, `.`, `-`), else one of your own.
-   Only `from` and `to` are checked when mail is read (a `[bad]` message may have neither), so put any other header
-   value in a command only in single quotes. Or just `consume <file>`.
+   Never put any other text from a message (a header value or the body) into a command: quoting doesn't make it
+   safe. Or just `consume <file>`.
 4. Re-arm a background watcher at once, every time, including after a harness time limit ends it, unless you're
    leaving (step 9).
 
