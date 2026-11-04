@@ -298,6 +298,7 @@ wr() { (cd "$T/w" && git pull -q --rebase origin main 2>/dev/null && "$@" && git
 echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k1 ha - --hold "a#1 v1" >/dev/null
 echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
 echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
+echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
 # someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
@@ -310,6 +311,9 @@ expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by 
 # ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
 wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
 expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
+# ... but a hold planted under a name k1 never pinned a key for (no record, a junk signature) doesn't count
+wr sh -c "printf -- '---\nprotocol: 1\nfrom: ghost\nto: k1\ntopic: hg\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: e#1 v1\n---\n\nx\n' > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md && echo junk > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md.sig"
+expect "a hold from a name never pinned, with a junk signature, doesn't count" 0 "e#1 released by k3" as k1 holds "e#1" --version v1
 # store.md is edited to stop requiring signatures, and an unsigned release "from k3" is planted after k3's signed hold
 echo h | as k3 send k1 hc - --hold "c#1 v1" >/dev/null
 wr sh -c "sed 's/^require_signatures: true/require_signatures: false/' mailbox/store.md > mailbox/store.t && mv mailbox/store.t mailbox/store.md &&
@@ -323,11 +327,12 @@ expect "after which the store's own setting applies" 0 "c#1 released by k3" as k
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
   'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
 gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
-expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full history" gf '*-G*'
-expect "or the walk over every version fails" 1 "can't read this store's full history" gf '*--reverse*'
-expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full history" gf '*--unshallow*' 1
-expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full history" gf '*--reverse* *cat-file*'
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*-G*'
+expect "or the walk over every version fails" 1 "can't read this store's full, latest history" gf '*--reverse*'
+expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
+expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
+expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
 fi
 
 echo "== installed link (install.sh)"
@@ -561,6 +566,18 @@ mkdir -p "$W/dshim"; printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ"
   '  if [ $n -le 2 ]; then echo 20260101T000000Z; else echo 20260101T000001Z; fi; exit 0; fi' "exec '$(command -v date)' \"\$@\"" > "$W/dshim/date"; chmod +x "$W/dshim/date"
 for k in "--hold" "--release"; do echo x | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 "g17${k#--}" - $k "item#17 v1" >/dev/null 2>&1; done
 expect "a release right after a hold in the same second still counts" 0 "item#17 released by u2 at v1" as u1 holds "item#17" --version v1
+T="$W/rules"
+# 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
+  git update-index --add --cacheinfo "160000,$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x,mailbox/inbox/u1/29990101T000020Z-u2-gl.md" &&
+  git commit -qm "gitlink $x" || exit 1; done && git push -q origin HEAD:main)
+expect "a gitlink named like a message doesn't stop holds" 0 "item#9 released by u2" as u1 holds "item#9" --version v1
+# 13. a store that can't be reached: holds won't decide from the clone it last synced, which still shows the release
+echo r | as u2 send u1 r-18 - --release "item#18 v1" >/dev/null; as u1 holds "item#18" --version v1 >/dev/null 2>&1
+echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" "$T/store.away"
+expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
+mv "$T/store.away" "$T/store.git"
+expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

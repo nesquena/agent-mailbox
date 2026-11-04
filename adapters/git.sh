@@ -105,9 +105,12 @@ ad_peek() {
 # is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
 # unique per path, content and signature (the <path>.sig at that commit), so merges can't multiply the work and no
 # copy of a file under another signature can stand in for it; the CLI checks every listed file. A history it can't
-# read in full (a failed unshallow or git log) is reported as the single row "! !", never as fewer rows: holds stops
-# on it rather than decide from part of the history.
+# read in full (a failed unshallow or git log), or one it can't confirm is the store's latest (the store can't be
+# reached, or its branch moved since the sync), is reported as the single row "! !", never as fewer rows: holds stops
+# on it rather than decide from part of the history. A gitlink isn't a file, so it's never listed.
 ad_history() {
+  t=$(ad_git ls-remote origin "refs/heads/$BRANCH" 2>/dev/null) &&
+    [ "$(printf '%s\n' "$t" | cut -f1)" = "$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH")" ] || { echo '! !'; return 0; }
   if [ "$(ad_git rev-parse --is-shallow-repository)" = true ]; then
     ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null || { echo '! !'; return 0; }
   fi
@@ -120,7 +123,7 @@ ad_history() {
       $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
       $1 == "C" && NF == 2 { c = $2; next }
       /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
-             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
+             if (f[2] == "160000" || (g && f[5] == "A" && !((c " " p) in m))) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
   [ -n "$AD_ROWS" ] || return 0
   # every row starts with a commit id, so a row starting with "!" is a failure marker: report it, and nothing else
   if printf '%s\n' "$AD_ROWS" | grep -q '^!'; then echo '! !'; return 0; fi

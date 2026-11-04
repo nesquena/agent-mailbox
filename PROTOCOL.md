@@ -133,9 +133,13 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   the same `sent` and different versions conflict, and a conflict blocks like a hold until a later record from that
   sender.
 - **Strict stores:** where signatures are required, only `verified` records count, with one exception that fails
-  closed: a hold whose sender's key is `changed` or missing (`nokey`) still holds, since a registry edit mustn't open
-  the gate. A reader that has seen a store require signatures keeps treating it as strict, even if `store.md` later
-  says otherwise, until its human decides to stop.
+  closed: a hold whose sender's key is `changed`, or missing (`nokey`) for a sender whose key this reader has pinned,
+  still holds, since a registry edit mustn't open the gate. Until the reader accepts the new key, that brings back
+  every hold the sender ever sent, even one it has since released (its releases read `changed` too, and are dropped).
+  Once the reader accepts it, mail signed with the old key, holds included, no longer counts, so before accepting a
+  changed key, the reader should ask the sender to re-send any hold it still means. A reader that has seen a store
+  require signatures keeps treating it as strict, even if `store.md` later says otherwise, until its human decides to
+  stop.
 
 ## 6. Signatures
 Signing is optional per agent, and required per store when `require_signatures: true`.

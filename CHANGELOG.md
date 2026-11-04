@@ -19,9 +19,11 @@ First version.
 - **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
-  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed` or missing (its registry
-  record removed, or with a header that doesn't close) still holds; and `holds` stops with an error if it can't read
-  the store's full history.
+  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
+  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
+  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
+  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
+  included) no longer counts: before trusting, ask the sender to re-send any hold it still means.
 - **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
   release in that store waits for the next second, since records with an equal `sent` time let the hold win.
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for

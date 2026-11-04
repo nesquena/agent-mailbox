@@ -292,7 +292,7 @@ trust)
   valid_name "$1"; load_adapter; ad_sync
   pub=$(field key "$(record "$1")" 2>/dev/null); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
-  echo "pinned $1's current key" ;;
+  echo "pinned $1's current key; mail $1 signed with an earlier key (holds included) no longer counts" ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -403,7 +403,7 @@ holds)
   need_me; [ -z "$version" ] || [ -n "$item" ] || die "--version needs an item"
   load_adapter; ad_sync; need_store
   strict=""; require_sigs && strict=1
-  tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd"
+  tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd" || die "can't create $tmpd"
   # every message ever delivered to you that may carry a hold or release, in delivery order (consumed mail
   # included): <ref> <path>. The pattern lets an adapter skip the rest; each record is still checked below. Files in
   # a subfolder of the inbox aren't messages (PROTOCOL.md section 2), as for read and list.
@@ -411,7 +411,8 @@ holds)
       [ "$ref" != '!' ] || { echo '!'; continue; }
       case "$p" in (*.md) ;; (*) continue ;; esac
       case "${p#"$ROOT/inbox/$ME/"}" in (*/*) continue ;; esac
-      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || continue
+      # a listed version it can't read stops holds, like a history it can't read
+      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || { echo '!'; continue; }
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
@@ -420,14 +421,16 @@ holds)
         field sent "$tmpd/m" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       v=$(verify_file "$tmpd/m" "$ME")
-      # in a strict store, only verified records count, except that a hold whose sender's key changed or vanished
-      # still holds: dropping it would let a registry edit open the gate (forgeable statuses, unsigned and bad, never
-      # count). It clears when the key is restored, or trusted after checking with the sender's human
-      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] || [ "$v" = nokey ]; }; } || continue
+      # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
+      # after this reader pinned it, still holds: dropping it would let a registry edit open the gate. unsigned and bad
+      # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
+      # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
+      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] ||
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
-  case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full history, so holds can't decide" ;; esac
+  case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
   [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '$3 == i')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
@@ -445,7 +448,7 @@ holds)
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
   echo "$latest" | awk -v want="$version" '
-    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": check " $5 "'"'"'s key with its human, then trust " $5 ", or restore its record)"; bad = 1; next }
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": check " $5 "'"'"'s key with its human and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
