@@ -27,6 +27,12 @@ as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAI
        AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
+# tamper <shell command>: change the store directly, as anyone with write access could, from the store's top folder
+tamper() {
+  if [ "$AD" = git ]; then rm -rf "$T/tw"; git clone -q -b main "$STORE" "$T/tw" && (cd "$T/tw" && git config user.email e@e &&
+    git config user.name e && sh -c "$1" && git add -A && git commit -qm tamper && git push -q origin HEAD:main)
+  else (cd "$STORE" && sh -c "$1"); fi
+}
 # block <agent> <text>: the part of <agent>'s read output for the message whose path contains <text>
 block() { as "$1" read 2>/dev/null | awk -v t="$2" '/^===== / && index($0, t) { on = 1 } on && /^===== end/ { on = 0 } on'; }
 expect() { # expect <description> <exit code> <grep pattern or -> <command...>
@@ -134,6 +140,49 @@ for AD in $ADAPTERS; do
       expect "trust re-pins it" 0 "pinned alice" as bob trust alice
       expect "after trust, the old signature fails against the new key" 0 "tamper-test.md \[bad\]" as bob read
     fi
+    # update republishes only the key its agent holds; a record's key must be a plain key
+    for a in ka kb kc; do as $a setup --store "$STORE" --adapter "$AD" --name $a >/dev/null; as $a register --kind t --about t >/dev/null; done
+    KB=$(cut -d' ' -f1,2 "$W/home-kb/.config/agent-mailbox/keys/kb.pub")
+    tamper "sed -i.bak -e 's|^key: .*|key: $KB|' -e 's|^status: .*|status: retired|' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
+    expect "update refuses a record whose key someone else changed" 1 "key isn't yours.*register again" as ka update --status active
+    # on a machine that lost its key, update still works, but pins nothing for its own name
+    mv "$W/home-ka/.config/agent-mailbox/keys" "$T/ka-keys"
+    expect "update without a local key keeps working" 0 "update: ka \(active\)" as ka update --status active
+    m=mailbox/inbox/ka/20260101T000000Z-ka-self.md
+    tamper "printf -- '---\nprotocol: 1\nfrom: ka\nto: ka\ntopic: self\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > $m &&
+      ssh-keygen -Y sign -q -n agent-mailbox -f '$W/home-kb/.config/agent-mailbox/keys/kb' $m"
+    expect "and never pins its own name to a key it doesn't hold" 0 "ka-self.md \[changed\]" as ka read
+    mv "$T/ka-keys" "$W/home-ka/.config/agent-mailbox/keys"
+    tamper "rm -f mailbox/agents/ka.md mailbox/agents/ka.md.sig $m $m.sig"
+    expect "registering again restores the record" 0 "register: ka \(active\), signing key" as ka register --kind t --about t
+    expect "then update works" 0 "update: ka \(active\)" as ka update --about back
+    # a record left with no key is republished as it is
+    tamper "sed -i.bak 's|^key: .*|key: |' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
+    expect "update republishes a record whose key was removed" 0 "update: ka \(active\)" as ka update --about x
+    # an agent registered without a key keeps its update, even with a key file at its key path from another mailbox
+    as kd setup --store "$STORE" --adapter "$AD" --name kd >/dev/null; mkdir -p "$W/home-kd/.config/agent-mailbox/keys"
+    cp "$W/home-kb/.config/agent-mailbox/keys/kb" "$W/home-kd/.config/agent-mailbox/keys/kd"
+    cp "$W/home-kb/.config/agent-mailbox/keys/kb.pub" "$W/home-kd/.config/agent-mailbox/keys/kd.pub"
+    as kd register --kind t --about t --no-key >/dev/null
+    expect "an agent registered without a key can still update" 0 "update: kd \(retired\)" as kd update --status retired
+    # and so does one that registered with a key once, left, and came back without one
+    tamper "rm -f mailbox/agents/kc.md mailbox/agents/kc.md.sig"
+    as kc register --kind t --about t --no-key >/dev/null
+    expect "an agent that came back without a key can update" 0 "update: kc \(active\)" as kc update --about back
+    # with its private key but not the .pub beside it, update still knows the key it holds
+    mv "$W/home-ka/.config/agent-mailbox/keys/ka.pub" "$T/ka.pub"
+    tamper "sed -i.bak 's|^key: .*|key: $KB|' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
+    expect "and refuses a swapped key when only the private key is there" 1 "key isn't yours.*register again" as ka update --about y
+    # or when its .pub is empty
+    cp "$T/ka.pub" "$T/ka.pub.keep"; : > "$W/home-ka/.config/agent-mailbox/keys/ka.pub"
+    expect "and when its .pub is empty" 1 "key isn't yours.*register again" as ka update --about z
+    mv "$T/ka.pub.keep" "$W/home-ka/.config/agent-mailbox/keys/ka.pub"; rm -f "$T/ka.pub"
+    # a key value carrying allowed_signers options reads as no key, to a reader that never saw it before
+    echo k > "$T/k"; as kb send kc opts "$T/k" >/dev/null
+    tamper "sed -i.bak 's|^key: .*|key: namespaces=\"agent-mailbox\" $KB|' mailbox/agents/kb.md && rm -f mailbox/agents/kb.md.bak"
+    expect "a key with options reads as no key" 0 "kb-opts.md \[nokey\]" as kc read
+    expect "agents lists it without a key" 0 "^kb +active +t +no " as kc agents
+    expect "trust refuses it" 1 "no registered key" as kc trust kb
   else
     sk "signature tests (no ssh-keygen)"
   fi

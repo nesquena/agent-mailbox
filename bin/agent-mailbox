@@ -39,6 +39,8 @@ NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
 MSG_RE='^[A-Za-z0-9._-]+\.md$'
+# a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
+KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
 
 # printf, not echo, so a value quoted in a message is shown as is
 die() { printf 'agent-mailbox: %s\n' "$*" >&2; exit 1; }
@@ -138,6 +140,8 @@ need_store() {
 }
 require_sigs() { [ "$(field require_signatures "$M/store.md")" = true ]; }
 record() { printf '%s\n' "$M/agents/$1.md"; }
+# reg_key <record file>: the key the record names, or nothing when it names none or the value isn't a plain key
+reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf '%s\n' "$rk"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
@@ -165,7 +169,7 @@ verify_file() {
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
   [ -f "$f.sig" ] || { echo unsigned; return; }
   rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
-  pub=$(field key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
+  pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
   # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
   pins="$STATE/pins/$STORE_ID"; mkdir -p "$pins"
@@ -234,8 +238,19 @@ register|update)
   fi
   case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
-  pub=""
-  if [ "$cmd" = update ]; then pub=$(field key "$rec"); fi
+  pub="" own=""
+  if [ "$cmd" = update ]; then
+    # an agent holding its key never re-signs a record whose key someone else changed; without it (a machine that
+    # lost its key) the record is republished as it is, and nothing is pinned below
+    pub=$(field key "$rec")
+    if [ -f "$KEY" ]; then
+      own=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null); matches "$KEY_RE" "$own" || own=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2)
+      [ -n "$own" ] || [ -z "$pub" ] || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then run update again"
+    fi
+    if [ -n "$own" ] && [ -n "$pub" ] && [ "$pub" != "$own" ]; then
+      die "your registry record's key isn't yours ($KEY.pub), so update won't republish it: if someone else changed it, check with your human, then remove $ROOT/agents/$ME.md and its .sig from the store and run register again"
+    fi
+  fi
   if [ "$cmd" = register ] && [ -z "$nokey" ]; then
     if [ -n "$keyfile" ]; then
       [ -f "$keyfile" ] || die "no such key file $keyfile"
@@ -254,7 +269,7 @@ register|update)
       warn "ssh-keygen not found: registering without a signing key (mail from you will be unsigned)"
     fi
   fi
-  matches '^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$|^$' "$pub" || die "that doesn't look like an SSH public key"
+  [ -z "$pub" ] || matches "$KEY_RE" "$pub" || die "that doesn't look like an SSH public key"
   if require_sigs && [ -z "$pub" ]; then die "this store requires signatures: register with a key"; fi
   when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   no_link "$rec"; no_link "$M/inbox/$ME/.keep"
@@ -268,7 +283,8 @@ register|update)
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
   if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION"; fi
-  [ -z "$pub" ] || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
+  # pin your own name only to a key you hold
+  [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
 agents)
   [ $# -eq 0 ] || unknown "$1"
@@ -276,14 +292,14 @@ agents)
   printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
-    k=no; [ -n "$(field key "$r")" ] && k=yes
+    k=no; [ -n "$(reg_key "$r")" ] && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
     printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
   done ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
-  pub=$(field key "$(record "$1")" 2>/dev/null); [ -n "$pub" ] || die "'$1' has no registered key"
+  pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
   echo "pinned $1's current key" ;;
 send)
@@ -330,7 +346,7 @@ send)
 }" "${release:+release: $release
 }" "$text")"
   paths="$paths $(rel "$f")"
-  if can_sign && [ -n "$(field key "$(record "$ME")")" ]; then sign_file "$f"; paths="$paths $(rel "$f").sig"
+  if can_sign && [ -n "$(reg_key "$(record "$ME")")" ]; then sign_file "$f"; paths="$paths $(rel "$f").sig"
   else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
