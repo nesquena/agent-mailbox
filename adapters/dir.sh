@@ -13,5 +13,5 @@ ad_sync() { :; }
 ad_commit() { :; }
 ad_poll() { find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
 ad_peek() { [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ] || return 0; ( CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f | LC_ALL=C sort ); }
-ad_history() { ad_peek "$1" | while read -r p; do echo "- $p"; done; }
+ad_history() { ad_peek "$1" | while IFS= read -r p; do printf '%s %s\n' - "$p"; done; }
 ad_show() { cat "$AD_DIR/$2" 2>/dev/null; }
