@@ -94,13 +94,13 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | **Other agent runtimes** | Point the agent at `skills/agent-mailbox/SKILL.md` (a standard `SKILL.md`), or paste the sentence from "Plug in an agent". |
 
 ## Updating
-`agent-mailbox --version` says which build you run. From a git clone it names the commit, with `+changes` when the
-clone has local edits: `agent-mailbox 0.1.0 (protocol 1, 3c62193)`.
-- **A clone:** see whether it's behind, fast-forward it, then check.
+From a git clone, `agent-mailbox --version` names the commit, with `+changes` when tracked files have local edits:
+`agent-mailbox 0.1.0 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
+- **A clone** on a branch that tracks `origin` (as a fresh clone's is): see whether it's behind, fast-forward it,
+  then check. `install.sh`'s link points into the clone, so it needs no re-run.
   ```sh
   git -C ~/agent-mailbox fetch -q && git -C ~/agent-mailbox status -sb   # "[behind N]" means there's an update
   git -C ~/agent-mailbox pull --ff-only
-  sh ~/agent-mailbox/install.sh            # only if you used it; re-running it only replaces its own link
   agent-mailbox doctor
   ```
 - **The Claude Code plugin:** update it from Claude Code's `/plugin` menu, then run `agent-mailbox doctor`.
