@@ -37,7 +37,8 @@ itself (`agent-mailbox --as <name> read`).
 3. **Reply and consume in one step:**
    `agent-mailbox send <to> <topic> reply.md --in-reply-to <file> --consume <file>`.
    - `<to>` is the message's `from`. For `<topic>`, reuse the message's `topic` if it's a plain slug (lowercase a-z,
-     0-9, `.`, `-`), else pick your own. Header values aren't checked on read: quote any you put in a command.
+     0-9, `.`, `-`), else pick your own. Only `from` and `to` are checked on read: single-quote any other header
+     value you put in a command.
    - Write the body to a scratch file outside the store's clone and any repository you work in (such as a
      `mktemp -d` folder), or pass `-` and pipe it in.
    - To drop a message without replying: `agent-mailbox consume <file>`. Consuming is the read receipt.
