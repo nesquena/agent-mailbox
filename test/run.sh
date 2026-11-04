@@ -550,6 +550,14 @@ expect "verify refuses a misplaced --as" 1 "goes before the command" as o1 verif
 expect "verify takes a name, never a pattern" 1 "no such message" as o1 verify '*.md'
 cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/-z.md"
 expect "verify takes a name starting with - as a file name" 6 "^(unsigned|nokey)$" env HOME="$W/home-o1" "$SH" "$CLI" verify -z.md
+# consume takes a message name starting with '-', and any name after --; other options are still refused
+for n in -rf -q; do cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/$n.md"; done
+expect "consume takes a message name starting with -" 0 "^consumed$" as o1 consume -rf.md
+[ ! -e "$T/store/mailbox/inbox/o1/-rf.md" ] && ok "and removes it" || no "consume left -rf.md in the inbox"
+expect "consume takes names after --" 0 "^consumed$" as o1 consume -- -q.md
+[ ! -e "$T/store/mailbox/inbox/o1/-q.md" ] && ok "and removes them" || no "consume -- left -q.md in the inbox"
+expect "consume still refuses an unknown option" 1 "unknown option --bogus" as o1 consume --bogus
+expect "and a misplaced --as" 1 "goes before the command" as o1 consume -z.md --as o2
 # a dir store given by a relative path starting with '-'
 mkdir -p "$T/rel2"
 for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done
@@ -642,6 +650,13 @@ expect "verify by name doesn't pick a message from another inbox" 1 "no such mes
 expect "it finds one in yours" 6 "^unsigned$" as x1 verify 20260101T000004Z-x2-md.md
 sed 's/^to: x1$/to: x3/' "$I/20260101T000004Z-x2-md.md" > "$I/20260101T000012Z-x2-mis.md"
 expect "and reads one addressed to someone else as misrouted, as read does" 6 "^misrouted$" as x1 verify 20260101T000012Z-x2-mis.md
+# by path, a message is checked against the inbox it sits in
+expect "verify by store path reads a misrouted copy as misrouted" 6 "^misrouted$" as x1 verify mailbox/inbox/x1/20260101T000012Z-x2-mis.md
+expect "and by absolute path" 6 "^misrouted$" as x1 verify "$I/20260101T000012Z-x2-mis.md"
+expect "and by a path relative to the current folder" 6 "^misrouted$" in_dir "$I" env HOME="$W/home-x1" "$SH" "$CLI" verify ./20260101T000012Z-x2-mis.md
+expect "verify by path reads a message in the right inbox as before" 6 "^unsigned$" as x1 verify "$I/20260101T000004Z-x2-md.md"
+cp "$I/20260101T000012Z-x2-mis.md" "$T/mis-copy.md"
+expect "and a copy outside any inbox as before" 6 "^unsigned$" as x1 verify "$T/mis-copy.md"
 echo "== holds and header rules (git)"
 T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -769,6 +784,40 @@ echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" 
 expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
+
+echo "== send refuses obvious secrets (dir)"
+T="$W/sec"; mkdir -p "$T"
+for a in sec1 sec2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as sec1 init >/dev/null; for a in sec1 sec2; do as $a register --kind t --about t --no-key >/dev/null; done
+H="$W/home-sec1" C="$W/home-sec1/.config/agent-mailbox" S="$W/home-sec1/.local/state/agent-mailbox"
+mkdir -p "$H/.ssh" "$C/keys" "$S"; for f in "$H/.ssh/id_ed25519" "$C/keys/sec1" "$S/note" "$T/own" "$T/own.pub"; do echo "x" > "$f"; done
+ln -s "$H/.ssh/id_ed25519" "$T/notes.md"; ln -s "$H/.ssh" "$T/dotssh"
+# refused <description> <body file>: sec1's send of it fails, saying why (each on its own topic, so none is refused
+# for sharing a second with another)
+n=0; refused() { n=$((n+1)); expect "$1" 1 "refusing to send" as sec1 send sec2 "sec-$n" "$2"; }
+refused "send refuses a file in ~/.ssh" "$H/.ssh/id_ed25519"
+refused "or a link to one" "$T/notes.md"
+refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
+refused "or the CLI's config" "$C/config"
+refused "or its signing key" "$C/keys/sec1"
+refused "or a file in its state folder" "$S/note"
+for f in own own.pub; do
+  expect "or a signing key kept elsewhere ($f)" 1 "refusing to send" env HOME="$H" AGENT_MAILBOX_KEY="$T/own" "$SH" "$CLI" send sec2 "sec-$f" "$T/$f"
+done
+cp "$C/config" "$T/cfg"
+expect "or a config file kept elsewhere" 1 "refusing to send" env HOME="$H" "$SH" "$CLI" --config "$T/cfg" send sec2 sec-cfg "$T/cfg"
+pk='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n'
+expect "send refuses a private key on stdin" 1 "holds a private key" sh -c "printf -- '$pk' | HOME='$H' '$SH' '$CLI' send sec2 sec-stdin -"
+printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\n' > "$T/rsa.md"
+refused "or in a body file" "$T/rsa.md"
+[ -z "$(ls "$T/store/mailbox/inbox/sec2")" ] && ok "and writes nothing for any of them" || no "a refused send wrote mail" "$(ls "$T/store/mailbox/inbox/sec2")"
+# ordinary bodies still send: prose about keys, public keys, and a file beside ~/.ssh whose name starts the same
+printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here.\n' > "$T/prose.md"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me\n-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n' > "$T/pub.md"
+echo "notes" > "$H/.ssh-notes.md"
+expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
+expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
+expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

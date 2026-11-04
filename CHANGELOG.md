@@ -20,10 +20,11 @@ First version.
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
   `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
-  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
-  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
-  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
-  included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+  pinned it (its registry record removed, with a header that doesn't close, or its key no longer reads as a plain
+  key), still holds, and until you `trust` the new key that includes holds the sender has since released; and
+  `holds` stops with an error if it can't reach the store or read its full history. After `trust` accepts a changed
+  key, mail signed with the old key (holds included) no longer counts: before trusting, ask the sender to re-send any
+  hold it still means (#23).
 - **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
   version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
 - **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
@@ -70,7 +71,7 @@ First version.
 - **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators and
   tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
   overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose first `=`
-  comes after nothing but non-ASCII characters is indented, and a message's last line always ends before its end
+  comes after nothing but non-printing characters is indented, and a message's last line always ends before its end
   marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
   bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
   `misrouted`, as `read` does (#22).
@@ -94,3 +95,16 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
+- **`send` refuses obvious secrets:** a body file that is, links followed, in `~/.ssh` or the CLI's config or state
+  folder, or is its config file or signing key (either half), and a body (file or stdin) holding a private-key block
+  (`-----BEGIN ... PRIVATE KEY`), are refused with exit 1 before anything is written. It's a deny-list of the obvious
+  cases, not a guarantee. To send part of a file from one of those folders on purpose, copy that part into a scratch
+  file first (#XXXX).
+- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after `--`), instead of
+  refusing it as an unknown option (#XXXX).
+- **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
+  `misrouted` by path too, as it does by name and in `read` (#XXXX).
+- **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be
+  wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
+  `setup`, `update` or `consume`, and `holds` exit 0 means every sender who wrote released the item, not that a
+  particular one did (#XXXX).
