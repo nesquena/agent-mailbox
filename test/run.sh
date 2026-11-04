@@ -173,7 +173,10 @@ for AD in $ADAPTERS; do
     mv "$W/home-ka/.config/agent-mailbox/keys/ka.pub" "$T/ka.pub"
     tamper "sed -i.bak 's|^key: .*|key: $KB|' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
     expect "and refuses a swapped key when only the private key is there" 1 "key isn't yours.*register again" as ka update --about y
-    mv "$T/ka.pub" "$W/home-ka/.config/agent-mailbox/keys/ka.pub"
+    # or when its .pub is empty
+    cp "$T/ka.pub" "$T/ka.pub.keep"; : > "$W/home-ka/.config/agent-mailbox/keys/ka.pub"
+    expect "and when its .pub is empty" 1 "key isn't yours.*register again" as ka update --about z
+    mv "$T/ka.pub.keep" "$W/home-ka/.config/agent-mailbox/keys/ka.pub"; rm -f "$T/ka.pub"
     # a key value carrying allowed_signers options reads as no key, to a reader that never saw it before
     echo k > "$T/k"; as kb send kc opts "$T/k" >/dev/null
     tamper "sed -i.bak 's|^key: .*|key: namespaces=\"agent-mailbox\" $KB|' mailbox/agents/kb.md && rm -f mailbox/agents/kb.md.bak"
