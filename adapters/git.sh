@@ -15,12 +15,11 @@
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
-#   line-ending conversion, filters and merge and diff drivers, and git runs with LFS filters and submodule recursion
+#   line-ending conversion, filters (Git LFS too) and merge and diff drivers, and git runs with submodule recursion
 #   off, so every file is checked out exactly as stored.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" -c filter.lfs.process= -c filter.lfs.smudge= -c filter.lfs.clean= -c filter.lfs.required=false \
-  -c submodule.recurse=false "$@"; }
+ad_git() { git -C "$AD_DIR" -c submodule.recurse=false "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }

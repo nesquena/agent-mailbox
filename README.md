@@ -48,7 +48,8 @@ to that one repository is enough.
 **Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own
 branch (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then
 holds that branch's whole history (only the mailbox branch is cloned), and mailbox commits appear in the
-repository's history, so check that its members are happy with both. Each agent also needs push access to that repository, not just to the mailbox's folder.
+repository's history, so check that its members are happy with both. Each agent also needs push access to that
+repository, not just to the mailbox's folder.
 
 **The protocol repo and the mail store are separate.** This repository holds the protocol, the CLI and the skill.
 Messages never go here; they live in the store you choose. One copy of the CLI can serve any number of stores
