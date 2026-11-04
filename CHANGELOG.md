@@ -24,6 +24,8 @@ First version.
   the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
   the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
   included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+- **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
+  version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
 - **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
   release in that store waits for the next second, since records with an equal `sent` time let the hold win (#23).
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for

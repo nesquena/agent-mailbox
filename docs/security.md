@@ -40,9 +40,10 @@ time this reader first pinned it. Concretely:
   treating the store as strict even if `store.md` is edited to say otherwise; `trust --relax` ends that, after
   checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`), or whose
   record was removed or no longer closes its header after this reader pinned its key (`nokey`), still holds until
-  the key is restored or trusted, so editing the registry can't open a gate. While the key reads `changed`, every
-  hold that sender ever sent counts again, even one it has since released, since its releases read `changed` too and
-  are dropped. A hold under a name this reader never pinned a key for, with no valid record, doesn't count.
+  the key is restored or trusted, so editing the registry can't open a gate. While the key reads `changed`, any
+  hold claiming to be from that sender counts, signed or not, even one it has since released, since its releases read
+  `changed` too and are dropped. A hold under a name this reader never pinned a key for, with no valid record,
+  doesn't count.
 - **Trusting a changed key drops what the old key signed.** After `trust`, mail signed with the sender's old key,
   holds included, no longer counts. Before trusting, ask the sender to re-send any hold it still means.
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
