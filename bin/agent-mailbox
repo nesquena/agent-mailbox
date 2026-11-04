@@ -534,21 +534,23 @@ watch)
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
   trap 'rm -f "$STATE/run/$ME.pid"' EXIT
   trap 'exit 130' INT TERM
-  check() { ad_peek "$ROOT/inbox/$ME" | while IFS= read -r p; do
+  # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"
+  check() { files=$(ad_peek "$ROOT/inbox/$ME") || return 1
+            printf '%s\n' "$files" | while IFS= read -r p; do
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
               case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""
-  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
-  # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
+  if mail=$(check); then [ -z "$mail" ] || { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }; else last=""; fi
+  # a store it can't reach or read ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
   while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
     sleep "$interval"
-    if now=$(ad_poll 2>/dev/null) && [ -n "$now" ]; then fails=0; else
+    if now=$(ad_poll 2>/dev/null) && [ -n "$now" ]; then :; else
       fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't reach the store ($fails tries in a row)"
     fi
-    [ "$now" != "$last" ] || continue
-    if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
-    last=$now
+    [ "$now" != "$last" ] || { fails=0; continue; }
+    if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store ($fails tries in a row)"; fi
+    fails=0; last=$now
     [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
   done
   echo "no mail for $ME after ${max}s"; exit 2 ;;

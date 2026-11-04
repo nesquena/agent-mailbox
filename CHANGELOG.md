@@ -74,6 +74,15 @@ First version.
   marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
   bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
   `misrouted`, as `read` does (#22).
+- **Fix:** `watch` no longer misses mail when a look at the store fails (a network blip, or another command in the
+  same checkout updating it at that moment); it tries again at the next poll, and 10 failed reads in a row end it with
+  an error, as 10 failed polls do (#24).
+- **Fix:** commands no longer rewrite the git config of a store's checkout each time, which printed "could not lock
+  config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the other's
+  name. Each command's commits take its agent's name from its own environment, so a person's exported
+  `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` never reaches the store either (#24).
+- **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
+  store at the same moment: the watcher's look updates only its own ref (#24).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the

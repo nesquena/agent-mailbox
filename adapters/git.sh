@@ -8,7 +8,10 @@
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
-# - Commits carry the agent's mailbox name as author, never a person's name or email.
+# - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
+#   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
+# - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
+#   environment, never in the clone's config, which agents sharing the clone (`--as`) would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 
@@ -36,8 +39,9 @@ ad_open() {
     ad_git ls-files -s | awk '$1 == "120000" { sub(/^[^\t]*\t/, ""); print }' | while IFS= read -r l; do
       rm -f "$AD_DIR/$l" && ad_git checkout -q -- "$l"; done
   fi
-  ad_git config user.name "${ME:-agent-mailbox}"
-  ad_git config user.email "${ME:-agent-mailbox}@agent-mailbox.invalid"
+  GIT_AUTHOR_NAME="${ME:-agent-mailbox}" GIT_AUTHOR_EMAIL="${ME:-agent-mailbox}@agent-mailbox.invalid"
+  GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+  export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 }
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
@@ -92,7 +96,7 @@ ad_poll() { ad_git ls-remote origin "refs/heads/$BRANCH" | cut -f1; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 ad_peek() {
-  ad_git fetch -q origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_git fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
