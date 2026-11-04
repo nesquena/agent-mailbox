@@ -433,7 +433,7 @@ doctor)
   chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
   chk "a store is configured" "[ -n '$STORE' ]" "run setup --store"
   chk "an agent name is set" "[ -n '$ME' ]" "run setup --name, or pass --as"
-  chk "the CLI finds its adapters folder" lib_ok "run it by its path, or set AGENT_MAILBOX_LIB"
+  chk "the CLI finds its adapter" 'lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
       { echo "FAIL the store is reachable and initialized"; ok=1; }

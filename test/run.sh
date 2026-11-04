@@ -278,8 +278,18 @@ if command -v bash >/dev/null 2>&1; then
   ev="cd '$T/evil/work' && HOME='$W/home-ev' PATH='$T/pathbin':\"\$PATH\" AGENT_MAILBOX_STORE='$T/store-ev' AGENT_MAILBOX_ADAPTER=dir"
   expect "bash with the CLI found on PATH doesn't load an adapter from beside the current folder" 1 "can't find the folder" \
     sh -c "$ev bash agent-mailbox init"
-  expect "doctor says the adapters folder wasn't found" 1 "FAIL the CLI finds its adapters folder" sh -c "$ev bash agent-mailbox doctor"
+  expect "doctor says the adapters folder wasn't found" 1 "FAIL the CLI finds its adapter" sh -c "$ev bash agent-mailbox doctor"
 fi
+# a copy of the script without its adapters folder: doctor says so
+mkdir -p "$T/lone/bin"; cp "$ROOTDIR/bin/agent-mailbox" "$T/lone/bin/"
+expect "doctor flags a CLI copied without its adapters" 1 "FAIL the CLI finds its adapter" \
+  env HOME="$W/home-lone" AGENT_MAILBOX_STORE="$T/store-lone" AGENT_MAILBOX_ADAPTER=dir "$SH" "$T/lone/bin/agent-mailbox" doctor
+# a relative dir store, with CDPATH naming another folder of the same name: watch must look in the real store
+mkdir -p "$T/rel/other/st"
+for a in r1 r2; do (cd "$T/rel" && HOME="$W/home-$a" "$SH" "$CLI" setup --store st --adapter dir --name $a >/dev/null); done
+(cd "$T/rel" && HOME="$W/home-r1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-r1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
+  HOME="$W/home-r2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-r1" "$SH" "$CLI" send r2 rel -)  >/dev/null 2>&1
+expect "watch on a relative dir store ignores CDPATH" 0 "r1-rel.md" sh -c "cd '$T/rel' && HOME='$W/home-r2' CDPATH='$T/rel/other' '$SH' '$CLI' watch 1 3"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
