@@ -429,6 +429,16 @@ echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null; sleep 1
   printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h7\ncontext: general\nsent: 2999-01-01T00:00:02Z\nin_reply_to: none\nneeds: none\nhold:item#7 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000002Z-u2-h7.md &&
   git add -A && git commit -qm h7 && git push -q origin HEAD:main)
 expect "a hold with no space after the colon still holds" 5 "is held by u2" as u1 holds "item#7" --version v1
+# a store writer can't hide holds by making git treat messages as binary (an attribute, or a NUL byte): each hold
+# below is newer than a release of the same version, so a hidden hold would let the release pass
+echo r | as u2 send u1 r-6 - --release "item#6 v1" >/dev/null; echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null; sleep 1
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
+  printf '*.md -diff\n' > .gitattributes && printf '*.md binary\n' > mailbox/inbox/u1/.gitattributes &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h5\ncontext: general\nsent: 2999-01-01T00:00:03Z\nin_reply_to: none\nneeds: none\nhold: item#5 v1\n---\n\nnul \000 byte\n' > mailbox/inbox/u1/29990101T000003Z-u2-h5.md &&
+  git add -A && git commit -qm attrs && git push -q origin HEAD:main)
+echo h | as u2 send u1 h-6 - --hold "item#6 v1" >/dev/null
+expect "a hold still counts when .gitattributes marks mail binary" 5 "item#6 is held by u2" as u1 holds "item#6" --version v1
+expect "a hold in a message with a NUL byte still counts" 5 "item#5 is held by u2" as u1 holds "item#5" --version v1
 sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 
