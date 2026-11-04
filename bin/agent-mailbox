@@ -120,6 +120,14 @@ active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = act
 inbox_files() { [ -d "$M/inbox/$1" ] || return 0
   find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
     basename "$p" | grep -Eq "$MSG_RE" && echo "$p"; done; }
+# no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
+# so a link a writer plants in a shared store can't redirect writes outside it
+no_link() {
+  sub=${1#"$AD_DIR"/}; cur=$AD_DIR
+  for part in $(echo "$sub" | tr '/' ' '); do
+    cur="$cur/$part"; [ -L "$cur" ] && die "refusing to write through a symlink in the store: $(rel "$cur")"
+  done; return 0
+}
 valid_msg() { echo "$1" | grep -Eq "$MSG_RE" || die "'$1' isn't a message file name"; }
 rel() { echo "${1#"$AD_DIR"/}"; }
 
@@ -174,6 +182,7 @@ init)
   one_line title "$title"
   load_adapter; ad_sync
   [ -f "$M/store.md" ] && die "a mailbox already exists at '$ROOT/' in this store"
+  no_link "$M/agents/.keep"; no_link "$M/inbox/.keep"; no_link "$M/store.md"
   mkdir -p "$M/agents" "$M/inbox"; : > "$M/agents/.keep"; : > "$M/inbox/.keep"
   put "$M/store.md" "$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
     "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
@@ -222,6 +231,7 @@ register|update)
   echo "$pub" | grep -Eq '^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$|^$' || die "that doesn't look like an SSH public key"
   if require_sigs && [ -z "$pub" ]; then die "this store requires signatures: register with a key"; fi
   when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  no_link "$rec"; no_link "$M/inbox/$ME/.keep"
   mkdir -p "$M/agents"
   put "$rec" "$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
     "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")"
@@ -238,7 +248,9 @@ agents)
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
     k=no; [ -n "$(field key "$r")" ] && k=yes
-    printf '%-24s %-8s %-10s %-4s %s\n' "$(field name "$r")" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
+    n=$(basename "$r" .md); echo "$n" | grep -Eq "$NAME_RE" || continue
+    [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
+    printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
   done ;;
 trust)
   [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
@@ -273,7 +285,8 @@ send)
   if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
   for c in $consume; do valid_msg "$c"; [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   stamp=$(date -u +%Y%m%dT%H%M%SZ); f="$M/inbox/$to/$stamp-$ME-$topic.md"
-  [ -e "$f" ] && die "$(rel "$f") exists (one message per topic per second)"
+  { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
+  no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
   [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
   put "$f" "$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \

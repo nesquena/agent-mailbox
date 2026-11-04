@@ -119,6 +119,23 @@ for AD in $ADAPTERS; do
     sk "signature tests (no ssh-keygen)"
   fi
 
+  # symlinks planted in the store: never followed, never a wake-up
+  for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+  mkdir -p "$W/planted-$AD"
+  as vic setup --store "$STORE" --adapter "$AD" --name vic >/dev/null; as vic register --kind t --about t --no-key >/dev/null
+  if [ "$AD" = git ]; then
+    git clone -q -b main "$STORE" "$T/link" && (cd "$T/link" && git config user.email e@e && git config user.name e &&
+      ln -s nowhere "mailbox/inbox/bob/20260101T000000Z-mal-link.md" && rm -rf mailbox/inbox/vic &&
+      ln -s "../../../../../../../../../../../../$W/planted-$AD" mailbox/inbox/vic && git add -A && git commit -qm links -q && git push -q origin HEAD:main)
+  else
+    ln -s nowhere "$STORE/mailbox/inbox/bob/20260101T000000Z-mal-link.md"
+    rm -rf "$STORE/mailbox/inbox/vic"; ln -s "$W/planted-$AD" "$STORE/mailbox/inbox/vic"
+  fi
+  expect "a planted link doesn't wake the watcher" 2 "no mail" as bob watch 1 2
+  echo x | HOME="$W/home-alice" "$SH" "$CLI" send vic via-link - >/dev/null 2>&1
+  [ -z "$(ls -A "$W/planted-$AD")" ] && ok "a symlinked inbox can't redirect a send outside the store" ||
+    no "a send wrote through a symlinked inbox" "$(ls -A "$W/planted-$AD")"
+
   # watch wakes on new mail and times out without it
   for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
   expect "watch times out with no mail" 2 "no mail" as bob watch 1 2
