@@ -28,6 +28,7 @@
 #                                       wait for mail without spending model tokens; exits 0 with the mail listed,
 #                                       2 after max seconds (0 = no limit). Run it in the background.
 #   whoami | doctor                     show the resolved config | check this machine's setup
+#   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
 # Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 written locally but not published
 # (re-run any command to publish; don't resend); 5 not released; 6 signature not verified.
@@ -51,20 +52,37 @@ unknown() { misplaced "$1"; die "unknown option $1"; }
 NL='
 ' CR=$(printf '\r')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
-# this script's real folder, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
+# this script's real path, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
 here() {
   p=$0
   # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
   case "$p" in (*/*) ;; (*) [ -f "$p" ] || return 1 ;; esac
   while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
-  CDPATH= cd -P -- "$(dirname "$p")" && pwd -P
+  CDPATH= cd -P -- "$(dirname "$p")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$p")"
 }
-SELF_DIR=$(here) || SELF_DIR=""
+SELF=$(here) || SELF=""
+SELF_DIR=${SELF%/*} SELF_NAME=${SELF##*/}
 # the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
 root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
   case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
+# self_clone: succeeds when this script's folder is in a git clone that tracks the script. Never a repository the
+# current folder or the environment names: it unsets git's repository variables, so run it in a subshell.
+self_clone() {
+  # (with no folder, `git -C ""` would use the current one); without git, both commands below fail quietly
+  [ -n "$SELF_DIR" ] || return 1
+  # shellcheck disable=SC2046
+  unset $(git rev-parse --local-env-vars 2>/dev/null)
+  GIT_LITERAL_PATHSPECS=1 git -C "$SELF_DIR" ls-files --error-unmatch -- "$SELF_NAME" >/dev/null 2>&1
+}
+# the commit this CLI runs from, with "+changes" when the clone's tracked files are modified; fails outside a clone
+self_rev() { (
+  self_clone || exit 1
+  rev=$(git -C "$SELF_DIR" rev-parse --short HEAD 2>/dev/null) || exit 1
+  [ -z "$(GIT_OPTIONAL_LOCKS=0 git -C "$SELF_DIR" status --porcelain -uno 2>/dev/null)" ] || rev="$rev+changes"
+  printf '%s\n' "$rev"
+) }
 
 # --- configuration: flags > environment > config file > defaults ------------------------------------------------
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox"
@@ -75,7 +93,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --as) [ $# -ge 2 ] || die "--as needs a name"; AS=$2; shift 2 ;;
     --config) [ $# -ge 2 ] || die "--config needs a file"; CONFIG=$2; shift 2 ;;
-    --version) echo "agent-mailbox $VERSION (protocol $PROTOCOL)"; exit 0 ;;
+    --version) rev=$(self_rev) || rev=""; printf 'agent-mailbox %s (protocol %s%s)\n' "$VERSION" "$PROTOCOL" "${rev:+, $rev}"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -467,6 +485,22 @@ doctor)
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
+  # whether the CLI's clone is behind its upstream branch: a notice, never a failure, and no line at all when the CLI
+  # isn't a clone, has no upstream, or can't fetch it (offline, or no answer within 10 s)
+  ( self_clone || exit 0
+    up=$(git -C "$SELF_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || exit 0
+    # never wait on a prompt: none for https, and ssh in batch mode unless ssh is configured for git
+    [ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$SELF_DIR" config core.sshCommand 2>/dev/null)" ] ||
+      { GIT_SSH_COMMAND='ssh -o BatchMode=yes'; export GIT_SSH_COMMAND; }
+    GIT_TERMINAL_PROMPT=0 git -C "$SELF_DIR" fetch -q >/dev/null 2>&1 & f=$!
+    ( sleep 10; kill "$f" ) >/dev/null 2>&1 & k=$!
+    wait "$f"; r=$?; kill "$k" 2>/dev/null; [ "$r" -eq 0 ] || exit 0
+    n=$(git -C "$SELF_DIR" rev-list --count "HEAD..@{u}" 2>/dev/null) || exit 0
+    if [ "$n" -eq 0 ]; then printf 'ok   the CLI is up to date with %s\n' "$up"
+    else s=s; [ "$n" -eq 1 ] && s=""
+      printf 'warn the CLI is %s commit%s behind %s: update it with git -C %s pull --ff-only (README.md, "Updating")\n' \
+        "$n" "$s" "$up" "$(git -C "$SELF_DIR" rev-parse --show-toplevel)"
+    fi )
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
       { echo "FAIL the store is reachable and initialized"; ok=1; }

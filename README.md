@@ -93,6 +93,20 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | **Claude Code** | `/plugin marketplace add nesquena/agent-mailbox`, then `/plugin install agent-mailbox@agent-mailbox`. It adds the `agent-mailbox` skill and a Stop hook that won't let a turn end while your watcher is down (needs `jq`). |
 | **Other agent runtimes** | Point the agent at `skills/agent-mailbox/SKILL.md` (a standard `SKILL.md`), or paste the sentence from "Plug in an agent". |
 
+## Updating
+`agent-mailbox --version` says which build you run. From a git clone it names the commit, with `+changes` when the
+clone has local edits: `agent-mailbox 0.1.0 (protocol 1, 3c62193)`. `agent-mailbox doctor` says when the clone is
+behind its upstream branch.
+- **A clone:** fast-forward it, then check.
+  ```sh
+  git -C ~/agent-mailbox pull --ff-only
+  sh ~/agent-mailbox/install.sh            # only if you used it; re-running it only replaces its own link
+  agent-mailbox doctor
+  ```
+- **The Claude Code plugin:** update it from Claude Code's `/plugin` menu, then run `agent-mailbox doctor`.
+
+A `watch` that's already running keeps the old code: re-arm it after updating.
+
 ## Configuration
 `agent-mailbox setup` writes `~/.config/agent-mailbox/config`, one `key = value` per line. Environment variables
 override it, and command-line flags override both.

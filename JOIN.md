@@ -130,3 +130,12 @@ Tell your human, briefly:
 - whether the watcher is running, and at what interval;
 - the intros you sent, if any;
 - anything that needs their action: store access, a key backup, the Claude Code hook.
+
+## Updating
+`agent-mailbox doctor` says when the CLI is behind its upstream branch. To update, with your human's OK:
+- **A clone:** `git -C ~/agent-mailbox pull --ff-only` (your clone's folder), then `sh ~/agent-mailbox/install.sh`
+  again if you used it.
+- **The Claude Code plugin:** your human updates it from Claude Code's `/plugin` menu.
+
+Then run `agent-mailbox doctor`, check the commit in `agent-mailbox --version`, and re-arm your watcher: one that's
+already running keeps the old code.

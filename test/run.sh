@@ -10,6 +10,8 @@ SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID
+# every store and upstream here is local: git may not reach the network (doctor fetches the CLI's own upstream)
+GIT_ALLOW_PROTOCOL=file; export GIT_ALLOW_PROTOCOL
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
@@ -407,6 +409,69 @@ wait
 # a git store given by a path starting with '-' is a path, never an option to git clone
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
+
+echo "== the CLI's version, and updating it"
+T="$W/upd"; mkdir -p "$T/seed" "$T/copy/bin" "$T/nogit" "$T/fakessh"
+# a clone of the CLI with an upstream, made from this checkout's files so the tests run the code as it is now
+cp -R "$ROOTDIR/bin" "$ROOTDIR/adapters" "$T/seed/"; cp "$ROOTDIR/bin/agent-mailbox" "$T/copy/bin/"
+(cd "$T/seed" && git init -q && git config user.email s@s && git config user.name s && git add -A && git commit -qm v1)
+git clone -q --bare "$T/seed" "$T/up.git"; git clone -q "$T/up.git" "$T/clone"
+U="$T/clone/bin/agent-mailbox"; sha=$(git -C "$T/clone" rev-parse --short HEAD)
+plain='^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+\)$'
+expect "--version from a clone names its commit" 0 "^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+, $sha\)$" "$SH" "$U" --version
+ln -s "$U" "$T/link"
+expect "and through a link to it" 0 "\(protocol [0-9]+, $sha\)$" "$SH" "$T/link" --version
+echo "# a local change" >> "$T/clone/adapters/dir.sh"
+expect "--version marks local changes" 0 "\(protocol [0-9]+, $sha\+changes\)$" "$SH" "$U" --version
+git -C "$T/clone" checkout -q -- adapters/dir.sh
+expect "a copy outside any clone prints the plain version" 0 "$plain" "$SH" "$T/copy/bin/agent-mailbox" --version
+expect "even run from inside a clone" 0 "$plain" in_dir "$T/clone/bin" "$SH" "$T/copy/bin/agent-mailbox" --version
+expect "or with GIT_DIR naming one" 0 "$plain" env GIT_DIR="$T/clone/.git" GIT_WORK_TREE="$T/copy" "$SH" "$T/copy/bin/agent-mailbox" --version
+mkdir -p "$T/clone/extra"; cp "$U" "$T/clone/extra/"
+expect "a copy inside a clone that doesn't track it prints the plain version" 0 "$plain" "$SH" "$T/clone/extra/agent-mailbox" --version
+rm -rf "$T/clone/extra"
+for c in dirname basename readlink; do ln -s "$(command -v $c)" "$T/nogit/$c"; done
+out=$(PATH="$T/nogit" "$(command -v "$SH")" "$U" --version 2>&1); want=$("$SH" "$T/copy/bin/agent-mailbox" --version)
+[ "$out" = "$want" ] && ok "without git, --version prints the plain version and nothing else" ||
+  no "without git, --version prints the plain version and nothing else" "$out"
+# doctor: a notice when the clone is behind its upstream, never a failure (without ssh-keygen -Y it fails anyway)
+as u1 setup --store "$T/store" --adapter dir --name u1 >/dev/null; as u1 init >/dev/null; as u1 register --kind t --about t --no-key >/dev/null
+udoc() { HOME="$W/home-u1" "$SH" "$U" doctor; }
+drc=0; [ -n "$SSH" ] || drc=1
+expect "doctor says the CLI is up to date with its upstream" $drc "^ok   the CLI is up to date with origin/" udoc
+echo news > "$T/seed/NEWS"; (cd "$T/seed" && git add NEWS && git commit -qm v2 && git push -q "$T/up.git" HEAD)
+expect "doctor says when the CLI's clone is behind its upstream, without failing" $drc \
+  "^warn the CLI is 1 commit behind origin/[^ ]+: update it with git -C .* pull --ff-only" udoc
+# the update steps in README.md
+git -C "$T/clone" pull -q --ff-only
+expect "after a pull, --version names the new commit" 0 "\(protocol [0-9]+, $(git -C "$T/seed" rev-parse --short HEAD)\)$" "$SH" "$U" --version
+expect "and doctor finds it up to date" $drc "^ok   the CLI is up to date" udoc
+# nol <description> <command...>: doctor exits as it would anyway, and says nothing about the CLI's upstream
+nol() { d=$1; shift; out=$("$@" 2>&1); r=$?
+  if [ "$r" = "$drc" ] && ! printf '%s\n' "$out" | grep -Eq 'the CLI is (up to date|[0-9]+ commits? behind)'; then ok "$d"
+  else no "$d (exit $r)" "$out"; fi; }
+git -C "$T/clone" branch -q --unset-upstream
+nol "doctor says nothing about an upstream when there's none, and doesn't fail" udoc
+git -C "$T/clone" branch -q -u "origin/$(git -C "$T/clone" rev-parse --abbrev-ref HEAD)"
+mv "$T/up.git" "$T/up-gone.git"
+nol "or when it can't reach it" udoc
+mv "$T/up-gone.git" "$T/up.git"
+git -C "$T/clone" config remote.origin.uploadpack 'sleep 30;:'
+s0=$(date +%s); nol "or when it doesn't answer" udoc; el=$(( $(date +%s) - s0 ))
+[ "$el" -lt 25 ] && ok "doctor stops waiting for the upstream (after ${el}s)" || no "doctor waited ${el}s for an upstream that doesn't answer"
+git -C "$T/clone" config --unset remote.origin.uploadpack
+# an ssh upstream: ssh runs in batch mode (it never prompts), unless git is configured with its own ssh command
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$0.args"; exit 1\n' > "$T/fakessh/ssh"; chmod +x "$T/fakessh/ssh"
+git -C "$T/clone" remote set-url origin ssh://example.invalid/agent-mailbox.git
+nol "doctor with an ssh upstream it can't reach doesn't fail" \
+  env PATH="$T/fakessh:$PATH" GIT_ALLOW_PROTOCOL=file:ssh GIT_SSH_COMMAND= GIT_SSH= HOME="$W/home-u1" "$SH" "$U" doctor
+grep -q 'BatchMode=yes' "$T/fakessh/ssh.args" 2>/dev/null && ok "and ssh runs in batch mode" ||
+  no "ssh doesn't run in batch mode" "$(cat "$T/fakessh/ssh.args" 2>/dev/null)"
+rm -f "$T/fakessh/ssh.args"
+env GIT_ALLOW_PROTOCOL=file:ssh GIT_SSH_COMMAND="'$T/fakessh/ssh' -o Mine=1" HOME="$W/home-u1" "$SH" "$U" doctor >/dev/null 2>&1
+if grep -q 'Mine=1' "$T/fakessh/ssh.args" 2>/dev/null && ! grep -q BatchMode "$T/fakessh/ssh.args"; then
+  ok "a configured ssh command is used as is"
+else no "a configured ssh command isn't used as is" "$(cat "$T/fakessh/ssh.args" 2>/dev/null)"; fi
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
