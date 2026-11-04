@@ -43,6 +43,8 @@ First version.
 - **Fix:** commands no longer rewrite the git config of a store's checkout each time, which failed with "could not
   lock config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the
   other's name; each command's commits take its agent's name from its own environment (#XXXX).
+- **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
+  store at the same moment: the watcher's look updates only its own ref (#XXXX).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).

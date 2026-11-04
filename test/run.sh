@@ -190,6 +190,16 @@ for AD in $ADAPTERS; do
     expect "watch retries a failed peek after the store moves, and wakes" 0 "alice-fp-2\.md" failpeek 2 bob watch 1 8
     wait; retried 2 "the peek after the store moved failed and was retried"
 
+    # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
+    # from the value it read, so a peek moving it too made a concurrent send fail
+    for C in "$W/home-bob/.local/state/agent-mailbox/checkouts/"*; do :; done
+    before=$(git -C "$C" rev-parse refs/remotes/origin/main)
+    as alice send bob peek-ref "$T/body" >/dev/null 2>&1
+    peeked=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_peek mailbox/inbox/bob' sh "$ROOTDIR")
+    if ! printf '%s\n' "$peeked" | grep -q 'alice-peek-ref\.md$'; then no "the peek didn't see new mail" "$peeked"
+    elif [ "$(git -C "$C" rev-parse refs/remotes/origin/main)" = "$before" ]; then ok "a peek leaves refs/remotes/origin/main alone"
+    else no "a peek moved refs/remotes/origin/main"; fi
+
     # two agents sharing one checkout (--as): each commit carries its own name, and no command rewrites the checkout's
     # git config (concurrent commands raced to lock it, and one could commit under the other's name)
     for C in "$W/home-carol/.local/state/agent-mailbox/checkouts/"*; do :; done
