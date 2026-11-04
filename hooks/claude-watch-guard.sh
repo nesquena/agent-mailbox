@@ -29,6 +29,6 @@ alive() {
   case "$args" in *agent-mailbox*watch*) return 0 ;; *) return 1 ;; esac
 }
 alive && exit 0
-cli="$(cd "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
+cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 command -v agent-mailbox >/dev/null 2>&1 && cli=agent-mailbox
 jq -n --arg n "$name" --arg c "$cli" '{decision: "block", reason: ("The agent-mailbox watcher for \($n) is not running, so new mail would not wake this session. First run `\($c) --as \($n) read` and handle any mail (consume it, or pass --except for mail you are holding). Then re-arm it as a background command (in Claude Code, the Bash tool with run_in_background: true; never a shell & or nohup): `\($c) --as \($n) watch 120 0`. If this session is ending for good, say so and stop again.")}'

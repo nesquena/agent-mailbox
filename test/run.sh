@@ -258,6 +258,28 @@ expect "a relative link through a linked folder finds its adapters" 0 "initializ
 expect "an exported CDPATH doesn't break the lookup" 0 "initialized" env CDPATH=. HOME="$W/home-i-cdp" \
   AGENT_MAILBOX_STORE="$T/store-cdp" AGENT_MAILBOX_ADAPTER=dir sh -c "cd '$ROOTDIR' && '$SH' bin/agent-mailbox init"
 
+# install.sh by a relative path, with CDPATH exported, links the right file
+P=$(dirname "$ROOTDIR"); B=$(basename "$ROOTDIR")
+(cd "$P" && CDPATH=. "$SH" "$B/install.sh" --prefix "$T/prefix-cdp" >/dev/null 2>&1)
+got=$(readlink "$T/prefix-cdp/bin/agent-mailbox" 2>/dev/null)
+[ "$got" = "$ROOTDIR/bin/agent-mailbox" ] && ok "install.sh by relative path with CDPATH exported links the right file" ||
+  no "install.sh by relative path with CDPATH exported links the right file" "link target: $got"
+if [ -n "$SSH" ]; then
+  mkdir -p "$T/k"; ssh-keygen -q -t ed25519 -N '' -f "$T/k/rel" -C rel
+  as kr setup --store "$T/store-kr" --adapter dir --name kr >/dev/null; as kr init >/dev/null
+  expect "register --key by relative path with CDPATH exported keeps the right key" 0 "^key = .*/k/rel$" sh -c \
+    "cd '$T' && HOME='$W/home-kr' CDPATH=. '$SH' '$CLI' register --kind t --about t --key k/rel.pub >/dev/null && grep '^key' '$W/home-kr/.config/agent-mailbox/config'"
+fi
+# `bash agent-mailbox` found through PATH gets $0 without a slash: it must not load adapters from beside the
+# current folder (here, a planted one), and doctor must say why
+if command -v bash >/dev/null 2>&1; then
+  mkdir -p "$T/evil/adapters" "$T/evil/work" "$T/pathbin"; ln -s "$ROOTDIR/bin/agent-mailbox" "$T/pathbin/agent-mailbox"
+  printf 'echo planted adapter >&2; exit 9\n' > "$T/evil/adapters/dir.sh"
+  ev="cd '$T/evil/work' && HOME='$W/home-ev' PATH='$T/pathbin':\"\$PATH\" AGENT_MAILBOX_STORE='$T/store-ev' AGENT_MAILBOX_ADAPTER=dir"
+  expect "bash with the CLI found on PATH doesn't load an adapter from beside the current folder" 1 "can't find the folder" \
+    sh -c "$ev bash agent-mailbox init"
+  expect "doctor says the adapters folder wasn't found" 1 "FAIL the CLI finds its adapters folder" sh -c "$ev bash agent-mailbox doctor"
+fi
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
