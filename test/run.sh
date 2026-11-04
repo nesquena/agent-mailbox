@@ -243,6 +243,8 @@ expect "a bad branch in the config file is refused" 1 "bad branch name 'a/\.\./b
 expect "and doctor says why" 1 "FAIL the branch name is valid" env HOME="$W/home-w1" "$SH" "$CLI" --config "$T/w1.config" doctor
 expect "setup refuses a bad branch" 1 "bad branch name 'a//b'" as wb setup --store "$T/store" --adapter dir --branch a//b --name wb
 [ ! -e "$W/home-wb/.config/agent-mailbox/config" ] && ok "and writes no config" || no "setup wrote a config with a bad branch"
+expect "an empty --branch still means the default" 0 "^wrote " as wb2 setup --store "$T/store" --adapter dir --branch "" --name wb2
+expect "which is main" 0 "^branch: *main\$" as wb2 whoami
 expect "setup takes a good one" 0 "^wrote " as wb setup --store "$T/store" --adapter dir --branch team/inbox --name wb
 if [ -n "$SSH" ]; then
   ssh-keygen -q -t ed25519 -N '' -f "$T/own" -C own

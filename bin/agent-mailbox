@@ -191,7 +191,7 @@ setup)
   [ -n "$store" ] || die "usage: setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]"
   [ -z "$name" ] || valid_name "$name"
   for v in store:"$store" root:"$root" branch:"$branch"; do one_line "${v%%:*}" "${v#*:}"; done
-  branch_ok "$branch" || die "bad branch name '$branch'"
+  [ -z "$branch" ] || branch_ok "$branch" || die "bad branch name '$branch': pass --branch <name>"
   mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
