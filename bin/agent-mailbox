@@ -67,14 +67,16 @@ root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*
   case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
 lib_ok() { [ -n "${AGENT_MAILBOX_LIB:-}" ] || [ -n "$SELF_DIR" ]; }
 LIB_DIR="${AGENT_MAILBOX_LIB:-$SELF_DIR/../adapters}"
-# self_clone: succeeds when this script's folder is in a git clone that tracks the script. Never a repository the
-# current folder or the environment names: it unsets git's repository variables, so run it in a subshell.
+# self_clone: succeeds when this script is bin/agent-mailbox in a clone of agent-mailbox: a repository that tracks it
+# there, at its top, beside adapters/git.sh (not one that vendors a copy elsewhere). Never a repository the current
+# folder or the environment names: it unsets git's repository variables, so run it in a subshell.
 self_clone() {
-  # (with no folder, `git -C ""` would use the current one); without git, both commands below fail quietly
-  [ -n "$SELF_DIR" ] || return 1
+  # (with no folder, `git -C ""` would use the current one); without git, the commands below fail quietly
+  [ -n "$SELF_DIR" ] && [ "$SELF_NAME" = agent-mailbox ] || return 1
   # shellcheck disable=SC2046
   unset $(git rev-parse --local-env-vars 2>/dev/null)
-  GIT_LITERAL_PATHSPECS=1 git -C "$SELF_DIR" ls-files --error-unmatch -- "$SELF_NAME" >/dev/null 2>&1
+  [ "$(git -C "$SELF_DIR" rev-parse --show-prefix 2>/dev/null)" = bin/ ] &&
+    git -C "$SELF_DIR" ls-files --error-unmatch -- agent-mailbox ../adapters/git.sh >/dev/null 2>&1
 }
 # the commit this CLI runs from, with "+changes" when the clone's tracked files are modified; fails outside a clone
 self_rev() { (
@@ -493,13 +495,23 @@ doctor)
     [ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$SELF_DIR" config core.sshCommand 2>/dev/null)" ] ||
       { GIT_SSH_COMMAND='ssh -o BatchMode=yes'; export GIT_SSH_COMMAND; }
     GIT_TERMINAL_PROMPT=0 git -C "$SELF_DIR" fetch -q >/dev/null 2>&1 & f=$!
-    ( sleep 10; kill "$f" ) >/dev/null 2>&1 & k=$!
+    # a watchdog stops git after 10 s; stopped first, it stops (and reaps) its own sleep, so nothing is left running.
+    # ceiling: on a timeout, git's transport (ssh, git-remote-https, a local upload-pack) can outlive doctor until its
+    # own timeout; stopping git's whole process group needs job control or timeout(1), which stock macOS lacks
+    ( s=; trap '[ -z "$s" ] || { kill "$s"; wait "$s"; } 2>/dev/null; exit 0' TERM; sleep 10 & s=$!; wait "$s"; kill "$f" ) >/dev/null 2>&1 & k=$!
     wait "$f"; r=$?; kill "$k" 2>/dev/null; [ "$r" -eq 0 ] || exit 0
-    n=$(git -C "$SELF_DIR" rev-list --count "HEAD..@{u}" 2>/dev/null) || exit 0
-    if [ "$n" -eq 0 ]; then printf 'ok   the CLI is up to date with %s\n' "$up"
-    else s=s; [ "$n" -eq 1 ] && s=""
-      printf 'warn the CLI is %s commit%s behind %s: update it with git -C %s pull --ff-only (README.md, "Updating")\n' \
-        "$n" "$s" "$up" "$(git -C "$SELF_DIR" rev-parse --show-toplevel)"
+    # <ahead> <behind>: commits only the clone has, and commits only the upstream has
+    # shellcheck disable=SC2046
+    set -- $(git -C "$SELF_DIR" rev-list --left-right --count "HEAD...@{u}" 2>/dev/null); [ $# -eq 2 ] || exit 0
+    commits() { if [ "$1" -eq 1 ]; then echo "1 commit"; else echo "$1 commits"; fi; }
+    # the clone's folder, quoted for sh, so the advice can be pasted as printed
+    top=$(git -C "$SELF_DIR" rev-parse --show-toplevel | sed "s/'/'\\\\''/g")
+    if [ "$2" -eq 0 ]; then printf 'ok   the CLI is up to date with %s\n' "$up"
+    elif [ "$1" -eq 0 ]; then
+      printf "warn the CLI is %s behind %s: update it with git -C '%s' pull --ff-only (README.md, \"Updating\")\n" "$(commits "$2")" "$up" "$top"
+    else
+      printf "warn the CLI is %s behind %s, and its clone '%s' has %s of its own: merge or rebase them by hand\n" \
+        "$(commits "$2")" "$up" "$top" "$(commits "$1")"
     fi )
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||

@@ -105,7 +105,7 @@ behind its upstream branch.
   ```
 - **The Claude Code plugin:** update it from Claude Code's `/plugin` menu, then run `agent-mailbox doctor`.
 
-A `watch` that's already running keeps the old code: re-arm it after updating.
+Re-arm a running `watch` after updating, so it runs the new code.
 
 ## Configuration
 `agent-mailbox setup` writes `~/.config/agent-mailbox/config`, one `key = value` per line. Environment variables
