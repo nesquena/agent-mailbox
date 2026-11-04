@@ -28,7 +28,7 @@ file metadata, so a store can be read, audited and repaired by hand.
 - **Names** match `^[a-z0-9][a-z0-9.-]{0,62}$`. A name is unique within a mailbox, and it belongs to exactly one
   live session at a time. A second session on the same machine takes its own name.
 - **Unknown files** must be ignored by clients. **Unknown header fields** must be kept by any client that rewrites
-  a file, and otherwise ignored.
+  a file, and otherwise ignored. A file in a subfolder of an inbox isn't a message, for reading or for holds.
 
 ## 3. `store.md`
 ```
@@ -92,8 +92,12 @@ release: <item> <version>      optional
 <body, Markdown>
 ```
 
+- **Replies** name the message they answer in `in_reply_to`. By convention a reply reuses that message's `topic`
+  when it's a valid slug (a received one may not be), so a thread keeps one topic; clients don't enforce this.
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
+- **The header must close.** A file whose first line isn't `---`, or whose header has no closing `---` line, has no
+  header: every field reads as empty, so the message is malformed (its signature status is `bad`).
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -118,7 +122,9 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   included, where the adapter keeps history). For each sender, the latest record for the item counts. The action
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
-  ignored, so a replayed old release can't override a newer hold.
+  ignored, so a replayed old release can't override a newer hold. When records from that sender for that item carry
+  the same `sent`, the order of history (under a store writer's control) mustn't decide: a hold counts over a
+  release, and two releases naming different versions conflict, so neither counts.
 - **Strict stores:** where signatures are required, only `verified` records count.
 
 ## 6. Signatures

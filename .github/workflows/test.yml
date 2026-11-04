@@ -27,7 +27,7 @@ jobs:
         run: |
           for s in sh dash bash zsh; do
             command -v "$s" >/dev/null || { echo "$s not installed, skipped"; continue; }
-            for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh install.sh test/run.sh; do
+            for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh install.sh test/run.sh test/bench.sh; do
               "$s" -n "$f" || { echo "$s can't parse $f"; exit 1; }
             done
             echo "$s ok"
