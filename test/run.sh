@@ -220,6 +220,46 @@ for AD in $ADAPTERS; do
     got=$(as carol list 2>/dev/null | grep -c '\-n-d')
     [ ! -s "$T/conc.fail" ] && [ "$got" = 15 ] && ok "5 agents x 3 concurrent sends: 15/15 delivered" ||
       no "concurrent sends: $got/15 delivered, $(wc -l < "$T/conc.fail" 2>/dev/null || echo 0) failed" "$(cat "$T/conc.err" 2>/dev/null)"
+
+    # a failed peek (a network blip, a lost ref race) is retried, never read as "no mail". failpeek <n> <agent> <args...>:
+    # run the CLI with a git on PATH whose n-th peek fetch (or every one, with all) runs, then reports failure
+    mkdir -p "$W/failpeek"; printf '%s\n' '#!/bin/sh' \
+      'case " $* " in (*" fetch "*refs/agent-mailbox/peek*) n=$(($(cat "$PEEKS" 2>/dev/null || echo 0) + 1)); echo "$n" > "$PEEKS"' \
+      '  { [ "$n" = "$FAILAT" ] || [ "$FAILAT" = all ]; } && { "$REAL_GIT" "$@"; exit 1; } ;; esac' 'exec "$REAL_GIT" "$@"' > "$W/failpeek/git"
+    chmod +x "$W/failpeek/git"; real_git=$(command -v git)
+    failpeek() { (FAILAT=$1 REAL_GIT=$real_git PEEKS="$T/peeks" PATH="$W/failpeek:$PATH"
+      export FAILAT REAL_GIT PEEKS PATH; rm -f "$PEEKS"; shift; as "$@"); }
+    retried() { [ "$(cat "$T/peeks" 2>/dev/null)" -gt "$1" ] 2>/dev/null && ok "$2" || no "$2 (no peek ran after the failing one)"; }
+    for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+    as alice send bob fp-1 "$T/body" >/dev/null 2>&1
+    expect "watch retries a failed first peek, and wakes for mail already there" 0 "alice-fp-1\.md" failpeek 1 bob watch 1 4
+    retried 1 "the first peek failed and was retried"
+    for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
+    ( sleep 2; as alice send bob fp-2 "$T/body" >/dev/null 2>&1 ) &
+    expect "watch retries a failed peek after the store moves, and wakes" 0 "alice-fp-2\.md" failpeek 2 bob watch 1 8
+    wait; retried 2 "the peek after the store moved failed and was retried"
+    expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
+      failpeek all bob watch 1 30
+
+    # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
+    # from the value it read, so a peek moving it too made a concurrent send fail
+    for C in "$W/home-bob/.local/state/agent-mailbox/checkouts/"*; do :; done
+    before=$(git -C "$C" rev-parse refs/remotes/origin/main)
+    as alice send bob peek-ref "$T/body" >/dev/null 2>&1
+    peeked=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_peek mailbox/inbox/bob' sh "$ROOTDIR")
+    if ! printf '%s\n' "$peeked" | grep -q 'alice-peek-ref\.md$'; then no "the peek didn't see new mail" "$peeked"
+    elif [ "$(git -C "$C" rev-parse refs/remotes/origin/main)" = "$before" ]; then ok "a peek leaves refs/remotes/origin/main alone"
+    else no "a peek moved refs/remotes/origin/main"; fi
+
+    # two agents sharing one checkout (--as): each commit carries its own name, and no command rewrites the checkout's
+    # git config (concurrent commands raced to lock it, and one could commit under the other's name)
+    for C in "$W/home-carol/.local/state/agent-mailbox/checkouts/"*; do :; done
+    git -C "$C" config user.name stale; git -C "$C" config user.email stale@example.invalid
+    echo hi | as carol --as d1 send bob shared - >/dev/null 2>&1
+    expect "a commit from a shared checkout carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
+      git --git-dir="$STORE" log -1 --format='%an <%ae>' main
+    [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
+      no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
 done
 
@@ -355,6 +395,54 @@ for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename 
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+
+if [ -n "$SSH" ]; then
+echo "== strict stores fail closed (git)"
+T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+for a in k1 k2 k3 k4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+as k1 init --require-signatures >/dev/null; for a in k1 k2 k3 k4; do as $a register --kind t --about t >/dev/null; done
+git clone -q -b main "$T/store.git" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e
+wr() { (cd "$T/w" && git pull -q --rebase origin main 2>/dev/null && "$@" && git add -A && git commit -qm w && git push -q origin HEAD:main); }
+# k3 releases and k2 holds the same version; k1 has checked holds once, so it has pinned both keys
+echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k1 ha - --hold "a#1 v1" >/dev/null
+echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
+echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
+echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
+expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
+as k1 holds "b#1" --version v1 >/dev/null 2>&1
+# someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
+ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap
+wr sh -c "sed 's|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|' mailbox/agents/k2.md > mailbox/agents/k2.t && mv mailbox/agents/k2.t mailbox/agents/k2.md"
+expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 .*changed" as k1 holds "a#1" --version v1
+# ... or deletes k2's record: its hold reads nokey, and must still hold
+wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
+expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1
+# ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
+wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
+expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
+# ... but a hold planted under a name k1 never pinned a key for (no record, a junk signature) doesn't count
+wr sh -c "printf -- '---\nprotocol: 1\nfrom: ghost\nto: k1\ntopic: hg\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: e#1 v1\n---\n\nx\n' > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md && echo junk > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md.sig"
+expect "a hold from a name never pinned, with a junk signature, doesn't count" 0 "e#1 released by k3" as k1 holds "e#1" --version v1
+# store.md is edited to stop requiring signatures, and an unsigned release "from k3" is planted after k3's signed hold
+echo h | as k3 send k1 hc - --hold "c#1 v1" >/dev/null
+wr sh -c "sed 's/^require_signatures: true/require_signatures: false/' mailbox/store.md > mailbox/store.t && mv mailbox/store.t mailbox/store.md &&
+  printf -- '---\nprotocol: 1\nfrom: k3\nto: k1\ntopic: rc\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: c#1 v1\n---\n\nok\n' > mailbox/inbox/k1/29990101T000000Z-k3-rc.md"
+expect "a store seen strict stays strict after store.md is edited" 5 "c#1 is held by k3" as k1 holds "c#1" --version v1
+expect "and says so" 5 "still treating this store as strict" as k1 holds "c#1" --version v1
+expect "trust --relax ends that" 0 "strict for you only while" as k1 trust --relax
+expect "after which the store's own setting applies" 0 "c#1 released by k3" as k1 holds "c#1" --version v1
+# a history git can't read in full stops holds, rather than deciding from part of it. The shim fails each git command
+# whose arguments match one of the patterns in GIT_FAIL, and with GIT_SHALLOW set calls the checkout shallow
+mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
+  'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
+gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*-G*'
+expect "or the walk over every version fails" 1 "can't read this store's full, latest history" gf '*--reverse*'
+expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
+expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
+expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
+expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+fi
 
 echo "== installed link (install.sh)"
 T="$W/inst"; mkdir -p "$T"
@@ -669,7 +757,7 @@ expect "on an equal sent time, a hold beats an earlier release" 5 "item#16 is he
 # 8. two releases with the same sent time naming different versions conflict: neither counts
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14a\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14a.md"
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14b\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v2\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14b.md"
-expect "releases of different versions at the same time conflict" 5 "item#14 has releases from u2 sent at the same time" as u1 holds "item#14" --version v2
+expect "releases of different versions at the same time conflict" 5 "item#14 has releases from u2 sent at the same time.*send one release again" as u1 holds "item#14" --version v2
 expect "for either version" 5 "item#14 has releases from u2 sent at the same time" as u1 holds "item#14" --version v1
 # 9. merges don't multiply what holds reads: one hold file under several merges is one row of history
 echo h | as u2 send u1 h-15 - --hold "item#15 v1" >/dev/null
@@ -695,6 +783,29 @@ if [ -n "$SSH" ]; then
     git checkout -q main && git merge -q --no-edit side && git push -q origin HEAD:main)
   expect "an unsigned copy of a signed hold doesn't hide it" 5 "item#1 is held by sg2" as sg1 holds "item#1" --version v1
 fi
+# 11. a release sent in the same second as the sender's hold isn't lost to the tie rule: send waits for the next
+# second. The clock shim gives the first two stamps the same second, and later ones the next
+mkdir -p "$W/dshim"; printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then n=$(($(cat "$DCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$DCOUNT"' \
+  '  if [ $n -le 2 ]; then echo 20260101T000000Z; else echo 20260101T000001Z; fi; exit 0; fi' "exec '$(command -v date)' \"\$@\"" > "$W/dshim/date"; chmod +x "$W/dshim/date"
+for k in "--hold" "--release"; do echo x | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 "g17${k#--}" - $k "item#17 v1" >/dev/null 2>&1; done
+expect "a release right after a hold in the same second still counts" 0 "item#17 released by u2 at v1" as u1 holds "item#17" --version v1
+T="$W/rules"
+# 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
+  git update-index --add --cacheinfo "160000,$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x$x,mailbox/inbox/u1/29990101T000020Z-u2-gl.md" &&
+  git commit -qm "gitlink $x" || exit 1; done && git push -q origin HEAD:main)
+expect "a gitlink named like a message doesn't stop holds" 0 "item#9 released by u2" as u1 holds "item#9" --version v1
+# 13. a file whose name ends in a space isn't a message: it's skipped, never read under a trimmed name
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: sp\ncontext: general\nsent: 2999-01-01T00:00:21Z\nin_reply_to: none\nneeds: none\nhold: item#9 v1\n---\n\nheld\n' > "mailbox/inbox/u1/29990101T000021Z-u2-sp.md " &&
+  git add -A && git commit -qm sp && git rm -q "mailbox/inbox/u1/29990101T000021Z-u2-sp.md " && git commit -qm unsp && git push -q origin HEAD:main)
+expect "a file name ending in a space doesn't stop holds" 0 "item#9 released by u2" as u1 holds "item#9" --version v1
+# 13. a store that can't be reached: holds won't decide from the clone it last synced, which still shows the release
+echo r | as u2 send u1 r-18 - --release "item#18 v1" >/dev/null; as u1 holds "item#18" --version v1 >/dev/null 2>&1
+echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" "$T/store.away"
+expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
+mv "$T/store.away" "$T/store.git"
+expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"

@@ -8,7 +8,10 @@
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
-# - Commits carry the agent's mailbox name as author, never a person's name or email.
+# - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
+#   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
+# - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
+#   environment, never in the clone's config, which agents sharing the clone (`--as`) would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 
@@ -36,8 +39,9 @@ ad_open() {
     ad_git ls-files -s | awk '$1 == "120000" { sub(/^[^\t]*\t/, ""); print }' | while IFS= read -r l; do
       rm -f "$AD_DIR/$l" && ad_git checkout -q -- "$l"; done
   fi
-  ad_git config user.name "${ME:-agent-mailbox}"
-  ad_git config user.email "${ME:-agent-mailbox}@agent-mailbox.invalid"
+  GIT_AUTHOR_NAME="${ME:-agent-mailbox}" GIT_AUTHOR_EMAIL="${ME:-agent-mailbox}@agent-mailbox.invalid"
+  GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+  export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 }
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
@@ -92,7 +96,7 @@ ad_poll() { ad_git ls-remote origin "refs/heads/$BRANCH" | cut -f1; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 ad_peek() {
-  ad_git fetch -q origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_git fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
@@ -104,19 +108,28 @@ ad_peek() {
 # log -G, an extended regex, searching every file as plain text) narrows only the added versions, whose whole content
 # is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
 # unique per path, content and signature (the <path>.sig at that commit), so merges can't multiply the work and no
-# copy of a file under another signature can stand in for it; the CLI checks every listed file.
+# copy of a file under another signature can stand in for it; the CLI checks every listed file. A history it can't
+# read in full (a failed fetch, which also means the store can't be reached, or a failed git log), is reported as the
+# single row "! !", never as fewer rows: holds stops
+# on it rather than decide from part of the history. A gitlink isn't a file, so it's never listed.
 ad_history() {
-  [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && ad_git fetch -q --unshallow origin "$AD_SPEC" 2>/dev/null
-  AD_ROWS=$({ [ -z "${2:-}" ] || ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
-      --format='C %H' --text --no-textconv "-G$2" HEAD -- "$1/" 2>/dev/null | sed 's/^/G /'
+  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD)
+  u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
+  ad_git fetch -q $u origin "$AD_SPEC" 2>/dev/null || { echo '! !'; return 0; }
+  tip=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH") || { echo '! !'; return 0; }
+  AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
+      --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
-      --format='C %H' HEAD -- "$1/" 2>/dev/null; } |
+      --format='C %H' "$tip" -- "$1/" 2>/dev/null || echo '!'; } |
     awk -v g="${2:+1}" '
+      $1 == "!" || ($1 == "G" && $2 == "!") { print "!"; next }
       $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
       $1 == "C" && NF == 2 { c = $2; next }
       /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
-             if (g && f[5] == "A" && !((c " " p) in m)) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
+             if (f[2] == "160000" || (g && f[5] == "A" && !((c " " p) in m))) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
   [ -n "$AD_ROWS" ] || return 0
+  # every row starts with a commit id, so a row starting with "!" is a failure marker: report it, and nothing else
+  if printf '%s\n' "$AD_ROWS" | grep -q '^!'; then echo '! !'; return 0; fi
   # the signature blob of each row, one line per row ("<name> missing" when there is none); a row left without
   # one (cat-file failed) is still listed
   { printf '%s\n' "$AD_ROWS"; echo =

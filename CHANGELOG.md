@@ -18,9 +18,21 @@ First version.
   `git log -G`), instead of every message ever delivered. On a 600-message mailbox it went from 5.6 s to 0.14 s.
 - **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
+- **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
+  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
+  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
+  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
+  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
+  included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+- **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
+  version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
+- **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
+  release in that store waits for the next second, since records with an equal `sent` time let the hold win (#23).
 - **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
-  `read`; a header with no closing `---` has no fields, so the message reads `bad`; when records from one sender
-  carry the same `sent` time, a hold counts over a release, and releases of different versions conflict.
+  `read`. Every front-matter file's header must close, or it has no fields: a message reads `bad`; a registry
+  record's agent isn't active and its signed mail reads `nokey`; a `store.md` is refused until fixed. When records
+  from one sender for one item carry the same `sent` time, a hold counts over a release, and two releases with
+  different versions conflict, which blocks like a hold until that sender's next record.
 - **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
 - **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
   link instead of beside the script (#1).
@@ -62,6 +74,15 @@ First version.
   marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
   bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
   `misrouted`, as `read` does (#22).
+- **Fix:** `watch` no longer misses mail when a look at the store fails (a network blip, or another command in the
+  same checkout updating it at that moment); it tries again at the next poll, and 10 failed reads in a row end it with
+  an error, as 10 failed polls do (#24).
+- **Fix:** commands no longer rewrite the git config of a store's checkout each time, which printed "could not lock
+  config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the other's
+  name. Each command's commits take its agent's name from its own environment, so a person's exported
+  `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` never reaches the store either (#24).
+- **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
+  store at the same moment: the watcher's look updates only its own ref (#24).
 - **`--version` names the commit** when the CLI runs from a git clone (`agent-mailbox 0.1.0 (protocol 1, 3c62193)`,
   with `+changes` for local edits); elsewhere it prints the version as before. `README.md` and `JOIN.md` say how to
   check for an update and apply it (#13).
