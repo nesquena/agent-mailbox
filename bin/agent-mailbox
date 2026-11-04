@@ -21,7 +21,8 @@
 #   list                                your inbox, oldest first (exit 0: some, 3: none)
 #   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
 #   consume <file>...                   remove messages you've acted on (the read receipt)
-#   verify <file>                       check one message's signature (exit 0: verified, 6: not)
+#   verify <file>                       check one message's signature; a bare file name is looked up in your
+#                                       inbox (exit 0: verified, 6: not)
 #   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
 #                                       --version, exit 0 only if every sender's latest record releases it (else 5)
 #   watch [interval=120] [max=7000] [--except <file>]...
@@ -118,6 +119,35 @@ set_cfg() {
   rest=$( [ -f "$CONFIG" ] && grep -v "^$1[[:space:]]*=" "$CONFIG" ); put "$CONFIG" "$(printf '%s\n%s = %s' "$rest" "$1" "$2" | sed '/^$/d')"
 }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; else shasum -a 256 | cut -c1-16; fi; }
+# Text from the store is shown with the characters that move the cursor or reorder a line spelled out, so it can't
+# overwrite a line or disguise what it says: C0 controls but tab and line feed, DEL and NUL as \xNN; C1 controls,
+# Unicode's bidi embeddings, overrides and isolates, its line/paragraph separators and its tag characters as <U+XXXX>. A carriage return
+# just before a line feed (Windows line endings) is dropped. ESC is a sed script for LC_ALL=C (byte by byte, the same
+# in GNU and BSD sed), built with printf's octal escapes.
+esc_script() {
+  c0="" n=1; while [ $n -le 31 ]; do [ $n = 9 ] || [ $n = 10 ] || c0="$c0 $n $n"; n=$((n+1)); done
+  c1="" n=128; while [ $n -le 159 ]; do c1="$c1 $n $n"; n=$((n+1)); done
+  # <second byte> <third byte> <code point> of each three-byte (E2 xx xx) character
+  u=""; for b in 168 169 170 171 172 173 174; do u="$u 128 $b $((8064 + b))"; done
+  for b in 166 167 168 169; do u="$u 129 $b $((8128 + b))"; done
+  # <third byte> <fourth byte> <code point> of each tag character (U+E0000-E007F, F3 A0 xx xx), which can carry text
+  # a reader never sees
+  t=""; for c in 128 129; do b=128; while [ $b -le 191 ]; do t="$t $c $b $((917504 + (c - 128) * 64 + b - 128))"; b=$((b+1)); done; done
+  # shellcheck disable=SC2086
+  printf "$(printf 's/\\015$//\\n/[\\001-\\010\\013-\\037\\177\\302\\342\\363\\377]/{\\n'
+    printf 's/\\%03o/\\\\\\\\x%02x/g\\n' $c0 127 127 255 0
+    printf 's/\\302\\%03o/<U+%04X>/g\\n' $c1
+    printf 's/\\342\\%03o\\%03o/<U+%04X>/g\\n' $u
+    printf 's/\\363\\240\\%03o\\%03o/<U+%05X>/g\\n' $t; printf '}')"
+}
+ESC=$(esc_script)
+# clean [<sed script>]: stdin to stdout, escaped as above, then the optional script. tr maps NUL (which sed can't
+# name and a shell's $(...) drops) to 0xff, which ESC shows as \x00. ceiling: a raw 0xff byte (never in UTF-8 text)
+# shows as \x00 too, and stray 0x80-0xff bytes that aren't UTF-8 pass as is; escaping them needs a UTF-8 decoder.
+clean() { LC_ALL=C tr '\000' '\377' | LC_ALL=C sed -e "$ESC" ${1:+-e "$1"}; }
+# CAP: a sed script for LC_ALL=C that cuts a line longer than 200 bytes to 200, without splitting a UTF-8
+# character, and marks the cut with "..."
+CAP=$(printf '/^.\\{201\\}/{\ns/^\\(.\\{200\\}\\).*/\\1/\ns/[\300-\337]$//\ns/[\340-\357][\200-\277]\\{0,1\\}$//\ns/[\360-\367][\200-\277]\\{0,2\\}$//\ns/$/.../\n}')
 
 # --- the store, through its adapter (contract: adapters/README.md) --------------------------------------------------
 load_adapter() {
@@ -295,7 +325,9 @@ agents)
     k=no; [ -n "$(reg_key "$r")" ] && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
-    printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$(field status "$r")" "$(field kind "$r")" "$k" "$(field about "$r")"
+    # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows
+    printf '%s\n%s\n%s\n' "$(field status "$r")" "$(field kind "$r")" "$(field about "$r")" | clean "$CAP" |
+      { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
   done ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name>"; valid_name "$1"; load_adapter; ad_sync
@@ -356,7 +388,7 @@ list)
   [ $# -eq 0 ] || unknown "$1"
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
-  printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done ;;
+  printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean ;;
 read)
   except=""
   while [ $# -gt 0 ]; do
@@ -368,8 +400,10 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # a body line can't pass for a boundary: it is indented, and each message ends with its own marker
-    sed 's/^=====/ =====/' "$p"; printf '===== end %s\n\n' "$(rel "$p")"
+    # a body line can't pass for a boundary: a line whose first = comes after nothing but non-ASCII bytes (so no
+    # visible ASCII text, and no invisible character can hide what comes first) is indented; a last line without its newline gets one, and each
+    # message ends with its own marker
+    clean 's/^[^ -~]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
@@ -388,11 +422,12 @@ consume)
   echo "consumed" ;;
 verify)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
-  # by path, by path in the store, or by message file name (searched in every inbox; a name only, never a pattern)
-  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"
-  if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && f=$(find "$M/inbox" -name "$b" -type f | head -n 1); fi
+  # by path, by path in the store, or by message file name in your own inbox (a name only, never a pattern)
+  # (by name it's checked as mail to you, so a copy addressed to someone else reads misrouted, as in read)
+  f=$1 inb=""; [ -f "$f" ] || f="$AD_DIR/$1"
+  if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && { need_me; f="$M/inbox/$ME/$b" inb=$ME; }; fi
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
-  v=$(verify_file "$f"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
+  v=$(verify_file "$f" "$inb"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)
   item="" version=""
   while [ $# -gt 0 ]; do
@@ -471,7 +506,7 @@ watch)
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
               case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
   last=$(ad_poll 2>/dev/null) || last=""
-  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
+  mail=$(check) && [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
   # a store it can't reach ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
   while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
@@ -482,7 +517,7 @@ watch)
     [ "$now" != "$last" ] || continue
     if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store"; fi
     last=$now
-    [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail"; exit 0; }
+    [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
   done
   echo "no mail for $ME after ${max}s"; exit 2 ;;
 whoami)
