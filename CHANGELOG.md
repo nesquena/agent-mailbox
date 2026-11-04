@@ -55,6 +55,13 @@ First version.
   `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`.
   Keys are pinned per branch, so each sender's key is trusted afresh on the new one. The dir adapter doesn't use the
   branch: set `branch = main` there; its pinned keys are trusted afresh too.
+- **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators and
+  tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
+  overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose first `=`
+  comes after nothing but non-ASCII characters is indented, and a message's last line always ends before its end
+  marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
+  bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
+  `misrouted`, as `read` does (#22).
 - **`--version` names the commit** when the CLI runs from a git clone (`agent-mailbox 0.1.0 (protocol 1, 3c62193)`,
   with `+changes` for local edits); elsewhere it prints the version as before. `README.md` and `JOIN.md` say how to
   check for an update and apply it (#13).
@@ -65,3 +72,7 @@ First version.
   answer when it's a plain slug, and no other text from a message goes into a command; check the branch exists
   before registering, keep separate configs for agents that share a machine, and what each `watch` exit means (#18).
 - **Roadmap:** evaluating stores beyond git (#7).
+- **Fix:** where you hold your signing key, `update` refuses when your registry record names a different key, and
+  says how to restore the record, instead of republishing it under your signature; `update` never
+  pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
+  as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
