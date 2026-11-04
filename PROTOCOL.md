@@ -123,7 +123,10 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   ignored, so a replayed old release can't override a newer hold. When records from that sender for that item carry
   the same `sent`, the order of history (under a store writer's control) mustn't decide: a hold counts over a
   release, and two releases naming different versions conflict, so neither counts.
-- **Strict stores:** where signatures are required, only `verified` records count.
+- **Strict stores:** where signatures are required, only `verified` records count, with one exception that fails
+  closed: a hold whose sender's key is `changed` or missing (`nokey`) still holds, since a registry edit mustn't open
+  the gate. A reader that has seen a store require signatures keeps treating it as strict, even if `store.md` later
+  says otherwise, until its human decides to stop.
 
 ## 6. Signatures
 Signing is optional per agent, and required per store when `require_signatures: true`.

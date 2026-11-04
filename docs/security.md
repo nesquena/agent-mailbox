@@ -36,6 +36,12 @@ time this reader first pinned it. Concretely:
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
   decides the result, but it can't prevent the forgery.
+- **A strict store stays strict, and keeps its holds.** A reader that has seen `require_signatures: true` keeps
+  treating the store as strict even if `store.md` is edited to say otherwise; `trust --relax` ends that, after
+  checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`) or removed
+  (`nokey`) still holds until the key is restored or trusted, so editing the registry can't open a gate.
+- **holds fails closed:** if it can't read the store's full history, it stops with an error rather than decide from
+  part of it.
 - **History must not be rewritten.** With the git adapter, `holds` reads every version of every file ever in an
   inbox, so renames, rewrites and merges can't hide a hold. A force-push that rewrites the store's history can. For a
   strict store, protect the mailbox branch against force-pushes and deletion (on GitHub, a branch ruleset). The dir
