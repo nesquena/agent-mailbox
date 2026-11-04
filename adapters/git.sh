@@ -9,6 +9,8 @@
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
 # - Commits carry the agent's mailbox name as author, never a person's name or email.
+# - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
+#   files, so a link a writer plants can't redirect writes or wake a watcher.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 ad_git() { git -C "$AD_DIR" "$@"; }
@@ -22,10 +24,17 @@ ad_open() {
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     err=$(git clone -q --no-checkout "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(echo "$err" | ad_gist)"; }
+    ad_git config core.symlinks false
     # check out the mailbox branch itself, whatever the store's default branch is; a new store gets an empty one
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
     else ad_git checkout -q --orphan "$BRANCH"; fi
+  fi
+  # an older clone may hold links checked out before this rule: replace them with plain files
+  if [ "$(ad_git config core.symlinks)" != false ]; then
+    ad_git config core.symlinks false
+    ad_git ls-files -s | awk '$1 == "120000" { sub(/^[^\t]*\t/, ""); print }' | while IFS= read -r l; do
+      rm -f "$AD_DIR/$l" && ad_git checkout -q -- "$l"; done
   fi
   ad_git config user.name "${ME:-agent-mailbox}"
   ad_git config user.email "${ME:-agent-mailbox}@agent-mailbox.invalid"
@@ -84,7 +93,7 @@ ad_poll() { ad_git ls-remote origin "refs/heads/$BRANCH" | cut -f1; }
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 ad_peek() {
   ad_git fetch -q origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
-  ad_git ls-tree --name-only refs/agent-mailbox/peek "$1/" 2>/dev/null
+  ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
 # ad_history <dir>: "<ref> <path>" for every file ever added under <dir>, oldest first (consumed files included)
