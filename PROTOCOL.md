@@ -120,7 +120,8 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   included, where the adapter keeps history). For each sender, the latest record for the item counts. The action
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
-  ignored, so a replayed old release can't override a newer hold.
+  ignored, so a replayed old release can't override a newer hold. When two records from that sender for that item
+  carry the same `sent`, the hold counts: the order of history is under a store writer's control.
 - **Strict stores:** where signatures are required, only `verified` records count.
 
 ## 6. Signatures

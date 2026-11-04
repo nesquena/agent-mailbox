@@ -402,8 +402,10 @@ holds)
   rm -rf "$tmpd"
   [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '$3 == i')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
-  # already seen from that sender for that item is a replay and is ignored
-  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; if (!(k in t) || $1 >= t[k]) { t[k] = $1; last[k] = $0 } }
+  # already seen from that sender for that item is a replay and is ignored. On an equal sent time a hold wins: a store
+  # writer controls history order, so order mustn't decide between a hold and a release
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5
+      if (!(k in t) || $1 > t[k] || ($1 == t[k] && ($2 == "hold" || kind[k] != "hold"))) { t[k] = $1; kind[k] = $2; last[k] = $0 } }
                                   END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
   if [ -z "$version" ]; then
     [ -n "$latest" ] && echo "$latest" || echo "no holds or releases recorded in mail to $ME${item:+ for $item}"

@@ -459,6 +459,20 @@ sleep 1; echo h | as u2 send u1 h-2 - --hold "item#2 v1" >/dev/null
   git rm -q -r mailbox/inbox/u1 && git checkout side -- mailbox/inbox/u1 && git commit -qm merge && git push -q origin HEAD:main &&
   git checkout -q main && git reset -q --hard origin/main)
 expect "a hold dropped by a merge still counts" 5 "item#2 is held by u2" as u1 holds "item#2" --version v1
+# 6. a hold that exists only in a merge commit (in neither parent), read by a user whose git config turns merge diffs off
+echo r | as u2 send u1 r-11 - --release "item#11 v1" >/dev/null; sleep 1
+(cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD) &&
+  git checkout -q -b side2 "$base" && echo y > note2.txt && git add note2.txt && git commit -qm side2 && git checkout -q main &&
+  echo z > note3.txt && git add note3.txt && git commit -qm main3 && { git merge -q --no-ff --no-commit side2 >/dev/null 2>&1 || :; } &&
+  printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h11\ncontext: general\nsent: 2999-01-01T00:00:06Z\nin_reply_to: none\nneeds: none\nhold: item#11 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000006Z-u2-h11.md &&
+  git add -A && git commit -qm evil-merge && git push -q origin HEAD:main)
+printf '[log]\n\tdiffMerges = off\n' >> "$W/home-u1/.gitconfig"
+expect "a hold only in a merge commit still counts, whatever the reader's git config" 5 "item#11 is held by u2" as u1 holds "item#11" --version v1
+sed -i.bak '/diffMerges/d; /^\[log\]$/d' "$W/home-u1/.gitconfig"; rm -f "$W/home-u1/.gitconfig.bak"
+# 7. a hold and a release with the same sent time: the hold counts, whatever order history puts them in
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h12\ncontext: general\nsent: 2999-01-01T00:00:07Z\nin_reply_to: none\nneeds: none\nhold: item#12 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000007Z-u2-h12.md"
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r12\ncontext: general\nsent: 2999-01-01T00:00:07Z\nin_reply_to: none\nneeds: none\nrelease: item#12 v1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000007Z-u2-r12.md"
+expect "on an equal sent time, a hold beats a later release" 5 "item#12 is held by u2" as u1 holds "item#12" --version v1
 sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 
