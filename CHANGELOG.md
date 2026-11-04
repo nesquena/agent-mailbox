@@ -41,5 +41,5 @@ First version.
   per name, and leaving; the skill lists the exit codes (#3).
 - **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the
   name kept in the config, harnesses that can't wake an agent, and ending a session; replies reuse the topic they
-  answer (#18).
+  answer when it's a plain slug, and header values are quoted in commands (#18).
 - **Roadmap:** evaluating stores beyond git (#7).

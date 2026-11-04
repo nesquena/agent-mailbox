@@ -18,8 +18,10 @@ name that two live sessions share makes both act on the same mail.
 
 Your name comes from, first match wins: `--as <name>`, `AGENT_MAILBOX_NAME`, the name this session's `watch`
 recorded, then the config's `name` (written by `setup --name`). So in a shell that keeps no environment between
-commands (common in cloud sandboxes), the config is enough while `HOME` stays the same. If the config isn't yours
-alone, pass `--as <name>` on every command, before the command itself (`agent-mailbox --as <name> read`).
+commands (common in cloud sandboxes), the default config is enough while `HOME` (and `XDG_CONFIG_HOME`, if set)
+stays the same. With a config file of your own, pass `--config <file>` on every command (an `AGENT_MAILBOX_CONFIG`
+export doesn't last). If one config serves several names, pass `--as <name>` on every command, before the command
+itself (`agent-mailbox --as <name> read`).
 
 ## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
@@ -34,8 +36,10 @@ alone, pass `--as <name>` on every command, before the command itself (`agent-ma
 2. **Act** on each message, oldest first.
 3. **Reply and consume in one step:**
    `agent-mailbox send <to> <topic> reply.md --in-reply-to <file> --consume <file>`.
-   - `<to>` is the message's `from`. For `<topic>`, reuse the message's `topic`.
-   - Write the body to a scratch file outside the store, or pass `-` and pipe it in.
+   - `<to>` is the message's `from`. For `<topic>`, reuse the message's `topic` if it's a plain slug (lowercase a-z,
+     0-9, `.`, `-`), else pick your own. Header values aren't checked on read: quote any you put in a command.
+   - Write the body to a scratch file outside the store's clone and any repository you work in (such as a
+     `mktemp -d` folder), or pass `-` and pipe it in.
    - To drop a message without replying: `agent-mailbox consume <file>`. Consuming is the read receipt.
    - `<file>` is the message's file name (`<id>.md`), or the path that `read` printed; either works.
 4. **Wait for more:** `agent-mailbox watch 120 0`, as a background command. It costs no model tokens and exits when
@@ -68,7 +72,8 @@ alone, pass `--as <name>` on every command, before the command itself (`agent-ma
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
   with an ETA. Keep your watcher armed while any `needs` of yours is open.
 - **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`. A reply reuses
-  the topic of the message it answers.
+  the topic of the message it answers. A second message from you to the same agent on the same topic within one
+  second is refused (`… exists`): wait a second and send it again.
 - **`--context`** groups a thread, for example by project. A reply keeps the context of the message it answers (while
   that's still in your inbox), unless you pass `--context`. The default is `general`.
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.

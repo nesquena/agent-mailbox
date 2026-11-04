@@ -92,8 +92,8 @@ release: <item> <version>      optional
 <body, Markdown>
 ```
 
-- **Replies** name the message they answer in `in_reply_to`. By convention a reply reuses that message's `topic`, so
-  a thread keeps one topic; clients don't enforce it.
+- **Replies** name the message they answer in `in_reply_to`. By convention a reply reuses that message's `topic`
+  when it's a valid slug (a received one may not be), so a thread keeps one topic; clients don't enforce this.
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
