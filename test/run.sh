@@ -279,6 +279,58 @@ case " $ADAPTERS " in *" git "*)
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
 
+  echo "== git: what a store holds can't change how the CLI's checkout works"
+  T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
+  for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
+  k=--no-key; [ -z "$SSH" ] || k=
+  as p1 init >/dev/null; as p1 register --kind t --about t $k >/dev/null; as p2 register --kind t --about t $k >/dev/null
+  # p1 and p3 have git-lfs set up (a stand-in that leaves a mark when git runs it) and recurse into active submodules
+  for a in p1 p3; do g="$W/home-$a/.gitconfig"; git config -f "$g" filter.lfs.process "touch '$T/lfs-ran'; exit 1"
+    git config -f "$g" filter.lfs.clean "touch '$T/lfs-ran'; cat"; git config -f "$g" filter.lfs.smudge "touch '$T/lfs-ran'; cat"
+    git config -f "$g" filter.lfs.required true; git config -f "$g" submodule.recurse true; git config -f "$g" submodule.active .; done
+  # the store gains line-ending and LFS rules, an LFS server address and a submodule, after p2 has its checkout
+  git clone -q -b main "$S" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e &&
+    printf '* -text -filter\n' > "$T/w/.git/info/attributes" && (cd "$T/w" &&
+    printf '* text eol=crlf\nmailbox/inbox/** filter=lfs\n' > .gitattributes && printf '[lfs]\n\turl = http://127.0.0.1:9/\n' > .lfsconfig &&
+    printf '[submodule "s"]\n\tpath = mailbox/inbox/p2/s\n\turl = %s\n' "$T/none.git" > .gitmodules &&
+    git add -A && git update-index --add --cacheinfo "160000,1111111111111111111111111111111111111111,mailbox/inbox/p2/s" && git commit -qm plant &&
+    git push -q origin HEAD:main)
+  expect "a send through a checkout of that store works" 0 "^sent mailbox/inbox/p2/" sh -c "echo 'line one
+line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
+  [ ! -e "$T/lfs-ran" ] && ok "git never ran the LFS filter the store asked for" || no "git ran the LFS filter"
+  f=$(git --git-dir="$S" ls-tree -r --name-only main | grep 'p1-planted\.md$'); git --git-dir="$S" show "main:$f" > "$T/blob"
+  [ "$(head -n 1 "$T/blob")" = --- ] && ! grep -q "$(printf '\r')" "$T/blob" && ok "the store holds the message as written" ||
+    no "the store holds the message changed" "$(head -n 3 "$T/blob")"
+  for C in "$W/home-p2/.local/state/agent-mailbox/checkouts/"*; do :; done
+  expect "an existing checkout still reads" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and holds the message byte for byte" || no "the existing checkout's copy differs from the store's"
+  expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
+  for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
+  cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"
+  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
+  [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
+
+  # a new agent clones only the mailbox branch, however much else the store holds
+  (cd "$T/w" && git checkout -q -b big && echo big > big.txt && git add big.txt && git commit -qm big && git push -q origin big)
+  as p4 list >/dev/null 2>&1
+  for C in "$W/home-p4/.local/state/agent-mailbox/checkouts/"*; do :; done
+  # (a clone from a local path copies every object, so look at what it tracks: over a network that's what it fetches)
+  [ -z "$(git -C "$C" for-each-ref --format='%(refname)' | grep big)" ] && ok "a new checkout fetches only the mailbox branch" ||
+    no "a new checkout fetched another branch" "$(git -C "$C" for-each-ref --format='%(refname)')"
+  # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
+  expect "doctor on a branch the store doesn't have says it isn't initialized" 1 "FAIL the store is reachable and initialized" \
+    env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
+  expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
+  [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
+    ok "and the new branch holds only its own mailbox" || no "the new branch carries other files" "$(git --git-dir="$S" ls-tree -r --name-only other)"
+
+  # an unreachable store is an error, never an empty inbox
+  mv "$S" "$T/away.git"
+  expect "list on an unreachable store fails, rather than say there's no mail" 1 "can't update from the store" as p2 list
+  expect "and doctor says the store can't be reached" 1 "FAIL the store is reachable" as p2 doctor
+  mv "$T/away.git" "$S"
+  expect "list works again once it can be reached" 0 "p1-planted\.md" as p2 list
+
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -766,7 +818,7 @@ expect "a file name ending in a space doesn't stop holds" 0 "item#9 released by 
 # 13. a store that can't be reached: holds won't decide from the clone it last synced, which still shows the release
 echo r | as u2 send u1 r-18 - --release "item#18 v1" >/dev/null; as u1 holds "item#18" --version v1 >/dev/null 2>&1
 echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" "$T/store.away"
-expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
+expect "holds won't decide while the store can't be reached" 1 "can't update from the store" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
 

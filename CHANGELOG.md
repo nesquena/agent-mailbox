@@ -94,3 +94,15 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
+- **Fix:** the git adapter's clone of the store ignores the store's own `.gitattributes` and `.lfsconfig` (no
+  line-ending conversion, no filters such as Git LFS, no merge drivers) and never recurses into submodules, so every
+  message is checked out exactly as it was stored and its signature verifies, whatever git settings the store or
+  your git config carry (#XXXX).
+- **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
+  for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
+  (#XXXX).
+- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store
+  (#XXXX).
+- **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
+  empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
+  initialized and `init` said a mailbox already existed (#XXXX).

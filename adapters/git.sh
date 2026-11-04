@@ -14,24 +14,43 @@
 #   environment, never in the clone's config, which agents sharing the clone (`--as`) would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
+# - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
+#   line-ending conversion, filters and merge and diff drivers, and git runs with LFS filters and submodule recursion
+#   off, so every file is checked out exactly as stored.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" "$@"; }
+ad_git() { git -C "$AD_DIR" -c filter.lfs.process= -c filter.lfs.smudge= -c filter.lfs.clean= -c filter.lfs.required=false \
+  -c submodule.recurse=false "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
+
+# ad_attrs: make the store's own attributes inert in this clone (an older clone gets the file on its next command)
+AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff !merge'
+ad_attrs() {
+  af="$AD_DIR/.git/info/attributes" al=
+  [ ! -f "$af" ] || IFS= read -r al < "$af"
+  [ "$al" = "$AD_ATTRS" ] && return 0
+  mkdir -p "$AD_DIR/.git/info" && printf '%s\n' "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af" || die "can't write $af"
+}
 
 ad_open() {
   command -v git >/dev/null 2>&1 || die "the git adapter needs git"
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
-    err=$(git clone -q --no-checkout -- "$STORE" "$AD_DIR" 2>&1) || { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
+    # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
+    err=$(git clone -q --no-checkout --single-branch --branch "$BRANCH" -- "$STORE" "$AD_DIR" 2>&1) ||
+      { rm -rf "$AD_DIR"; err=$(git clone -q --no-checkout --single-branch -- "$STORE" "$AD_DIR" 2>&1); } ||
+      { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
-    # check out the mailbox branch itself, whatever the store's default branch is; a new store gets an empty one
+    ad_attrs
+    # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
+    # one, holding none of the default branch's files
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
-    else ad_git checkout -q --orphan "$BRANCH"; fi
+    else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; fi
+  else ad_attrs
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then
@@ -47,9 +66,9 @@ ad_open() {
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
-    # an empty store has no branch yet: that's not an error
-    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1 && { printf '%s\n' "$ferr"; return 1; }
-    return 0; }
+    # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is
+    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; [ $? = 2 ] && return 0
+    printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
