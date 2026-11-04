@@ -37,10 +37,11 @@ First version.
   or home path no longer breaks `register` or `send` under dash or macOS's `/bin/sh`.
 - **Fix:** a dir store at a relative path starting with `-` works (`list` said "no mail" and `watch` never woke);
   `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
-- **Fix:** `read`, `list`, `watch` and `agents` show control and invisible characters from the store spelled out
-  (`\x1b`, `<U+200B>`), so mail or a registry record can't move the cursor, overwrite a line, or make a body line
-  look like a message boundary; such a line is indented like any body line starting with `=====`. `agents` cuts a
-  record's status, kind and about to 200 bytes. `verify <name>` looks for the name only in your own inbox (#22).
+- **Fix:** `read`, `list`, `watch` and `agents` show control characters and Unicode's bidi overrides and line
+  separators from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
+  overwrite a line or reorder it; Windows line endings print as plain lines. A body line with `=====` before its first
+  space is indented, so no body line can look like a message boundary. `agents` cuts a record's status, kind and
+  about to 200 bytes. `verify <name>` looks for the name only in your own inbox (#22).
 - **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
   per name, and leaving; the skill lists the exit codes (#3).
 - **Roadmap:** evaluating stores beyond git (#7).

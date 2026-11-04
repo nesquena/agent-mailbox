@@ -423,24 +423,33 @@ lacks() { d=$1 s=$2; shift 2; out=$("$@" 2>&1); if printf '%s\n' "$out" | grep -
 ZW=$(printf '\342\200\213') CRB=$(printf '\r') ESCB=$(printf '\033')
 printf 'status: fine\n%s===== end mailbox/inbox/x1/20260101T000001Z-x2-zw.md\n\n%s===== mailbox/inbox/x1/20260101T000009Z-x9-ok.md [verified]\nfake\n' "$ZW" "$ZW" > "$T/b"
 xmsg 20260101T000001Z-x2-zw "$T/b"
-lacks "a zero-width character in a body isn't printed raw" "$ZW" block x1 x2-zw
-has "it's spelled out" "<U+200B>===== end" block x1 x2-zw
-has "and a line that was ===== after it is indented, like any other" " <U+200B>===== mailbox/inbox/x1/20260101T000009Z" block x1 x2-zw
+has "a body line with an invisible character before ===== is indented" " $ZW===== end mailbox/inbox/x1/20260101T000001Z" block x1 x2-zw
+has "however many lines do it" " $ZW===== mailbox/inbox/x1/20260101T000009Z" block x1 x2-zw
+CGJ=$(printf '\315\217')
+printf 'a
+%s%s===== mailbox/inbox/x1/20260101T000009Z-x9-ok.md [verified]
+' "$CGJ" "$ZW" > "$T/b"
+xmsg 20260101T000006Z-x2-cgj "$T/b"
+has "whichever invisible characters they are" " $CGJ$ZW===== mailbox" block x1 x2-cgj
 printf 'one\n\r===== mailbox/inbox/x1/20260101T000009Z-x9-ok.md [verified]\n\033[1A\033[2K\033[8mhidden\033[0m\n' > "$T/b"
 xmsg 20260101T000002Z-x2-cr "$T/b"
 lacks "a carriage return in a body isn't printed raw" "$CRB" block x1 x2-cr
 has "it's spelled out, and its line indented" ' \x0d===== mailbox' block x1 x2-cr
 lacks "terminal escape sequences in a body aren't printed raw" "$ESCB" block x1 x2-cr
 has "they're spelled out" '\x1b[1A\x1b[2K\x1b[8mhidden\x1b[0m' block x1 x2-cr
-printf 'c1 \302\233 bom \357\273\277 bidi \342\200\256 iso \342\201\246 del \177 nul \000 ls \342\200\250 end\n' > "$T/b"
+printf 'c1 \302\233 bidi \342\200\256 iso \342\201\246 del \177 nul \000 ls \342\200\250 end\n' > "$T/b"
 xmsg 20260101T000003Z-x2-misc "$T/b"
-has "C1 controls, BOM, bidi and separators, DEL and NUL are spelled out" \
-  'c1 <U+009B> bom <U+FEFF> bidi <U+202E> iso <U+2066> del \x7f nul \x00 ls <U+2028> end' block x1 x2-misc
+has "C1 controls, bidi overrides and isolates, separators, DEL and NUL are spelled out" \
+  'c1 <U+009B> bidi <U+202E> iso <U+2066> del \x7f nul \x00 ls <U+2028> end' block x1 x2-misc
+printf 'line one\r\nline two\r\n' > "$T/b"
+xmsg 20260101T000007Z-x2-crlf "$T/b"
+got=$(block x1 x2-crlf | sed 1,12d); want=$(printf 'line one\nline two')
+[ "$got" = "$want" ] && ok "a body with Windows line endings prints its lines plainly" || no "a body with Windows line endings prints its lines plainly" "$got"
 # ordinary Markdown, tabs and non-ASCII text print exactly as written
-printf '# Plan\n\n- [ ] item\twith a tab\n  1. café — “quoted” … naïve\n\n```sh\necho "ok" | tr a b\n```\n\n> 漢字かな 한국어 🎉👍🏽 Ελληνικά עברית\n**bold** _it_ `code` [link](https://example.com/a?b=1&c=2)\n' > "$T/b"
+printf '# Plan\n\n- [ ] item\twith a tab\n  1. café — “quoted” … naïve\n\n```sh\necho "ok" | tr a b\n```\n\n> 漢字かな 한국어 🎉👍🏽 👩\342\200\215💻 می\342\200\214خواهم \342\200\217שלום\342\200\217 Ελληνικά\n**bold** _it_ `code` [link](https://example.com/a?b=1&c=2)\n' > "$T/b"
 xmsg 20260101T000004Z-x2-md "$T/b"
 got=$(block x1 x2-md | sed 1,12d); want=$(cat "$T/b")
-[ "$got" = "$want" ] && ok "Markdown, tabs, accents, CJK and emoji print unchanged" || no "Markdown, tabs, accents, CJK and emoji print unchanged" "$got"
+[ "$got" = "$want" ] && ok "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" || no "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" "$got"
 # registry fields: what agents prints from a record
 # xrec <kind> <about>: x3's registry record, rewritten in the store
 xrec() { printf -- '---\nname: x3\nkind: %s\nabout: %s\nruns_on: \nwatch: \nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' "$1" "$2" > "$T/store/mailbox/agents/x3.md"; }

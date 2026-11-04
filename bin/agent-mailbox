@@ -110,22 +110,22 @@ set_cfg() {
   rest=$( [ -f "$CONFIG" ] && grep -v "^$1[[:space:]]*=" "$CONFIG" ); put "$CONFIG" "$(printf '%s\n%s = %s' "$rest" "$1" "$2" | sed '/^$/d')"
 }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-16; else shasum -a 256 | cut -c1-16; fi; }
-# Text from the store is shown with its control and invisible characters spelled out, so it can't move the cursor,
-# overwrite a line, or hide what it is from a reader: C0 controls but tab and line feed, DEL and NUL as \xNN; C1
-# controls and Unicode's zero-width, bidi, word-joiner, BOM and line/paragraph separators as <U+XXXX>. ESC is a
-# sed script for LC_ALL=C (byte by byte, the same in GNU and BSD sed), built with printf's octal escapes.
+# Text from the store is shown with the characters that move the cursor or reorder a line spelled out, so it can't
+# overwrite a line or disguise what it says: C0 controls but tab and line feed, DEL and NUL as \xNN; C1 controls,
+# Unicode's bidi embeddings, overrides and isolates, and its line/paragraph separators as <U+XXXX>. A carriage return
+# just before a line feed (Windows line endings) is dropped. ESC is a sed script for LC_ALL=C (byte by byte, the same
+# in GNU and BSD sed), built with printf's octal escapes.
 esc_script() {
   c0="" n=1; while [ $n -le 31 ]; do [ $n = 9 ] || [ $n = 10 ] || c0="$c0 $n $n"; n=$((n+1)); done
   c1="" n=128; while [ $n -le 159 ]; do c1="$c1 $n $n"; n=$((n+1)); done
   # <second byte> <third byte> <code point> of each three-byte (E2 xx xx) character
-  u=""; for b in 139 140 141 142 143 168 169 170 171 172 173 174; do u="$u 128 $b $((8064 + b))"; done
-  for b in 160 161 162 163 164 166 167 168 169; do u="$u 129 $b $((8128 + b))"; done
+  u=""; for b in 168 169 170 171 172 173 174; do u="$u 128 $b $((8064 + b))"; done
+  for b in 166 167 168 169; do u="$u 129 $b $((8128 + b))"; done
   # shellcheck disable=SC2086
-  printf "$(printf '/[\\001-\\010\\013-\\037\\177\\302\\342\\357\\377]/{\\n'
+  printf "$(printf 's/\\015$//\\n/[\\001-\\010\\013-\\037\\177\\302\\342\\377]/{\\n'
     printf 's/\\%03o/\\\\\\\\x%02x/g\\n' $c0 127 127 255 0
     printf 's/\\302\\%03o/<U+%04X>/g\\n' $c1
-    printf 's/\\342\\%03o\\%03o/<U+%04X>/g\\n' $u
-    printf 's/\\357\\273\\277/<U+FEFF>/g\\n}')"
+    printf 's/\\342\\%03o\\%03o/<U+%04X>/g\\n' $u; printf '}')"
 }
 ESC=$(esc_script)
 # clean [<sed script>]: stdin to stdout, escaped as above, then the optional script. tr maps NUL (which sed can't
@@ -372,9 +372,9 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # a body line can't pass for a boundary: control and invisible characters are spelled out first, then a line
-    # starting with =====, or with ===== after only such escapes, is indented; each message ends with its own marker
-    clean 's/^\(\(\\x[0-9a-f][0-9a-f]\)*\(<U+[0-9A-F]\{4\}>\)*\)*=====/ &/' < "$p"; printf '===== end %s\n\n' "$(rel "$p")"
+    # a body line can't pass for a boundary: a line with ===== before its first space, whatever comes before it
+    # (invisible characters included), is indented; each message ends with its own marker
+    clean 's/^[^ ]*=====/ &/' < "$p"; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
