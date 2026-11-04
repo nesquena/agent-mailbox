@@ -364,7 +364,9 @@ consume)
   echo "consumed" ;;
 verify)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
-  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"; [ -f "$f" ] || f=$(find "$M/inbox" -name "$(basename -- "$1")" -type f | head -n 1)
+  # by path, by path in the store, or by message file name (searched in every inbox; a name only, never a pattern)
+  f=$1; [ -f "$f" ] || f="$AD_DIR/$1"
+  if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && f=$(find "$M/inbox" -name "$b" -type f | head -n 1); fi
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
   v=$(verify_file "$f"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)

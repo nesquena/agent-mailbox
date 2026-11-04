@@ -385,7 +385,12 @@ expect "and the mail is read, $st" 0 "^===== mailbox/inbox/q2/[^/]*-q1-hq\\.md \
 mv "$T/store/mailbox/inbox/o2/-x.md" "$T/store/mailbox/inbox/o2/-y.md" 2>/dev/null || cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-y.md"
 expect "send --consume takes a value starting with - as a file name" 0 "^sent " sh -c "echo r | HOME='$W/home-o2' '$SH' '$CLI' send o1 c-y - --in-reply-to -y.md --consume -y.md"
 [ ! -e "$T/store/mailbox/inbox/o2/-y.md" ] && ok "and consumes it" || no "send --consume left -y.md in the inbox"
+# --in-reply-to alone, with a value starting with '-'
+cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-w.md"
+echo r | as o2 send o1 c-w - --in-reply-to -w.md >/dev/null
+expect "send --in-reply-to alone takes a value starting with - as a file name" 0 "in_reply_to: -w\.md" block o1 c-w
 expect "verify refuses a misplaced --as" 1 "goes before the command" as o1 verify x.md --as o2
+expect "verify takes a name, never a pattern" 1 "no such message" as o1 verify '*.md'
 cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/-z.md"
 expect "verify takes a name starting with - as a file name" 6 "^(unsigned|nokey)$" env HOME="$W/home-o1" "$SH" "$CLI" verify -z.md
 # a dir store given by a relative path starting with '-'
@@ -394,7 +399,11 @@ for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store
 (cd "$T/rel2" && HOME="$W/home-d1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-d1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
   HOME="$W/home-d2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-d1" "$SH" "$CLI" send d2 dd - >/dev/null 2>&1)
 expect "a dir store at a relative path starting with - lists mail" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list
-expect "and watch finds it" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" watch 1 2
+# watch must notice mail that arrives while it waits (its poll reads the store too)
+in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" consume "$(basename "$(in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list | grep d1-dd)")" >/dev/null
+( sleep 2; echo hi | in_dir "$T/rel2" env HOME="$W/home-d1" "$SH" "$CLI" send d2 dd2 - >/dev/null 2>&1 ) &
+expect "and watch wakes on new mail" 0 "d1-dd2\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" watch 1 8
+wait
 # a git store given by a path starting with '-' is a path, never an option to git clone
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
