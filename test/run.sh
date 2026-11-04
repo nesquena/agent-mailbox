@@ -457,7 +457,7 @@ xrec "$(printf '\033[31mOWNER\033[0m')" "$(printf 'x\rx1                       a
 lacks "agents doesn't print a record's carriage return raw" "$CRB" as x1 agents
 lacks "or its terminal escapes" "$ESCB" as x1 agents
 has "it spells them out" 'x3                       active   \x1b[31mOWNER\x1b[0m no   x\x0dx1 ' as x1 agents
-long=$(printf '%0300d' 0 | tr 0 A); cjk=a; i=0; while [ $i -lt 100 ]; do cjk="$cjk漢"; i=$((i+1)); done
+long=$(printf '%0300d' 0 | tr 0 A); cjk=a; i=0; while [ $i -lt 100 ]; do cjk="${cjk}漢"; i=$((i+1)); done
 xrec t "$long"
 row=$(as x1 agents | grep '^x3 ')
 [ "$(printf '%s' "${row##* }" | LC_ALL=C wc -c | tr -d ' ')" = 203 ] && case "$row" in (*A...) true ;; (*) false ;; esac &&
