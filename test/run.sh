@@ -77,11 +77,72 @@ for AD in $ADAPTERS; do
   if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
+  expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
+  expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
+  expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
+  expect "sent refuses a bad name" 1 "isn't a valid name" as alice sent Bob
+  expect "and an empty one" 1 "isn't a valid name" as alice sent ''
+  expect "and a misplaced --as" 1 "goes before the command" as alice sent --as bob
+  expect "sent with nothing waiting exits 3" 3 "no mail from bob waiting" as bob sent
   f=$(as bob list | head -n 1); fb=$(basename "$f")
 
   echo "yes" > "$T/reply"
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
   expect "the consumed message is gone" 3 "no mail" as bob list
+  expect "and no longer listed by its sender's sent" 3 "no mail from alice waiting" as alice sent
+  expect "a reply with needs none shows no needs" 0 "^mailbox/inbox/alice/[^ ]*-bob-review-1-reply\.md to alice age [0-9]+[sm]$" as bob sent
+  # sent counts a message only when its file name's sender and its from: header are both the sender; planted by
+  # someone with write access: mail from alice, long ago (its needs carrying a terminal escape, printed spelled out)
+  # and with no valid sent time; a name or a header claiming alice alone; one in a subfolder; one in another inbox
+  rm -rf "$T/ps"; mkdir -p "$T/ps/bob/sub" "$T/ps/carol"
+  pm() { printf -- '---\nprotocol: 1\nfrom: %s\nto: %s\ntopic: x\ncontext: general\nsent: %s\nin_reply_to: none\nneeds: %s\n---\n\nhi\n' "$2" "$3" "$4" "$5" > "$T/ps/$3/$1"; }
+  pm 20200101T000000Z-alice-old.md alice bob 2020-01-01T00:00:00Z "$(printf 'an\033[2Janswer')"
+  pm 20200101T000001Z-carol-name.md alice bob 2020-01-01T00:00:00Z none
+  pm 20200101T000002Z-alice-header.md carol bob 2020-01-01T00:00:00Z none
+  pm 20200101T000003Z-alice-nosent.md alice bob yesterday none
+  pm sub/20200101T000004Z-alice-sub.md alice bob 2020-01-01T00:00:00Z none
+  pm 20200101T000005Z-alice-else.md alice carol 2020-01-01T00:00:00Z none
+  # either side of 24 hours (the test's date: GNU -d or BSD -v)
+  ago() { date -u -d "-$1 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-"$1"H +%Y-%m-%dT%H:%M:%SZ; }
+  pm 20200101T000006Z-alice-h25.md alice bob "$(ago 25)" none
+  pm 20200101T000007Z-alice-h23.md alice bob "$(ago 23)" none
+  # a sent time out of range, or ahead of now, shows "?"; a long needs is cut to the line cap
+  pm 20200101T000008Z-alice-range.md alice bob 2020-13-45T99:99:99Z none
+  pm 20200101T000009Z-alice-ahead.md alice bob 2099-01-01T00:00:00Z none
+  pm 20200101T000011Z-alice-feb30.md alice bob 2021-02-30T00:00:00Z none
+  pm 20200101T000012Z-alice-leap.md alice bob 2020-02-29T00:00:00Z none
+  # a time a few seconds ahead (clock skew) still reads 0s; a sent value with a space isn't a time; an inbox whose name
+  # isn't an agent name is skipped
+  ahead() { date -u -d "+$1 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+"$1"S +%Y-%m-%dT%H:%M:%SZ; }
+  pm 20200101T000013Z-alice-skew.md alice bob "$(ahead 30)" none
+  pm 20200101T000014Z-alice-space.md alice bob "2020-01-01 00:00:00Z" none
+  mkdir -p "$T/ps/x_y"; pm 20200101T000015Z-alice-badname.md alice x_y 2020-01-01T00:00:00Z none
+  pm 20200101T000016Z-alice-1900.md alice bob 1900-02-29T00:00:00Z none
+  pm 20200101T000010Z-alice-long.md alice bob 2020-01-01T00:00:00Z "$(printf '%0300d' 0)"
+  tamper "cp -R '$T/ps/.' mailbox/inbox/"
+  # (the skewed one's age depends on how long this run took, up to its 30 s head start)
+  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /; s/(alice-skew\.md to bob age )[0-9]+[sm]$/\1Ns/')
+  want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an\\x1b[2Janswer
+mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
+mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
+mailbox/inbox/bob/20200101T000006Z-alice-h25.md to bob age 1d1h stale
+mailbox/inbox/bob/20200101T000007Z-alice-h23.md to bob age 23h
+mailbox/inbox/bob/20200101T000008Z-alice-range.md to bob age ?
+mailbox/inbox/bob/20200101T000009Z-alice-ahead.md to bob age ?
+mailbox/inbox/bob/20200101T000011Z-alice-feb30.md to bob age ?
+mailbox/inbox/bob/20200101T000012Z-alice-leap.md to bob age old stale
+mailbox/inbox/bob/20200101T000013Z-alice-skew.md to bob age Ns
+mailbox/inbox/bob/20200101T000014Z-alice-space.md to bob age ?
+mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
+  long=$(printf '%s\n' "$out" | grep -- '-alice-long\.md '); out=$(printf '%s\n' "$out" | grep -v -- '-alice-long\.md ')
+  case $long in (*" age "*" stale needs: 000"*...) [ ${#long} -le 300 ] && ok "a long needs is cut, keeping the age and stale mark" || no "a long needs isn't capped" "$long" ;;
+    (*) no "a long needs isn't capped" "$long" ;; esac
+  [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
+    no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
+  out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900)" ] &&
+    ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
+  tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins
