@@ -21,7 +21,7 @@
 #   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
@@ -30,7 +30,8 @@ ad_clone() { ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_D
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
-AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff merge'
+# merge and diff come first, so a store macro of either name ([attr]merge ...) can't undo the neutral settings after them
+AD_ATTRS='* merge !diff -text -eol -filter -ident -working-tree-encoding'
 ad_attrs_put() { mkdir -p "$AD_DIR/.git/info" &&
   printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af"; }
 ad_attrs() {
@@ -42,9 +43,10 @@ ad_attrs() {
 
 ad_open() {
   command -v git >/dev/null 2>&1 || die "the git adapter needs git"
-  # git acts on this clone only, never on a repository the environment names (GIT_DIR and the like, as in a git hook)
+  # git acts on this clone only, never on a repository the environment names (GIT_DIR and the like, as in a git hook);
+  # config passed through the environment (GIT_CONFIG_COUNT and the like: insteadOf, credentials, proxies) still applies
   # shellcheck disable=SC2046
-  unset $(git rev-parse --local-env-vars)
+  unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG')
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
@@ -53,7 +55,11 @@ ad_open() {
     # stays behind (removing another command's could break a setup still running); delete it by hand
     d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
-    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"; err=$(ad_clone); } ||
+    # (a store that lacks the branch, ls-remote exit 2, is cloned without it; any other failure is an error)
+    rm -rf "$AD_DIR"
+    st=$STORE; case "$st" in (-*) st=./$st ;; esac
+    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"; ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1
+      [ $? = 2 ] && err=$(ad_clone); } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
     ad_attrs || :
@@ -63,9 +69,11 @@ ad_open() {
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty
     fi || { rm -rf "$AD_DIR"; die "can't check out the store"; }
-    # (another command may have set up the same clone meanwhile: keep that one)
-    if [ -d "$d/.git" ]; then rm -rf "$AD_DIR"; else rm -rf "$d" && mv "$AD_DIR" "$d" || die "can't move a new clone to $d"; fi
-    AD_DIR=$d
+    # another command may set up the same clone meanwhile: whichever moves first is kept, and is never removed. A loser
+    # that moved after it lands inside it, so that copy goes too
+    [ -e "$d" ] || mv "$AD_DIR" "$d" 2>/dev/null || [ -d "$d/.git" ] || { rm -rf "$AD_DIR"; die "can't move a new clone to $d"; }
+    rm -rf "$AD_DIR" "$d/${AD_DIR##*/}"; AD_DIR=$d
+    [ -d "$AD_DIR/.git" ] || die "$AD_DIR isn't a clone: remove it, then run this again"
   # an older clone may hold files checked out under the store's attributes: check them out again, as stored (read-tree
   # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged). The attributes are
   # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time
@@ -89,7 +97,10 @@ ad_pull() {
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
-    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; [ $? = 2 ] && ! ad_remote_has_branch && return 0
+    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1
+    case $? in (2) ad_remote_has_branch || return 0
+      printf 'the store no longer has the branch %s; if it was re-created, delete %s and run this again\n' "$BRANCH" "$AD_DIR"
+      return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
   if ad_git rev-parse -q --verify HEAD >/dev/null; then

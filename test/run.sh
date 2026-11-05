@@ -299,7 +299,7 @@ case " $ADAPTERS " in *" git "*)
   # the store gains line-ending and LFS rules, an LFS server address and a submodule, after p2 has its checkout
   git clone -q -b main "$S" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e &&
     printf '* -text -filter\n' > "$T/w/.git/info/attributes" && (cd "$T/w" &&
-    printf '* text eol=crlf\nmailbox/inbox/** filter=lfs\n' > .gitattributes && printf '[lfs]\n\turl = http://127.0.0.1:9/\n' > .lfsconfig &&
+    printf '[attr]merge filter=lfs text eol=crlf\n* text eol=crlf\nmailbox/inbox/** filter=lfs\n' > .gitattributes && printf '[lfs]\n\turl = http://127.0.0.1:9/\n' > .lfsconfig &&
     printf '[submodule "s"]\n\tpath = mailbox/inbox/p2/s\n\turl = %s\n' "$T/none.git" > .gitmodules &&
     git add -A && git update-index --add --cacheinfo "160000,1111111111111111111111111111111111111111,mailbox/inbox/p2/s" && git commit -qm plant &&
     git push -q origin HEAD:main)
@@ -323,7 +323,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
   find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
   : > "$C/.git/index.lock"; as p2 list >/dev/null 2>&1; rm -f "$C/.git/index.lock"
-  grep -qxF -- '* -text -eol -filter -ident -working-tree-encoding !diff merge' "$C/.git/info/attributes" &&
+  grep -qxF -- '* merge !diff -text -eol -filter -ident -working-tree-encoding' "$C/.git/info/attributes" &&
     ok "the store's attributes stay inert while it waits" || no "a failed second checkout left the store's attributes in force"
   expect "a second checkout that failed is tried again by the next command" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and the message is then as stored" || no "a failed second checkout was never retried"
@@ -349,6 +349,11 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
     GIT_DIR='$T/mine/.git' GIT_WORK_TREE='$T/mine' HOME='$W/home-p1' '$SH' '$CLI' send p2 from-hook -"
   [ -z "$(git -C "$T/mine" for-each-ref)" ] && ok "and leaves the caller's repository alone" ||
     no "the CLI's git ran in the caller's repository" "$(git -C "$T/mine" for-each-ref)"
+  # config passed through the environment still applies: here an insteadOf maps a store name to the real store
+  gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$S.insteadOf' GIT_CONFIG_VALUE_0=fake:mystore HOME='$W/home-p9'"
+  sh -c "$gc '$SH' '$CLI' setup --store fake:mystore --name p9" >/dev/null 2>&1
+  expect "git config from the environment (GIT_CONFIG_COUNT) still reaches the store" 0 "p1-planted\.md" \
+    sh -c "$gc '$SH' '$CLI' --as p2 list"
   # a store .gitignore that matches mail doesn't stop a send, and an ignored file of the sender's isn't published
   (cd "$T/w" && git fetch -q && git reset -q --hard origin/main && printf '*.md\n*.sig\n' > .gitignore && git add .gitignore &&
     git commit -qm ignore && git push -q origin HEAD:main)
@@ -363,6 +368,20 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   as p6 setup --store "$S" --name p6 >/dev/null; env PATH="$T/killfetch:$PATH" HOME="$W/home-p6" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
   expect "a first command cut off part-way is set up again by the next one" 0 "p1-planted\.md" as p6 --as p2 list
   expect "so init still finds the mailbox, and leaves store.md alone" 1 "already exists" as p6 init
+  # two first commands setting up one clone at once: the one that loses (here another clone appears just before its
+  # move) keeps the winner's checkout, which still holds what was sent through it, and leaves no copy of its own
+  mkdir -p "$T/racemv"; printf '#!/bin/sh
+for a; do d=$a; done; case $1 in (*/checkouts/.*) [ ! -d "$1/.git" ] || { [ -e "$d" ] || cp -R "$1" "$d"; echo kept > "$d/winner"; } ;; esac
+exec "%s" "$@"
+' \
+    "$(command -v mv)" > "$T/racemv/mv"; chmod +x "$T/racemv/mv"
+  as p7 setup --store "$S" --name p7 >/dev/null
+  env PATH="$T/racemv:$PATH" HOME="$W/home-p7" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
+  for C in "$W/home-p7/.local/state/agent-mailbox/checkouts/"*; do :; done
+  CK="$W/home-p7/.local/state/agent-mailbox/checkouts"
+  [ -f "$C/winner" ] && [ -z "$(ls -A "$C" | grep '^\.[0-9a-f]*\.[0-9]*$')" ] && [ -z "$(ls -A "$CK" | grep '^\.')" ] &&
+    ok "a setup that loses a race keeps the other's checkout and leaves no copy" ||
+    no "a lost setup race removed the other's checkout or left a copy" "$(ls -A "$C" "$CK")"
 
   # a new agent clones only the mailbox branch, however much else the store holds
   (cd "$T/w" && git checkout -q -b big && echo big > big.txt && git add big.txt && git commit -qm big && git push -q origin big)
@@ -386,7 +405,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   expect "list works again once it can be reached" 0 "p1-planted\.md" as p2 list
   # so is a mailbox branch gone from the store, once this checkout has seen it
   tip=$(git --git-dir="$S" rev-parse main); git --git-dir="$S" update-ref -d refs/heads/main
-  expect "list fails when the store no longer has the mailbox branch" 1 "can't update from the store" as p2 list
+  expect "list fails when the store no longer has the mailbox branch, saying how to recover" 1 "no longer has the branch main; if it was re-created, delete" as p2 list
   git --git-dir="$S" update-ref refs/heads/main "$tip"
   # an older checkout of a branch whose tree is empty finishes its one-time second checkout
   git --git-dir="$S" update-ref refs/heads/empty "$(env GIT_AUTHOR_NAME=e GIT_AUTHOR_EMAIL=e@e GIT_COMMITTER_NAME=e \
@@ -397,7 +416,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   [ -z "$(git -C "$C" ls-tree HEAD)" ] && [ "$(git -C "$C" symbolic-ref HEAD)" = refs/heads/empty ] &&
     rm "$C/.git/info/attributes" && ok "(an older checkout of a branch whose tree is empty)" || no "the empty-branch setup failed"
   env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
-  [ "$(head -n 1 "$C/.git/info/attributes")" = '* -text -eol -filter -ident -working-tree-encoding !diff merge' ] &&
+  [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
 
   if [ -n "$SSH" ]; then
