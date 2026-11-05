@@ -64,7 +64,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox watch 120 0` | Wait for mail without spending tokens; run it in the background, and re-arm it after each exit. |
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, and whether it signs. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
-| `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every gate has released that version. Tamper-proof only in a store with `require_signatures: true`. |
+| `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Tamper-proof only in a store with `require_signatures: true`. |
 | `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.

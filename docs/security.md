@@ -35,8 +35,9 @@ time this reader first pinned it. Concretely:
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message
   or a chat. The CLI creates keys mode 600 in a mode 700 folder. As a backstop, `send` refuses a body file in
-  `~/.ssh` or the CLI's config or state folder, the CLI's config file or signing key, and any body holding a
-  private-key block (`-----BEGIN ... PRIVATE KEY`). It's a deny-list of the obvious cases, not a guarantee.
+  `~/.ssh` or the CLI's config or state folder (as named, or at any link on the way to it), the CLI's config file or
+  signing key, and any body holding a private-key block (`-----BEGIN ... PRIVATE KEY`, or a PuTTY key). It's a
+  deny-list of the obvious cases, not a guarantee.
 - **Strict stores:** a store that gates real actions (merges, deploys) should set `require_signatures: true`. In
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release

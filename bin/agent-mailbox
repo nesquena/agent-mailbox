@@ -45,8 +45,8 @@ ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 MSG_RE='^[A-Za-z0-9._-]+\.md$'
 # a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
 KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
-# the first line of a private key's text block: PEM (RSA, EC, PKCS#8, encrypted), OpenSSH, PGP and SSH2 alike
-PRIVKEY_RE='-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY'
+# the first line of a private key's text block: PEM (RSA, EC, PKCS#8, encrypted), OpenSSH, PGP, SSH2 and PuTTY alike
+PRIVKEY_RE='-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:'
 
 # printf, not echo, so a value quoted in a message is shown as is
 die() { printf 'agent-mailbox: %s\n' "$*" >&2; exit 1; }
@@ -59,14 +59,17 @@ unknown() { misplaced "$1"; die "unknown option $1"; }
 NL='
 ' CR=$(printf '\r')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
-# phys <folder>: its physical path. real <file>: the file's physical path, following links to it too (plain readlink is
-# on Linux, macOS, BSD); a relative path starting with '-' gets a ./ so no tool reads it as an option
+# phys <folder>: its physical path. hops <file>: the physical path of the file as named, then of each link it leads to
+# (at most 40), one per line (plain readlink is on Linux, macOS, BSD). real <file>: the last of those, the file's own.
+# A relative path starting with '-' gets a ./ so no tool reads it as an option
 phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
-real() {
-  rp=$1; case "$rp" in (-*) rp=./$rp ;; esac
-  n=0; while [ -L "$rp" ] && [ "$n" -lt 40 ]; do n=$((n+1)); rl=$(readlink "$rp") || break; case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
-  rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
+hops() {
+  rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
+  while rd=$(phys "$(dirname "$rp")"); do printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
+    [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp") || return 0
+    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done; return 1
 }
+real() { rh=$(hops "$1") && printf '%s\n' "${rh##*"$NL"}"; }
 # this script's real path, following links (install.sh links it onto PATH)
 here() {
   # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
@@ -227,16 +230,17 @@ no_link() {
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
 rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
-# secret_file <file>: the file, links followed, is in ~/.ssh or this CLI's config or state folder, or is its config file
-# or signing key (either half), so `send` won't mail it out however it's asked to.
+# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh or this CLI's config or state folder
+# (set in SF), or the file is its config file or signing key (either half; SF empty), so `send` won't mail it out
+# however it's asked to.
 # ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine
 secret_file() {
-  sf=$(real "$1") || return 1
-  for sd in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
-    [ -n "$sd" ] && sd=$(phys "$sd") || continue
-    case "$sf" in ("${sd%/}"/*) return 0 ;; esac
-  done
-  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] && [ "$(real "$sk")" = "$sf" ] && return 0; done
+  sp="$NL$(hops "$1")$NL"
+  for SF in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
+    [ -n "$SF" ] && sd=$(phys "$SF") || continue
+    case "$sp" in (*"$NL${sd%/}"/*) return 0 ;; esac
+  done; SF=""
+  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] && rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac; done
   return 1
 }
 
@@ -409,10 +413,15 @@ send)
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
   # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
-  ! secret_file "$body" ||
-    die "refusing to send $body: it's in ~/.ssh or this CLI's config or state folder, or is its config or signing key (never put secrets in mail)"
+  if secret_file "$body"; then
+    # the state folder also holds the git adapter's copy of the store, so a message received there is refused too
+    h=""; [ "$SF" = "$STATE" ] && matches "$MSG_RE" "$(basename -- "$(real "$body")")" && h="; to forward a message, copy its text into a new file first"
+    w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
+    die "refusing to send $body: it's $w$h (never put secrets in mail)"
+  fi
   text=$(cat -- "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
-  ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" || die "refusing to send: the body holds a private key (never put secrets in mail)"
+  ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" ||
+    die "refusing to send: the body holds a private key's first line (never put secrets in mail; to discuss a key, describe it, or send its public half)"
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
@@ -475,8 +484,10 @@ read)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
 consume)
-  # an argument starting with '-' is a name when it's a message file name, and every argument after a leading -- is one
-  if [ "${1:-}" = -- ]; then shift; else for a in "$@"; do case "$a" in (-*) matches "$MSG_RE" "$a" || unknown "$a" ;; esac; done; fi
+  # an argument starting with '-' is a name when it's a message file name, and every argument after the first -- is one
+  na=$# e=""; for a in "$@"; do
+    if [ -z "$e" ]; then case "$a" in (--) e=1; continue ;; (-*) matches "$MSG_RE" "$a" || unknown "$a" ;; esac; fi; set -- "$@" "$a"
+  done; shift "$na"
   [ $# -ge 1 ] || die "usage: consume [--] <file>..."
   need_me; load_adapter; ad_sync; need_store
   paths=""

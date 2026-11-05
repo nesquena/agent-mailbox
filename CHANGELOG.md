@@ -98,13 +98,16 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
-- **`send` refuses obvious secrets:** a body file that is, links followed, in `~/.ssh` or the CLI's config or state
-  folder, or is its config file or signing key (either half) (on Linux, also when redirected to stdin), and a body
-  (file or stdin) holding a private-key block (`-----BEGIN ... PRIVATE KEY`), are refused with exit 1 before
-  anything is written. It's a deny-list of the obvious cases, not a guarantee. To send part of a file from one of
-  those folders on purpose, copy that part into a scratch file first (#26).
-- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after `--`), instead of
-  refusing it as an unknown option (#26).
+- **`send` refuses obvious secrets:** a body file in `~/.ssh` or the CLI's config or state folder (as named, or at
+  any link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
+  signing key (either half) (on Linux, also when redirected to stdin), and a body (file or stdin) holding a
+  private-key block (`-----BEGIN ... PRIVATE KEY`, or a PuTTY key), are refused with exit 1 before anything is
+  written; the error names the folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee.
+  The state folder holds the git adapter's copy of the store, so to forward a message you received, copy its text
+  into a new file first; to send part of a file from one of those folders on purpose, copy that part the same way
+  (#26).
+- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
+  the `--` is), instead of refusing it as an unknown option (#26).
 - **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
   `misrouted` by path too, as it does by name and in `read` (#26).
 - **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be

@@ -78,6 +78,9 @@ for AD in $ADAPTERS; do
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
   f=$(as bob list | head -n 1); fb=$(basename "$f")
+  # the git adapter's copy of the store is in the state folder: forwarding a message from there is refused, saying how
+  [ "$AD" != git ] || expect "send refuses a message in its copy of the store, saying how to forward it" 1 "copy its text into a new file" \
+    as bob send alice fwd "$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts"/*/"$f")"
 
   echo "yes" > "$T/reply"
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
@@ -551,11 +554,12 @@ expect "verify takes a name, never a pattern" 1 "no such message" as o1 verify '
 cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/-z.md"
 expect "verify takes a name starting with - as a file name" 6 "^(unsigned|nokey)$" env HOME="$W/home-o1" "$SH" "$CLI" verify -z.md
 # consume takes a message name starting with '-', and any name after --; other options are still refused
-for n in -rf -q; do cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/$n.md"; done
+for n in -rf -q -m -n; do cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/$n.md"; done
 expect "consume takes a message name starting with -" 0 "^consumed$" as o1 consume -rf.md
 [ ! -e "$T/store/mailbox/inbox/o1/-rf.md" ] && ok "and removes it" || no "consume left -rf.md in the inbox"
 expect "consume takes names after --" 0 "^consumed$" as o1 consume -- -q.md
 [ ! -e "$T/store/mailbox/inbox/o1/-q.md" ] && ok "and removes them" || no "consume -- left -q.md in the inbox"
+expect "and after a -- that follows a name" 0 "^consumed$" as o1 consume -m.md -- -n.md
 expect "consume still refuses an unknown option" 1 "unknown option --bogus" as o1 consume --bogus
 expect "and a misplaced --as" 1 "goes before the command" as o1 consume -z.md --as o2
 # a dir store given by a relative path starting with '-'
@@ -830,12 +834,17 @@ as sec1 init >/dev/null; for a in sec1 sec2; do as $a register --kind t --about 
 H="$W/home-sec1" C="$W/home-sec1/.config/agent-mailbox" S="$W/home-sec1/.local/state/agent-mailbox"
 mkdir -p "$H/.ssh" "$C/keys" "$S"; for f in "$H/.ssh/id_ed25519" "$C/keys/sec1" "$S/note" "$T/own" "$T/own.pub"; do echo "x" > "$f"; done
 ln -s "$H/.ssh/id_ed25519" "$T/notes.md"; ln -s "$H/.ssh" "$T/dotssh"
+# ~/.ssh/config as a dotfile manager links it in, to a file outside ~/.ssh, and a link to that link
+echo "Host x" > "$T/ssh-config"; ln -s "$T/ssh-config" "$H/.ssh/config"; ln -s "$H/.ssh/config" "$T/via-ssh.md"
+printf 'PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAA\n' > "$T/key.ppk"
 # refused <description> <body file>: sec1's send of it fails, saying why (each on its own topic, so none is refused
 # for sharing a second with another)
 n=0; refused() { n=$((n+1)); expect "$1" 1 "refusing to send" as sec1 send sec2 "sec-$n" "$2"; }
 refused "send refuses a file in ~/.ssh" "$H/.ssh/id_ed25519"
 refused "or a link to one" "$T/notes.md"
 refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
+refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
+refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or the CLI's config" "$C/config"
 refused "or its signing key" "$C/keys/sec1"
 refused "or a file in its state folder" "$S/note"
@@ -854,6 +863,8 @@ pk='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPEN
 expect "send refuses a private key on stdin" 1 "holds a private key" sh -c "printf -- '$pk' | HOME='$H' '$SH' '$CLI' send sec2 sec-stdin -"
 printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\n' > "$T/rsa.md"
 refused "or in a body file" "$T/rsa.md"
+refused "or a PuTTY key" "$T/key.ppk"
+expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
 [ -z "$(ls "$T/store/mailbox/inbox/sec2")" ] && ok "and writes nothing for any of them" || no "a refused send wrote mail" "$(ls "$T/store/mailbox/inbox/sec2")"
 # ordinary bodies still send: prose about keys, public keys, and a file beside ~/.ssh whose name starts the same
 printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here.\n' > "$T/prose.md"
