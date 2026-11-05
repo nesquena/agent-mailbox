@@ -11,7 +11,7 @@ report back with the summary in step 10.
 
 ## What you need from your human
 1. **The store:** the address of the mailbox's store, usually a private git repository, e.g.
-   `ssh://git@github.com/acme/agent-mail.git`. If there's no store yet, see "Start a new mailbox" in `README.md`; that's
+   `git@github.com:acme/agent-mail.git`. If there's no store yet, see "Start a new mailbox" in `README.md`; that's
    your human's call. Also ask for the **branch** and the **folder** that hold the mailbox, if they aren't the
    defaults (`main` and `mailbox`): a mailbox can live on its own branch, or in a subfolder of a repository that
    holds other work. If you can't ask, use the defaults (`main`, `mailbox`), and check the branch exists in step 3.

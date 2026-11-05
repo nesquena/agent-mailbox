@@ -26,11 +26,13 @@ ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
-# ceiling: clone reads the store's name as git does, from the folder the first command runs in, where a repository
-# of that name is taken before a relative path or host:path means anything else (docs/security.md); a full URL or
-# an absolute path avoids it
-# (in the C locale, so its messages read the same everywhere; it runs only in $(...))
-ad_clone() { LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
+# ad_clone: clone the store into $AD_DIR, in the C locale so its messages read the same everywhere. git clone takes a name that exists as a repository or bundle where it runs as that local path first, even
+# a URL's (ssh://h/x is also the path ssh:/h/x), so a store named by a URL, host:path or an absolute path is cloned
+# from the agent's own folder, where nothing else can put one; a relative path is the caller's own folder, read from
+# where the command runs (one holding a colon is written ./a:b, as in git). The remote is always "origin"
+ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
+  case $STORE in (./*|../*) ;; (/*|*:*) cd "$STATE/checkouts" || exit ;; esac
+  LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.

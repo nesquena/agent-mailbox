@@ -420,6 +420,10 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   sh -c "$gc '$SH' '$CLI' setup --store fake:mystore --name p9" >/dev/null 2>&1
   expect "git config from the environment (GIT_CONFIG_COUNT) still reaches the store" 0 "p1-planted\.md" \
     sh -c "$gc '$SH' '$CLI' --as p2 list"
+  # a clone.defaultRemoteName in git config doesn't rename the clone's remote
+  gn="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=clone.defaultRemoteName GIT_CONFIG_VALUE_0=upstream HOME='$W/home-p17'"
+  sh -c "$gn '$SH' '$CLI' setup --store '$S' --name p17" >/dev/null 2>&1
+  expect "a clone.defaultRemoteName in git config doesn't break the clone" 0 "p1-planted\.md" sh -c "$gn '$SH' '$CLI' --as p2 list"
   # ...but a legacy GIT_CONFIG file never takes the clone's own settings
   : > "$T/userconf"; as p10 setup --store "$S" --name p10 >/dev/null
   sh -c "GIT_CONFIG='$T/userconf' HOME='$W/home-p10' '$SH' '$CLI' --as p2 list" >/dev/null 2>&1
@@ -438,8 +442,14 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # and a URL an insteadOf rewrites
   git init -q --bare "$T/fresh:2.git"; as p12 setup --store ./fresh:2.git --name p12 >/dev/null
   expect "the first setup finds a relative store path with a colon" 1 "no mailbox at" in_dir "$T" as p12 list
-  git init -q --bare "$T/fresh:3.git"; as p14 setup --store fresh:3.git --name p14 >/dev/null
-  expect "and one without ./, which git could read as host:path" 1 "no mailbox at" in_dir "$T" as p14 list
+  # a store named by a URL is cloned from the agent's own folder: a bundle where the first command runs, at the path
+  # the URL also names (file:///x is also the path file:/x), isn't taken for it
+  git init -q "$T/plant2" && (cd "$T/plant2" && mkdir mailbox && echo planted > mailbox/store.md && git add . &&
+    git -c user.name=x -c user.email=x@x.invalid commit -qm p && git branch -M main)
+  mkdir -p "$T/decoy2/file:$T"; git -C "$T/plant2" bundle create -q "$T/decoy2/file:$T/fresh.git" main 2>/dev/null
+  as p14 setup --store "file://$T/fresh.git" --name p14 >/dev/null
+  expect "a bundle where the first command runs, named like a URL store, isn't taken for it" 1 "no mailbox at" \
+    in_dir "$T/decoy2" as p14 list
   gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$T/fresh.git.insteadOf' GIT_CONFIG_VALUE_0=fake:fresh HOME='$W/home-p13'"
   sh -c "$gc '$SH' '$CLI' setup --store fake:fresh --name p13" >/dev/null 2>&1
   expect "and a store name an insteadOf rewrites" 1 "no mailbox at" sh -c "$gc '$SH' '$CLI' list"
