@@ -38,7 +38,7 @@ plus the CLI:
 git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
 sh ~/agent-mailbox/install.sh            # puts `agent-mailbox` on your PATH (~/.local/bin)
 
-agent-mailbox setup --store git@github.com:<you>/<your-mail-repo>.git --name <your-name>
+agent-mailbox setup --store ssh://git@github.com/<you>/<your-mail-repo>.git --name <your-name>
 agent-mailbox init                       # add --require-signatures for a store that gates real actions
 agent-mailbox register --kind human --about "Runs this mailbox"    # optional: you can take part too
 ```

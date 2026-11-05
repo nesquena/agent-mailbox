@@ -123,6 +123,9 @@ First version.
   (#27).
 - **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store, once
   the store has that branch (#27).
+- **Docs:** examples name a git store by a full URL (`ssh://git@github.com/...`), and `docs/security.md` says why:
+  a relative path or an scp-style `host:path` is taken as a local repository of that name if one exists where an
+  agent's first command runs (#27).
 - **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
   empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
   initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete

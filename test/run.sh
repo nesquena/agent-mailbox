@@ -447,9 +447,10 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   mkdir -p "$T/decoydir/fake:fresh"; rm -rf "$W/home-p13/.local/state"
   expect "and a folder named like the store where the command runs doesn't change that" 1 "no mailbox at" \
     in_dir "$T/decoydir" sh -c "$gc '$SH' '$CLI' list"
-  # a store name that's also a configured remote's name is never looked up at that remote
+  # a store name that's also a configured remote's name is never looked up at that remote (GIT_SSH runs the fake
+  # ssh without a shell, so a space in its path is fine)
   printf '#!/bin/sh\necho "$*" >> "%s/ssh.log"; exit 255\n' "$T" > "$T/fakessh"; chmod +x "$T/fakessh"
-  gr="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.mailrem.url GIT_CONFIG_VALUE_0=hq:repo GIT_SSH_COMMAND='$T/fakessh' HOME='$W/home-p15'"
+  gr="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.mailrem.url GIT_CONFIG_VALUE_0=hq:repo GIT_SSH='$T/fakessh' HOME='$W/home-p15'"
   sh -c "$gr '$SH' '$CLI' setup --store mailrem --name p15" >/dev/null 2>&1; in_dir "$T" sh -c "$gr '$SH' '$CLI' list" >/dev/null 2>&1
   [ ! -s "$T/ssh.log" ] && ok "a store named like a configured remote isn't looked up there" ||
     no "the first setup contacted a remote the store's name matches" "$(cat "$T/ssh.log")"

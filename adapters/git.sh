@@ -26,6 +26,9 @@ ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
+# ceiling: clone reads the store's name as git does, from the folder the first command runs in, where a repository
+# of that name is taken before a relative path or host:path means anything else (docs/security.md); a full URL or
+# an absolute path avoids it
 ad_clone() { ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
