@@ -452,14 +452,15 @@ sent)
         case "$b" in (????????T??????Z-"$ME"-?*) ;; (*) continue ;; esac
         [ "$(field from "$p")" = "$ME" ] || continue
         s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
-        printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p")"
+        printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")"
       done
     done | LC_ALL=C sort)
   [ -n "$rows" ] || { echo "no mail from $ME waiting${to:+ for $to}"; exit 3; }
   # age from sent to now, both UTC, by days from the civil date (no date -d, which BSD date lacks)
   printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-    function ok(s,  m, d) { m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
-      return m >= 1 && m <= 12 && d >= 1 && d <= 31 && substr(s, 12, 2) + 0 <= 23 && substr(s, 15, 2) + 0 <= 59 && substr(s, 18, 2) + 0 <= 60 }
+    function ok(s,  y, m, d, n) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+      n = m == 2 ? (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31)
+      return m >= 1 && m <= 12 && d >= 1 && d <= n && substr(s, 12, 2) + 0 <= 23 && substr(s, 15, 2) + 0 <= 59 && substr(s, 18, 2) + 0 <= 60 }
     function t(s,  y, m, e, d) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; if (m <= 2) y--; e = y % 400
       d = int(y / 400) * 146097 + e * 365 + int(e / 4) - int(e / 100) + int((153 * ((m + 9) % 12) + 2) / 5) + substr(s, 9, 2) - 719469
       return d * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2) }
@@ -467,7 +468,7 @@ sent)
       # a sent time ahead of now (a skewed clock, or a planted file) shows "?", allowing a minute of skew
       if (a < 0 && a >= -60 && ok($4)) a = 0
       g = a < 0 ? "?" : a < 60 ? a "s" : a < 3600 ? int(a / 60) "m" : a < 86400 ? int(a / 3600) "h" : int(a / 86400) "d" int(a % 86400 / 3600) "h"
-      print $2 " to " $3 " age " g (a > 86400 ? " stale" : "") (n != "" && n != "none" ? " needs: " n : "") }' | clean "$CAP" ;;
+      print $2 " to " $3 " age " g (a > 86400 ? " stale" : "") (n != "" && n != "none" ? " needs: " n : "") }' | clean ;;
 read)
   except=""
   while [ $# -gt 0 ]; do

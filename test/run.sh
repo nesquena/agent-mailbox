@@ -109,6 +109,14 @@ for AD in $ADAPTERS; do
   # a sent time out of range, or ahead of now, shows "?"; a long needs is cut to the line cap
   pm 20200101T000008Z-alice-range.md alice bob 2020-13-45T99:99:99Z none
   pm 20200101T000009Z-alice-ahead.md alice bob 2099-01-01T00:00:00Z none
+  pm 20200101T000011Z-alice-feb30.md alice bob 2021-02-30T00:00:00Z none
+  pm 20200101T000012Z-alice-leap.md alice bob 2020-02-29T00:00:00Z none
+  # a time a few seconds ahead (clock skew) still reads 0s; a sent value with a space isn't a time; an inbox whose name
+  # isn't an agent name is skipped
+  ahead() { date -u -d "+$1 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+"$1"S +%Y-%m-%dT%H:%M:%SZ; }
+  pm 20200101T000013Z-alice-skew.md alice bob "$(ahead 30)" none
+  pm 20200101T000014Z-alice-space.md alice bob "2020-01-01 00:00:00Z" none
+  mkdir -p "$T/ps/Bob"; pm 20200101T000015Z-alice-badname.md alice Bob 2020-01-01T00:00:00Z none
   pm 20200101T000010Z-alice-long.md alice bob 2020-01-01T00:00:00Z "$(printf '%0300d' 0)"
   tamper "cp -R '$T/ps/.' mailbox/inbox/"
   out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /')
@@ -118,14 +126,18 @@ mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
 mailbox/inbox/bob/20200101T000006Z-alice-h25.md to bob age 1d1h stale
 mailbox/inbox/bob/20200101T000007Z-alice-h23.md to bob age 23h
 mailbox/inbox/bob/20200101T000008Z-alice-range.md to bob age ?
-mailbox/inbox/bob/20200101T000009Z-alice-ahead.md to bob age ?"
+mailbox/inbox/bob/20200101T000009Z-alice-ahead.md to bob age ?
+mailbox/inbox/bob/20200101T000011Z-alice-feb30.md to bob age ?
+mailbox/inbox/bob/20200101T000012Z-alice-leap.md to bob age old stale
+mailbox/inbox/bob/20200101T000013Z-alice-skew.md to bob age 0s
+mailbox/inbox/bob/20200101T000014Z-alice-space.md to bob age ?"
   long=$(printf '%s\n' "$out" | grep -- '-alice-long\.md '); out=$(printf '%s\n' "$out" | grep -v -- '-alice-long\.md ')
-  case $long in (*" needs: 000"*...) [ ${#long} -le 203 ] && ok "a long needs is cut to the line cap" || no "a long needs isn't capped" "$long" ;;
+  case $long in (*" age "*" stale needs: 000"*...) [ ${#long} -le 300 ] && ok "a long needs is cut, keeping the age and stale mark" || no "a long needs isn't capped" "$long" ;;
     (*) no "a long needs isn't capped" "$long" ;; esac
   [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
     no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
-  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long)" ] &&
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
