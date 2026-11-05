@@ -246,12 +246,18 @@ sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || d
 # without its signature; a failed signing leaves neither behind.
 # ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
 # dir store; only an atomic multi-file publish in the adapter would close that
-put_signed() { ps="$1.tmp.$$"; new=; [ -e "$1" ] || new=1
+put_signed() { ps="$1.tmp.$$"; [ ! -d "$1.sig" ] || die "$(rel "$1.sig") isn't a file"
   printf '%s\n' "$2" > "$ps" || { rm -f "$ps"; die "can't write $(rel "$1")"; }
   (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
-  mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1" || { rm -f "$ps" "$ps.sig"; [ -z "$new" ] || rm -f "$1.sig"
-    die "can't write $(rel "$1")"; }; }
+  # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
+  old=; [ ! -f "$1.sig" ] || { cp -p "$1.sig" "$ps.old" && old=1; } || { rm -f "$ps" "$ps.sig"; die "can't write $(rel "$1")"; }
+  if mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
+  rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
+  die "can't write $(rel "$1")"; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
+# own_pub: the public half of $KEY as "<type> <base64>", from $KEY.pub or derived from the key
+own_pub() { op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null); matches "$KEY_RE" "$op" || op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2)
+  printf '%s\n' "$op"; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
@@ -313,7 +319,7 @@ register|update)
     # lost its key) the record is republished as it is, and nothing is pinned below
     pub=$(field key "$rec")
     if [ -f "$KEY" ]; then
-      own=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null); matches "$KEY_RE" "$own" || own=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2)
+      own=$(own_pub)
       [ -n "$own" ] || [ -z "$pub" ] || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then run update again"
     fi
     if [ -n "$own" ] && [ -n "$pub" ] && [ "$pub" != "$own" ]; then
@@ -346,7 +352,7 @@ register|update)
   record_text=$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
     "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")
   paths="$ROOT/agents/$ME.md"
-  if [ -n "$pub" ] && can_sign; then no_link "$rec.sig"; put_signed "$rec" "$record_text"; paths="$paths $ROOT/agents/$ME.md.sig"
+  if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { : > "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
@@ -402,11 +408,15 @@ send)
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
-  # sign when you hold a key and your record names one; a strict store refuses a send it can't sign before any write
-  cs=""; can_sign && cs=1; signer=""; [ -n "$cs" ] && [ -n "$(reg_key "$(record "$ME")")" ] && signer=1
+  # sign only with the key your registry record names, so what you send verifies; a strict store refuses otherwise
+  cs=""; can_sign && cs=1; rk=$(reg_key "$(record "$ME")"); signer=""
+  [ -n "$cs" ] && [ -n "$rk" ] && [ "$rk" = "$(own_pub)" ] && signer=1
   if require_sigs && [ -z "$signer" ]; then [ -n "$cs" ] || die "this store requires signatures, and no usable key is at $KEY"
-    die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"; fi
-  for c in $consume; do valid_msg "$c"; no_link "$M/inbox/$ME/$c"; no_link "$M/inbox/$ME/$c.sig"
+    [ -n "$rk" ] || die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"
+    die "this store requires signatures, and your registry record's key isn't the one at $KEY"; fi
+  # removals go through your own inbox folder, never a link to elsewhere (a link inside it is removed as a link)
+  [ -z "$consume" ] || no_link "$M/inbox/$ME"
+  for c in $consume; do valid_msg "$c"
     [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
@@ -426,7 +436,7 @@ send)
   fi
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
-  no_link "$f"; no_link "$f.sig"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
+  no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
   [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
   msg=$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
@@ -435,7 +445,7 @@ send)
 }" "${release:+release: $release
 }" "$text")
   if [ -n "$signer" ]; then put_signed "$f" "$msg"; paths="$paths $(rel "$f") $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, or your registry record names no key)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
+  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -467,10 +477,10 @@ consume)
   [ $# -ge 1 ] || die "usage: consume <file>..."
   for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
   need_me; load_adapter; ad_sync; need_store
-  paths=""
+  paths=""; no_link "$M/inbox/$ME"
   for a in "$@"; do
     b=$(basename "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
-    valid_msg "$b"; no_link "$M/inbox/$ME/$b"; no_link "$M/inbox/$ME/$b.sig"
+    valid_msg "$b"
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
   for a in "$@"; do b=$(basename "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done

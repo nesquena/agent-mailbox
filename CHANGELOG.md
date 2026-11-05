@@ -97,8 +97,9 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
-- **Fix:** in a store that requires signatures, `send` refuses before changing anything when it can't sign (no
-  usable key, or your registry record names none), instead of sending unsigned and removing the mail it consumes. A
-  signed message's signature, and a newly registered record's, is in place before the file appears, so no reader
-  sees it unsigned, and a signing that fails leaves no message behind. `consume` and `send --consume` refuse an inbox
-  reached through a symlink (#40).
+- **Fix:** in a store that requires signatures, `send` refuses before changing anything when it can't sign: no
+  usable key, or your registry record names none or a different one. Before, it sent the message unsigned or with a
+  signature that didn't verify, and removed the mail it consumed. A signed message's signature, and a newly registered
+  record's, is in place before the file appears, so no reader sees it unsigned; a signing that fails leaves no message
+  behind, and an update that fails keeps the record with the signature it had. `consume` and `send --consume` refuse an
+  inbox reached through a symlink (#40).

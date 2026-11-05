@@ -410,6 +410,13 @@ outside; expect "so does send --consume" 1 "symlink in the store: mailbox/inbox/
 kept "which deletes nothing outside the store either"
 [ "$(ls -A "$T/store/mailbox/inbox/m1")" = .keep ] && ok "and sends nothing" ||
   no "send --consume sent through a symlinked inbox" "$(ls -A "$T/store/mailbox/inbox/m1")"
+# a link inside a real inbox (here a message's .sig) doesn't jam it: consume removes the link, not what it points at
+rm "$T/store/mailbox/inbox/m2"; mkdir "$T/store/mailbox/inbox/m2"; : > "$T/store/mailbox/inbox/m2/.keep"
+as m1 send m2 linked "$T/b" >/dev/null 2>&1; l=$(basename "$(ls "$T"/store/mailbox/inbox/m2/*-m1-linked.md)")
+printf 'keep\n' > "$T/out/target"; ln -s "$T/out/target" "$T/store/mailbox/inbox/m2/$l.sig"
+expect "a message whose .sig is a link is still consumed" 0 "consumed" as m2 consume "$l"
+[ -f "$T/out/target" ] && [ ! -e "$T/store/mailbox/inbox/m2/$l" ] && [ ! -L "$T/store/mailbox/inbox/m2/$l.sig" ] &&
+  ok "and only the link goes" || no "consuming beside a link removed the wrong thing" "$(ls -A "$T/out" "$T/store/mailbox/inbox/m2")"
 if [ -n "$SSH" ]; then
   for a in n1 n2; do as $a setup --store "$T/strict" --adapter dir --name $a >/dev/null; done
   as n1 init --require-signatures >/dev/null; for a in n1 n2; do as $a register --kind t --about t >/dev/null; done
@@ -420,6 +427,7 @@ if [ -n "$SSH" ]; then
     "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
   # and an mv that notes any .md moved into place while its .sig isn't there yet
   printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done; case $d in (*.md) [ -f "$d.sig" ] || echo "$d" >> "$MVLOG" ;; esac' \
+    'if [ -n "$MVFAIL" ]; then case $d in (*"$MVFAIL") exit 1 ;; esac; fi' \
     "exec '$(command -v mv)' \"\$@\"" > "$T/sk/mv"; chmod +x "$T/sk/mv"; : > "$T/mvlog"
   signing() { (SIGNFAIL=$1 SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG MVLOG PATH; shift
     as n1 send n2 "$@" "$T/b"); }
@@ -441,6 +449,18 @@ if [ -n "$SSH" ]; then
   else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
   as n3 send n2 hello "$T/b" >/dev/null
   expect "and its mail verifies against it" 0 "n3-hello\.md \[verified\]" as n2 read
+  # an update whose final move fails leaves the record and the signature it had, so they still match
+  A="$T/strict/mailbox/agents"; cp "$A/n3.md" "$T/rec3"; cp "$A/n3.md.sig" "$T/sig3"
+  mv_fails() { (MVFAIL=$1 MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export MVFAIL MVLOG PATH; shift; as "$@"); }
+  expect "an update whose write fails fails" 1 "can't write" mv_fails agents/n3.md n3 update --about changed
+  cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
+    ok "and keeps the record with its own signature" || no "a failed update split the record from its signature" "$(ls -A "$A")"
+  # a .sig path that's a folder is refused, and nothing is published into it
+  mv "$A/n3.md.sig" "$T/sig3b"; mkdir "$A/n3.md.sig"
+  expect "update refuses a .sig that's a folder" 1 "n3\.md\.sig isn't a file" as n3 update --about changed
+  [ -z "$(ls -A "$A/n3.md.sig")" ] && [ -z "$(ls -A "$A" | grep tmp)" ] && ok "and writes nothing into it" ||
+    no "update wrote into a .sig folder" "$(ls -A "$A/n3.md.sig" "$A")"
+  rmdir "$A/n3.md.sig"; mv "$T/sig3b" "$A/n3.md.sig"
   # n1's registry record loses its key: in this strict store, n1's send is refused before anything changes
   echo q | as n2 send n1 ask - >/dev/null; q=$(basename "$(ls "$N"/n1/*-n2-ask.md)")
   sed 's/^key: .*/key: /' "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
@@ -448,6 +468,13 @@ if [ -n "$SSH" ]; then
     as n1 send n2 answer "$T/b" --consume "$q"
   [ -z "$(ls -A "$N/n2" | grep answer)" ] && [ -f "$N/n1/$q" ] && [ -f "$N/n1/$q.sig" ] &&
     ok "it sends nothing and keeps the mail it answers" || no "a refused send changed the store" "$(ls -A "$N/n1" "$N/n2")"
+  # n1's record now names n2's key: signing with n1's own key wouldn't verify, so the send is refused too
+  k=$(sed -n 's/^key: //p' "$T/strict/mailbox/agents/n2.md")
+  sed "s|^key: .*|key: $k|" "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  expect "a strict store refuses a send whose sender's record names another key" 1 "record's key isn't the one at" \
+    as n1 send n2 answer2 "$T/b" --consume "$q"
+  [ -z "$(ls -A "$N/n2" | grep answer2)" ] && [ -f "$N/n1/$q" ] && ok "and also keeps the mail it answers" ||
+    no "a send with the wrong key changed the store" "$(ls -A "$N/n1" "$N/n2")"
 fi
 
 if [ -n "$SSH" ]; then
