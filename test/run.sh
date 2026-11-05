@@ -447,19 +447,20 @@ if [ -n "$SSH" ]; then
   for a in n1 n2; do as $a setup --store "$T/strict" --adapter dir --name $a >/dev/null; done
   as n1 init --require-signatures >/dev/null; for a in n1 n2; do as $a register --kind t --about t >/dev/null; done
   N="$T/strict/mailbox/inbox"
-  # an ssh-keygen on PATH that lists the folder of each file it's asked to sign, then signs it (or fails, with SIGNFAIL)
+  # an ssh-keygen on PATH that lists SIGNDIR (the folder being written) when asked to sign, then signs (or fails, with
+  # SIGNFAIL, or signs with SIGNWITH's key instead)
   mkdir -p "$T/sk"; printf '%s\n' '#!/bin/sh' \
-    'case " $* " in (*" -Y sign "*) for a; do f=$a; done; ls -a "$(dirname "$f")" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1' \
-    "  [ -z \"\$SIGNWITH\" ] || exec '$(command -v ssh-keygen)' -Y sign -q -n agent-mailbox -f \"\$SIGNWITH\" \"\$f\" ;; esac" \
+    'case " $* " in (*" -Y sign "*) ls -a "$SIGNDIR" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1' \
+    "  [ -z \"\$SIGNWITH\" ] || exec '$(command -v ssh-keygen)' -Y sign -q -n agent-mailbox -f \"\$SIGNWITH\" ;; esac" \
     "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
   # and an rm that puts a link back at a path it was asked to remove, with RMPLANT naming the path's end
   printf '%s\n' '#!/bin/sh' "'$(command -v rm)' \"\$@\"; r=\$?" \
-    'if [ -n "$RMPLANT" ]; then for a; do case $a in (*"$RMPLANT") ln -s "$RMTO" "$a" ;; esac; done; fi; exit $r' > "$T/sk/rm"; chmod +x "$T/sk/rm"
+    'if [ -n "$RMPLANT" ]; then for a; do case $a in (*"$RMPLANT") ln -s "$RMTO" "${a%"$RMSTRIP"}" ;; esac; done; fi; exit $r' > "$T/sk/rm"; chmod +x "$T/sk/rm"
   # and an mv that notes any .md moved into place while its .sig isn't there yet
   printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done; case $d in (*.md) [ -f "$d.sig" ] || echo "$d" >> "$MVLOG" ;; esac' \
     'if [ -n "$MVFAIL" ]; then case $d in (*"$MVFAIL") exit 1 ;; esac; fi' \
     "exec '$(command -v mv)' \"\$@\"" > "$T/sk/mv"; chmod +x "$T/sk/mv"; : > "$T/mvlog"
-  signing() { (SIGNFAIL=$1 SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG MVLOG PATH; shift
+  signing() { (SIGNFAIL=$1 SIGNDIR="$N/n2" SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNDIR SIGNLOG MVLOG PATH; shift
     as n1 send n2 "$@" "$T/b"); }
   out=$(signing "" in-order 2>&1); m=$(printf '%s\n' "$out" | sed -n 's|^sent mailbox/inbox/n2/||p')
   if [ -z "$m" ]; then no "a signed send works" "$out"
@@ -471,7 +472,8 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
     no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
   as n3 setup --store "$T/strict" --adapter dir --name n3 >/dev/null
-  (SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNLOG MVLOG PATH; as n3 register --kind t --about t >/dev/null)
+  (SIGNDIR="$T/strict/mailbox/agents" SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNDIR SIGNLOG MVLOG PATH
+    as n3 register --kind t --about t >/dev/null)
   if grep -qxF n3.md "$T/signlog" || [ -s "$T/mvlog" ]; then
     no "a registry record appeared before its signature" "$(cat "$T/signlog" "$T/mvlog")"
   elif [ -f "$T/strict/mailbox/agents/n3.md.sig" ] && [ -z "$(ls -A "$T/strict/mailbox/agents" | grep tmp)" ]; then
@@ -486,7 +488,7 @@ if [ -n "$SSH" ]; then
   cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
     ok "and keeps the record with its own signature" || no "a failed update split the record from its signature" "$(ls -A "$A")"
   # an update whose signing fails leaves the record and its signature as they were
-  sign_fails() { (SIGNFAIL=1 SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG PATH; as "$@"); }
+  sign_fails() { (SIGNFAIL=1 SIGNDIR="$A" SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNDIR SIGNLOG PATH; as "$@"); }
   expect "an update whose signing fails fails" 1 "signing failed" sign_fails n3 update --about changed
   cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
     ok "and keeps the record and its signature" || no "a failed signing changed the record" "$(ls -A "$A")"
@@ -551,12 +553,19 @@ if [ -n "$SSH" ]; then
   sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$K1.pub")|" "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
   ssh-keygen -q -t ed25519 -N '' -f "$T/otherkey"
   expect "a send whose signature doesn't verify against the record is refused" 1 "doesn't verify against your registry record" \
-    sh -c "SIGNWITH='$T/otherkey' SIGNLOG='$T/signlog' PATH='$T/sk:$PATH'; export SIGNWITH SIGNLOG PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= '$SH' '$CLI' send n2 answer4 '$T/b' --consume '$q'"
+    sh -c "SIGNWITH='$T/otherkey' SIGNDIR='$N/n2' SIGNLOG='$T/signlog' PATH='$T/sk:$PATH'; export SIGNWITH SIGNDIR SIGNLOG PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= '$SH' '$CLI' send n2 answer4 '$T/b' --consume '$q'"
   [ -z "$(ls -A "$N/n2" | grep answer4)" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
     no "an unverifiable signature was published" "$(ls -A "$N/n1" "$N/n2")"
   # a temp path that can't be cleared (a link put back as it's removed) stops the write
   expect "a write stops when its temp path can't be cleared" 1 "can't clear" \
     sh -c "RMPLANT=.tmp.\$\$ RMTO='$T/victim' PATH='$T/sk:$PATH'; export RMPLANT RMTO PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= exec '$SH' '$CLI' send n2 answer5 '$T/b'"
+  rm -f "$N"/n2/*.tmp.*
+  # a link to a device slipped in at the message's temp name after it was cleared (while the .sig's is cleared) is
+  # never published: the send fails and keeps the mail it answers
+  expect "a write never publishes a temp that became a link" 1 "can't write" \
+    sh -c "RMPLANT=.tmp.\$\$.sig RMSTRIP=.sig RMTO=/dev/null PATH='$T/sk:$PATH'; export RMPLANT RMSTRIP RMTO PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= exec '$SH' '$CLI' send n2 answer6 '$T/b' --consume '$q'"
+  [ -z "$(ls -A "$N/n2" | grep 'answer6\.md$')" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
+    no "a linked temp was published" "$(ls -lA "$N/n2")"
   rm -f "$N"/n2/*.tmp.*
 fi
 

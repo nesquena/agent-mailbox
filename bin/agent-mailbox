@@ -134,11 +134,15 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
-# put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link at a guessable temp
-# name, planted before or during the run, is never followed
+# put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
+# temp name isn't followed, and check each temp is a plain file before moving it into place, so a link is never
+# published. ceiling: a writer racing a live run can still have a write land on a device or FIFO behind a link swapped
+# in between the clear and the write; that's outside the security model (docs/security.md)
 put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
   { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"
-  (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; }
+  (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && plain "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; }
+# plain <path>...: each is a regular file, not a link
+plain() { for pf; do [ -f "$pf" ] && [ ! -L "$pf" ] || return 1; done; }
 # set_cfg <key> <value>: replace or add one line of the config file
 set_cfg() {
   one_line "$1" "$2"; mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
@@ -245,12 +249,15 @@ verify_file() {
   if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
   rm -f "$allowed"; echo "$r"
 }
-sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" </dev/null >/dev/null 2>&1 || die "signing failed with $KEY"; }
+# sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
+sign_file() { (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null || die "signing failed with $KEY"; }
 # put_signed <file> <content> [<key>]: sign a temp copy and put the .sig in place before the file, so a new file never
 # shows without its signature; with <key>, the signature must verify against it first. A failed signing or check
 # leaves neither behind.
 # ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
-# dir store; only an atomic multi-file publish in the adapter would close that
+# dir store; only an atomic multi-file publish in the adapter would close that. And a writer racing a live run can
+# swap the destination for a link to a folder between the check and the final mv; mv -T (not portable) would close
+# that. Both are outside the security model (docs/security.md: writers to a store trust each other)
 put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
   for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
   for pd in "$ps" "$ps.sig" "$ps.old" "$ps.ok"; do { rm -f "$pd" && [ ! -L "$pd" ]; } || die "can't clear $(rel "$pd")"; done
@@ -266,10 +273,12 @@ put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
   # (only a regular file is kept: a .sig that's a link is replaced, never read, so nothing outside the store is copied in)
   old=; if [ -f "$1.sig" ] && [ ! -L "$1.sig" ]; then
     (set -C; cat "$1.sig" > "$ps.old") 2>/dev/null && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
-  if mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
+  if plain "$ps" "$ps.sig" && mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
+# new_keep <path>: create an inbox's .keep with noclobber, so a link planted at its name isn't followed
+new_keep() { (set -C; : > "$1") 2>/dev/null || die "can't create $(rel "$1")"; }
 # own_pub: the public half of $KEY as "<type> <base64>", derived from the key, or from $KEY.pub for one with a passphrase
 own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); matches "$KEY_RE" "$op" || op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null)
   printf '%s\n' "$op"; }
@@ -370,7 +379,7 @@ register|update)
   paths="$ROOT/agents/$ME.md"
   if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
-  mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { : > "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
+  mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
@@ -455,7 +464,7 @@ send)
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
   no_link "$f"; no_link "$M/inbox/$to/.keep"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
-  [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
+  [ -f "$M/inbox/$to/.keep" ] || { new_keep "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
   msg=$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
     "$PROTOCOL" "$ME" "$to" "$topic" "$context" "$(stamp_iso "$stamp")" "$reply" "$needs" \
     "${hold:+hold: $hold
