@@ -28,7 +28,7 @@ as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAI
 # pinned <agent> <file> <victim> <args...>: run the CLI as <agent> after planting links to <victim> at <file>'s temp
 # names for the process id the CLI will run as (exec keeps it); the id is left in <victim>.pid
 pinned() { a=$1 pf=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'echo $$ > "$2.pid"; ln -s "$2" "$1.tmp.$$"; ln -s "$2" "$1.tmp.$$.old"
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'echo $$ > "$2.pid"; for x in "" .sig .old; do ln -s "$2" "$1.tmp.$$$x"; done
   shift 2; exec "$@"' sh "$pf" "$pv" "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
@@ -425,6 +425,11 @@ expect "an unsigned register refuses a record path that's a folder" 1 "m3\.md is
 [ -z "$(ls -A "$T/store/mailbox/agents/m3.md")" ] && ok "and moves nothing into it" ||
   no "an unsigned register wrote into a record folder" "$(ls -A "$T/store/mailbox/agents/m3.md")"
 rmdir "$T/store/mailbox/agents/m3.md"
+# a recipient's .keep that's a link is refused: nothing is created through it
+rm -f "$T/store/mailbox/inbox/m1/.keep"; ln -s "$T/out/keep-target" "$T/store/mailbox/inbox/m1/.keep"
+expect "send refuses a recipient .keep that's a link" 1 "symlink in the store" as m2 send m1 keeplink "$T/b"
+[ ! -e "$T/out/keep-target" ] && ok "and creates nothing outside the store" || no "send created a file through a linked .keep"
+rm -f "$T/store/mailbox/inbox/m1/.keep"; : > "$T/store/mailbox/inbox/m1/.keep"
 # ... and unsigned (put)
 printf 'untouched\n' > "$T/victim"; MA="$T/store/mailbox/agents"
 pinned m1 "$MA/m1.md" "$T/victim" update --about changed >/dev/null 2>&1
@@ -444,8 +449,12 @@ if [ -n "$SSH" ]; then
   N="$T/strict/mailbox/inbox"
   # an ssh-keygen on PATH that lists the folder of each file it's asked to sign, then signs it (or fails, with SIGNFAIL)
   mkdir -p "$T/sk"; printf '%s\n' '#!/bin/sh' \
-    'case " $* " in (*" -Y sign "*) for a; do f=$a; done; ls -a "$(dirname "$f")" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1 ;; esac' \
+    'case " $* " in (*" -Y sign "*) for a; do f=$a; done; ls -a "$(dirname "$f")" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1' \
+    "  [ -z \"\$SIGNWITH\" ] || exec '$(command -v ssh-keygen)' -Y sign -q -n agent-mailbox -f \"\$SIGNWITH\" \"\$f\" ;; esac" \
     "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
+  # and an rm that puts a link back at a path it was asked to remove, with RMPLANT naming the path's end
+  printf '%s\n' '#!/bin/sh' "'$(command -v rm)' \"\$@\"; r=\$?" \
+    'if [ -n "$RMPLANT" ]; then for a; do case $a in (*"$RMPLANT") ln -s "$RMTO" "$a" ;; esac; done; fi; exit $r' > "$T/sk/rm"; chmod +x "$T/sk/rm"
   # and an mv that notes any .md moved into place while its .sig isn't there yet
   printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done; case $d in (*.md) [ -f "$d.sig" ] || echo "$d" >> "$MVLOG" ;; esac' \
     'if [ -n "$MVFAIL" ]; then case $d in (*"$MVFAIL") exit 1 ;; esac; fi' \
@@ -487,6 +496,16 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$A/n3.md.sig")" ] && [ -z "$(ls -A "$A" | grep tmp)" ] && ok "and writes nothing into it" ||
     no "update wrote into a .sig folder" "$(ls -A "$A/n3.md.sig" "$A")"
   rmdir "$A/n3.md.sig"; mv "$T/sig3b" "$A/n3.md.sig"
+  # a .sig that's a link to a folder is replaced by the signature, not refused and not written into
+  mkdir -p "$T/sigdir"; mv "$A/n3.md.sig" "$T/sig3d"; ln -s "$T/sigdir" "$A/n3.md.sig"
+  expect "an update replaces a .sig linked to a folder" 0 "" as n3 update --about changed
+  [ -f "$A/n3.md.sig" ] && [ ! -L "$A/n3.md.sig" ] && [ -z "$(ls -A "$T/sigdir")" ] && ok "with its own signature, writing nothing into the folder" ||
+    no "a .sig linked to a folder was followed or kept" "$(ls -l "$A/n3.md.sig"; ls -A "$T/sigdir")"
+  # register --key refuses a .pub that isn't the public half of the private key beside it
+  ssh-keygen -q -t ed25519 -N '' -f "$T/k5" && ssh-keygen -q -t ed25519 -N '' -f "$T/k5b" && cp "$T/k5b.pub" "$T/k5.pub"
+  as n5 setup --store "$T/strict" --adapter dir --name n5 >/dev/null
+  expect "register --key refuses a .pub that doesn't match its private key" 1 "isn't the public half of" \
+    as n5 register --kind t --about t --key "$T/k5.pub"
   # so is a record path that's a folder: register says so, and nothing is moved into it
   mkdir "$A/n4.md"; as n4 setup --store "$T/strict" --adapter dir --name n4 >/dev/null
   expect "register refuses a record path that's a folder" 1 "n4\.md isn't a file" as n4 register --kind t --about t
@@ -528,6 +547,17 @@ if [ -n "$SSH" ]; then
       no "an unreadable public key changed the store" "$(ls -A "$N/n1" "$N/n2")"
     ssh-keygen -p -q -P pw -N '' -f "$K1" >/dev/null 2>&1; ssh-keygen -y -f "$K1" > "$K1.pub"
   else no "couldn't set up the passphrase-protected key" "$K1"; fi
+  # a signature that doesn't verify against the record's key (here, made with another key) is never published
+  sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$K1.pub")|" "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  ssh-keygen -q -t ed25519 -N '' -f "$T/otherkey"
+  expect "a send whose signature doesn't verify against the record is refused" 1 "doesn't verify against your registry record" \
+    sh -c "SIGNWITH='$T/otherkey' SIGNLOG='$T/signlog' PATH='$T/sk:$PATH'; export SIGNWITH SIGNLOG PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= '$SH' '$CLI' send n2 answer4 '$T/b' --consume '$q'"
+  [ -z "$(ls -A "$N/n2" | grep answer4)" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
+    no "an unverifiable signature was published" "$(ls -A "$N/n1" "$N/n2")"
+  # a temp path that can't be cleared (a link put back as it's removed) stops the write
+  expect "a write stops when its temp path can't be cleared" 1 "can't clear" \
+    sh -c "RMPLANT=.tmp.\$\$ RMTO='$T/victim' PATH='$T/sk:$PATH'; export RMPLANT RMTO PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= exec '$SH' '$CLI' send n2 answer5 '$T/b'"
+  rm -f "$N"/n2/*.tmp.*
 fi
 
 if [ -n "$SSH" ]; then

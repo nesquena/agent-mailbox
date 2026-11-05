@@ -104,6 +104,8 @@ First version.
   it for that check: without one, a strict store refuses and says how to restore it, and an open store sends unsigned.
   A signed message's signature, and a newly registered record's, is in place before the file appears, so no reader
   sees it unsigned; a signing that fails leaves no message behind, and an update that fails keeps the record with the
-  signature it had. Writes no longer follow a link left at a temporary file's name, and a record or `.sig` path that's
-  a folder is refused instead of having the file moved into it. `consume` and `send --consume` refuse an inbox reached
-  through a symlink (#40).
+  signature it had. A signature that doesn't verify against your registry record's key is never published, and
+  `register --key` refuses a `.pub` that isn't the public half of the private key beside it. Writes never follow a
+  link at a temporary file's name, and `send` refuses a recipient's `.keep` that's a link. A record or `.sig` path
+  that's a folder is refused instead of having the file moved into it. `consume` and `send --consume` refuse an inbox
+  reached through a symlink (#40).
