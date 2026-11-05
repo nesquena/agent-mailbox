@@ -1146,6 +1146,12 @@ mkdir -p "$T/qrl"; printf '#!/bin/sh\nt=$("%s" "$1"; echo .); t=${t%%.}; t=${t%%
   "$(command -v readlink)" > "$T/qrl/readlink"; chmod +x "$T/qrl/readlink"
 n=$((n+1)); expect "or such a chain where readlink shows the newline as ?" 1 "refusing to send" \
   env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk/l"
+# ...and a decoy file named as that readlink shows it doesn't stand in for the real target
+mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
+"; ln -s "a
+" "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
+n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
+  env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
@@ -1166,6 +1172,8 @@ for i in 2 3 4 5 6 7 8 9 10; do mkdir -p "$T/rfarm/d$i"; ln -s "../d$i" "$T/rfar
 echo hi > "$T/rfarm/d10/b.md"
 expect "and so does one under ten nested relative folder links" 0 "^sent " as sec1 send sec2 rfarm "$p/b.md"
 expect "and one under a folder link sends whatever HD says" 0 "^sent " env HD=9 HOME="$H" "$SH" "$CLI" send sec2 hd "$T/farm/l1/b.md"
+echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
+expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
 
