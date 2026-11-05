@@ -116,10 +116,12 @@ for AD in $ADAPTERS; do
   ahead() { date -u -d "+$1 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+"$1"S +%Y-%m-%dT%H:%M:%SZ; }
   pm 20200101T000013Z-alice-skew.md alice bob "$(ahead 30)" none
   pm 20200101T000014Z-alice-space.md alice bob "2020-01-01 00:00:00Z" none
-  mkdir -p "$T/ps/Bob"; pm 20200101T000015Z-alice-badname.md alice Bob 2020-01-01T00:00:00Z none
+  mkdir -p "$T/ps/x_y"; pm 20200101T000015Z-alice-badname.md alice x_y 2020-01-01T00:00:00Z none
+  pm 20200101T000016Z-alice-1900.md alice bob 1900-02-29T00:00:00Z none
   pm 20200101T000010Z-alice-long.md alice bob 2020-01-01T00:00:00Z "$(printf '%0300d' 0)"
   tamper "cp -R '$T/ps/.' mailbox/inbox/"
-  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /')
+  # (the skewed one's age depends on how long this run took, up to its 30 s head start)
+  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /; s/(alice-skew\.md to bob age )[0-9]+[sm]$/\1Ns/')
   want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an\\x1b[2Janswer
 mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
 mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
@@ -129,17 +131,18 @@ mailbox/inbox/bob/20200101T000008Z-alice-range.md to bob age ?
 mailbox/inbox/bob/20200101T000009Z-alice-ahead.md to bob age ?
 mailbox/inbox/bob/20200101T000011Z-alice-feb30.md to bob age ?
 mailbox/inbox/bob/20200101T000012Z-alice-leap.md to bob age old stale
-mailbox/inbox/bob/20200101T000013Z-alice-skew.md to bob age 0s
-mailbox/inbox/bob/20200101T000014Z-alice-space.md to bob age ?"
+mailbox/inbox/bob/20200101T000013Z-alice-skew.md to bob age Ns
+mailbox/inbox/bob/20200101T000014Z-alice-space.md to bob age ?
+mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
   long=$(printf '%s\n' "$out" | grep -- '-alice-long\.md '); out=$(printf '%s\n' "$out" | grep -v -- '-alice-long\.md ')
   case $long in (*" age "*" stale needs: 000"*...) [ ${#long} -le 300 ] && ok "a long needs is cut, keeping the age and stale mark" || no "a long needs isn't capped" "$long" ;;
     (*) no "a long needs isn't capped" "$long" ;; esac
   [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
     no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
-  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space)" ] &&
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
-  tamper "rm -rf mailbox/inbox/carol mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
+  tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins
