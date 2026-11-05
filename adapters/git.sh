@@ -58,11 +58,12 @@ ad_open() {
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
     # (a store that lacks the branch, ls-remote exit 2, is cloned without it; any other failure is an error)
     rm -rf "$AD_DIR"
-    # (ls-remote runs from the state folder, so no repository the caller is in lends it config; a local store path
-    # is made absolute first)
-    case "$STORE" in (/*|*:*) st=$STORE ;; (*) st=$PWD/$STORE ;; esac
+    # (ls-remote sees the store as the clone does, from here and with URL rewrites; GIT_DIR names the temporary folder,
+    # just removed, so no repository the caller is in lends it config. It won't take a path starting with -, even
+    # after --)
+    st=$STORE; case "$st" in (-*) st=./$st ;; esac
     err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
-      (cd "$STATE" && GIT_CEILING_DIRECTORIES=$STATE ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1)
+      (GIT_DIR=$AD_DIR && export GIT_DIR && ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1)
       [ $? = 2 ] && err=$(ad_clone); } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
