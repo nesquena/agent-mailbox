@@ -15,11 +15,12 @@
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
-#   line-ending conversion, filters (Git LFS too) and merge and diff drivers, and git runs with submodule recursion
-#   off and without hooks, so every file is checked out exactly as stored and nothing the store names is contacted.
+#   line-ending conversion, filters (Git LFS too) and diff drivers, and has merges use git's own text merge; git runs
+#   with submodule recursion off and without hooks, so every file is checked out exactly as stored and nothing the
+#   store names is contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null -c merge.default=text "$@"; }
+ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
@@ -27,7 +28,7 @@ ad_clone() { git -c core.hooksPath=/dev/null clone -q --no-checkout --single-bra
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
-AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff !merge'
+AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff merge'
 ad_attrs_put() { mkdir -p "$AD_DIR/.git/info" &&
   printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af"; }
 ad_attrs() {

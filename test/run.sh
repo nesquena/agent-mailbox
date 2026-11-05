@@ -321,7 +321,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
   find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
   : > "$C/.git/index.lock"; as p2 list >/dev/null 2>&1; rm -f "$C/.git/index.lock"
-  grep -qxF -- '* -text -eol -filter -ident -working-tree-encoding !diff !merge' "$C/.git/info/attributes" &&
+  grep -qxF -- '* -text -eol -filter -ident -working-tree-encoding !diff merge' "$C/.git/info/attributes" &&
     ok "the store's attributes stay inert while it waits" || no "a failed second checkout left the store's attributes in force"
   expect "a second checkout that failed is tried again by the next command" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and the message is then as stored" || no "a failed second checkout was never retried"
@@ -331,6 +331,8 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree HEAD "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
     "$(command -v git)" > "$T/killgit/git"; chmod +x "$T/killgit/git"
   env PATH="$T/killgit:$PATH" HOME="$W/home-p2" "$SH" "$CLI" list >/dev/null 2>&1
+  [ "$(head -n 1 "$C/.git/info/attributes")" = "# retry" ] && ok "(the command was cut off with the second checkout still to do)" ||
+    no "the cut-off setup didn't stop the second checkout" "$(head -n 1 "$C/.git/info/attributes")"
   expect "a second checkout cut off part-way is redone by the next command" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and the message is as stored after that" || no "a second checkout cut off part-way was never redone"
   expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
