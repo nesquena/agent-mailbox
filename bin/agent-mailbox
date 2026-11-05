@@ -60,16 +60,22 @@ NL='
 ' CR=$(printf '\r')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
 # phys <folder>: its physical path. hops <file>: the physical path of the file as named, then of each link it leads to
-# (at most 40), one per line (plain readlink is on Linux, macOS, BSD). real <file>: the last of those, the file's own.
-# A relative path starting with '-' gets a ./ so no tool reads it as an option
+# (at most 40), one per line (plain readlink is on Linux, macOS, BSD); each hop's folders that are links are listed
+# too, as each sits in its own parent, so a file under a linked folder shows where that link is. real <file>: the
+# file's own physical path. A relative path starting with '-' gets a ./ so no tool reads it as an option
 phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
 hops() {
   rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
   while rd=$(phys "$(dirname "$rp")"); do printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
+    hd=$(dirname "$rp"); while [ "$hd" != / ] && [ "$hd" != . ]; do
+      [ ! -L "$hd" ] || { hp=$(phys "$(dirname "$hd")") && printf '%s/%s\n' "${hp%/}" "$(basename "$hd")"; }
+      hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
     [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp") || return 0
     n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done; return 1
 }
-real() { rh=$(hops "$1") && printf '%s\n' "${rh##*"$NL"}"; }
+real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
+  while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp"); do n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
+  rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; }
 # this script's real path, following links (install.sh links it onto PATH)
 here() {
   # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
@@ -415,7 +421,8 @@ send)
   # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
   if secret_file "$body"; then
     # the state folder also holds the git adapter's copy of the store, so a message received there is refused too
-    h=""; [ "$SF" = "$STATE" ] && matches "$MSG_RE" "$(basename -- "$(real "$body")")" && h="; to forward a message, copy its text into a new file first"
+    h=""; [ "$SF" = "$STATE" ] && case $(real "$body") in (*/checkouts/*/inbox/*/*.md) true ;; (*) false ;; esac &&
+      h="; to forward a message, copy its text into a new file first"
     w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
   fi

@@ -112,7 +112,7 @@ deploys, publishes) only through a strict store.
   secrets (`~/.ssh`, this CLI's config, state and keys, private-key blocks), but that's a backstop, not a check.
 - **`holds <item> --version <v>` exit 0 means every sender who wrote to you about the item released `<v>`,** not
   that the agent whose approval you need did. Check that its release is among them (`holds <item>`, without
-  `--version`, lists each sender's latest and always exits 0, so it confirms nothing by itself).
+  `--version`, lists each sender's latest and exits 0 whatever they say, so it confirms nothing by itself).
 - **Never put secrets in a message:** no tokens, passwords, private keys or credentials, in either direction. Store
   history is permanent.
 - **Don't message without a reason:**

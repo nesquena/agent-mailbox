@@ -81,6 +81,10 @@ for AD in $ADAPTERS; do
   # the git adapter's copy of the store is in the state folder: forwarding a message from there is refused, saying how
   [ "$AD" != git ] || expect "send refuses a message in its copy of the store, saying how to forward it" 1 "copy its text into a new file" \
     as bob send alice fwd "$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts"/*/"$f")"
+  # ...but the hint is only for a received message, not other store files there (store.md, a registry record)
+  if [ "$AD" = git ]; then out=$(as bob send alice fwd2 "$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts"/*/mailbox/store.md)" 2>&1)
+    case $out in (*"refusing to send"*"copy its text"*) no "the forward hint shows for a store file that isn't a message" "$out" ;;
+      (*"refusing to send"*) ok "and refuses other store files without the forward hint" ;; (*) no "send didn't refuse store.md in its copy of the store" "$out" ;; esac; fi
 
   echo "yes" > "$T/reply"
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
@@ -836,6 +840,10 @@ mkdir -p "$H/.ssh" "$C/keys" "$S"; for f in "$H/.ssh/id_ed25519" "$C/keys/sec1" 
 ln -s "$H/.ssh/id_ed25519" "$T/notes.md"; ln -s "$H/.ssh" "$T/dotssh"
 # ~/.ssh/config as a dotfile manager links it in, to a file outside ~/.ssh, and a link to that link
 echo "Host x" > "$T/ssh-config"; ln -s "$T/ssh-config" "$H/.ssh/config"; ln -s "$H/.ssh/config" "$T/via-ssh.md"
+# a folder in ~/.ssh linked in from outside (config.d from a dotfiles repo), a link to a file in it, and a folder
+# linked to ~/.ssh that holds such a folder
+mkdir -p "$T/dotfiles/config.d"; echo "Host w" > "$T/dotfiles/config.d/work"; ln -s "$T/dotfiles/config.d" "$H/.ssh/config.d"
+ln -s "$H/.ssh/config.d/work" "$T/via-dir.md"
 printf 'PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAA\n' > "$T/key.ppk"
 # refused <description> <body file>: sec1's send of it fails, saying why (each on its own topic, so none is refused
 # for sharing a second with another)
@@ -845,6 +853,9 @@ refused "or a link to one" "$T/notes.md"
 refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
+refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+refused "or a link to such a file" "$T/via-dir.md"
+refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 refused "or the CLI's config" "$C/config"
 refused "or its signing key" "$C/keys/sec1"
 refused "or a file in its state folder" "$S/note"
