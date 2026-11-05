@@ -106,17 +106,26 @@ for AD in $ADAPTERS; do
   ago() { date -u -d "-$1 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-"$1"H +%Y-%m-%dT%H:%M:%SZ; }
   pm 20200101T000006Z-alice-h25.md alice bob "$(ago 25)" none
   pm 20200101T000007Z-alice-h23.md alice bob "$(ago 23)" none
+  # a sent time out of range, or ahead of now, shows "?"; a long needs is cut to the line cap
+  pm 20200101T000008Z-alice-range.md alice bob 2020-13-45T99:99:99Z none
+  pm 20200101T000009Z-alice-ahead.md alice bob 2099-01-01T00:00:00Z none
+  pm 20200101T000010Z-alice-long.md alice bob 2020-01-01T00:00:00Z "$(printf '%0300d' 0)"
   tamper "cp -R '$T/ps/.' mailbox/inbox/"
   out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /')
   want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an\\x1b[2Janswer
 mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
 mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
 mailbox/inbox/bob/20200101T000006Z-alice-h25.md to bob age 1d1h stale
-mailbox/inbox/bob/20200101T000007Z-alice-h23.md to bob age 23h"
+mailbox/inbox/bob/20200101T000007Z-alice-h23.md to bob age 23h
+mailbox/inbox/bob/20200101T000008Z-alice-range.md to bob age ?
+mailbox/inbox/bob/20200101T000009Z-alice-ahead.md to bob age ?"
+  long=$(printf '%s\n' "$out" | grep -- '-alice-long\.md '); out=$(printf '%s\n' "$out" | grep -v -- '-alice-long\.md ')
+  case $long in (*" needs: 000"*...) [ ${#long} -le 203 ] && ok "a long needs is cut to the line cap" || no "a long needs isn't capped" "$long" ;;
+    (*) no "a long needs isn't capped" "$long" ;; esac
   [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
     no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
-  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23)" ] &&
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
