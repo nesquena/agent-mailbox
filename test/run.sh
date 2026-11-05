@@ -880,6 +880,22 @@ printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRI
 refused "or in a body file" "$T/rsa.md"
 refused "or a PuTTY key" "$T/key.ppk"
 expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
+mkdir -p "$T/nl
+"; echo hi > "$T/nl
+/b.md"
+n=$((n+1)); expect "or one whose path can't be followed to the end, saying so" 1 "can't be followed" as sec1 send sec2 "sec-$n" "$T/nl
+/b.md"
+# a link whose name ends in a newline, reached through a link to it, and a folder link so named: neither is taken
+# for the name without it
+mkdir -p "$T/nlk"; ln -s "$H/.ssh/id_ed25519" "$T/nlk/x
+"; ln -s "x
+" "$T/nlk/l"; refused "or a key reached through a link named with a trailing newline" "$T/nlk/l"
+ln -s "$H/.ssh" "$T/nlk/d
+"; mkdir -p "$T/nlk/d"; refused "or through a folder link so named" "$T/nlk/d
+/id_ed25519"
+# a relative link under a folder link reaches a key from where it really sits
+mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
+refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
 [ -z "$(ls "$T/store/mailbox/inbox/sec2")" ] && ok "and writes nothing for any of them" || no "a refused send wrote mail" "$(ls "$T/store/mailbox/inbox/sec2")"
 # ordinary bodies still send: prose about keys, public keys, and a file beside ~/.ssh whose name starts the same
 printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here.\n' > "$T/prose.md"
@@ -888,6 +904,11 @@ echo "notes" > "$H/.ssh-notes.md"
 expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
 expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
 expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"
+# nine folder links in a row on the path, and an HD in the environment, don't stop an ordinary file
+mkdir -p "$T/farm"; p="$T/farm"; for i in 1 2 3 4 5 6 7 8 9; do mkdir -p "$T/farm/d$i"; ln -s "$T/farm/d$i" "$p/l$i"; p=$p/l$i; done
+echo hi > "$T/farm/d9/b.md"; echo hi > "$T/farm/d1/b.md"
+expect "a file under nine folder links in a row sends" 0 "^sent " as sec1 send sec2 farm "$p/b.md"
+expect "and one under a folder link sends whatever HD says" 0 "^sent " env HD=9 HOME="$H" "$SH" "$CLI" send sec2 hd "$T/farm/l1/b.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
 
