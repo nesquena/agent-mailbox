@@ -99,4 +99,4 @@ First version.
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about. The skill, JOIN.md and the Claude Code Stop hook's message
-  say so (#XXXX).
+  say so (#42).
