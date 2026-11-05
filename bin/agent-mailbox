@@ -134,7 +134,10 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
-put() { tmp="$1.tmp.$$"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
+# put and put_signed clear their temp paths before writing, so a link planted at a guessable temp name isn't followed.
+# ceiling: a writer racing the clear-then-create in a shared dir store isn't stopped; per-agent private temp folders
+# would close it
+put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"; rm -f "$tmp"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
 # set_cfg <key> <value>: replace or add one line of the config file
 set_cfg() {
   one_line "$1" "$2"; mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
@@ -246,7 +249,8 @@ sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || d
 # without its signature; a failed signing leaves neither behind.
 # ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
 # dir store; only an atomic multi-file publish in the adapter would close that
-put_signed() { ps="$1.tmp.$$"; [ ! -d "$1.sig" ] || die "$(rel "$1.sig") isn't a file"
+put_signed() { ps="$1.tmp.$$"; for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
+  rm -f "$ps" "$ps.sig" "$ps.old"
   printf '%s\n' "$2" > "$ps" || { rm -f "$ps"; die "can't write $(rel "$1")"; }
   (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
   # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
@@ -257,8 +261,8 @@ put_signed() { ps="$1.tmp.$$"; [ ! -d "$1.sig" ] || die "$(rel "$1.sig") isn't a
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
-# own_pub: the public half of $KEY as "<type> <base64>", from $KEY.pub or derived from the key
-own_pub() { op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null); matches "$KEY_RE" "$op" || op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2)
+# own_pub: the public half of $KEY as "<type> <base64>", derived from the key, or from $KEY.pub for one with a passphrase
+own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); matches "$KEY_RE" "$op" || op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null)
   printf '%s\n' "$op"; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
@@ -448,7 +452,7 @@ send)
 }" "${release:+release: $release
 }" "$text")
   if [ -n "$signer" ]; then put_signed "$f" "$msg"; paths="$paths $(rel "$f") $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
+  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths

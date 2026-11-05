@@ -100,7 +100,8 @@ First version.
 - **Fix:** in a store that requires signatures, `send` also refuses before changing anything when your registry record
   names no key, or a different key from yours. Before, it sent the message unsigned or with a signature that didn't
   verify, and removed the mail it consumed. In a store that doesn't require signatures, such a send now goes unsigned,
-  with a warning, instead of carrying a signature that doesn't verify. A signed message's signature, and a newly
-  registered record's, is in place before the file appears, so no reader sees it unsigned; a signing that fails leaves
-  no message behind, and an update that fails keeps the record with the signature it had. `consume` and
+  with a warning, instead of carrying a signature that doesn't verify. A key with a passphrase needs its `.pub` beside
+  it for that check; without one, a strict store refuses and says how to restore it. A signed message's signature, and
+  a newly registered record's, is in place before the file appears, so no reader sees it unsigned; a signing that
+  fails leaves no message behind, and an update that fails keeps the record with the signature it had. `consume` and
   `send --consume` refuse an inbox reached through a symlink (#40).

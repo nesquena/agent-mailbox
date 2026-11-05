@@ -410,6 +410,12 @@ outside; expect "so does send --consume" 1 "symlink in the store: mailbox/inbox/
 kept "which deletes nothing outside the store either"
 [ "$(ls -A "$T/store/mailbox/inbox/m1")" = .keep ] && ok "and sends nothing" ||
   no "send --consume sent through a symlinked inbox" "$(ls -A "$T/store/mailbox/inbox/m1")"
+# an unsigned write refuses a record path that's a folder, and moves nothing into it
+mkdir "$T/store/mailbox/agents/m3.md"; as m3 setup --store "$T/store" --adapter dir --name m3 >/dev/null
+expect "an unsigned register refuses a record path that's a folder" 1 "m3\.md isn't a file" as m3 register --kind t --about t --no-key
+[ -z "$(ls -A "$T/store/mailbox/agents/m3.md")" ] && ok "and moves nothing into it" ||
+  no "an unsigned register wrote into a record folder" "$(ls -A "$T/store/mailbox/agents/m3.md")"
+rmdir "$T/store/mailbox/agents/m3.md"
 # a link inside a real inbox (here a message's .sig) doesn't jam it: consume removes the link, not what it points at
 rm "$T/store/mailbox/inbox/m2"; mkdir "$T/store/mailbox/inbox/m2"; : > "$T/store/mailbox/inbox/m2/.keep"
 as m1 send m2 linked "$T/b" >/dev/null 2>&1; l=$(basename "$(ls "$T"/store/mailbox/inbox/m2/*-m1-linked.md)")
@@ -466,6 +472,21 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$A/n3.md.sig")" ] && [ -z "$(ls -A "$A" | grep tmp)" ] && ok "and writes nothing into it" ||
     no "update wrote into a .sig folder" "$(ls -A "$A/n3.md.sig" "$A")"
   rmdir "$A/n3.md.sig"; mv "$T/sig3b" "$A/n3.md.sig"
+  # so is a record path that's a folder: register says so, and nothing is moved into it
+  mkdir "$A/n4.md"; as n4 setup --store "$T/strict" --adapter dir --name n4 >/dev/null
+  expect "register refuses a record path that's a folder" 1 "n4\.md isn't a file" as n4 register --kind t --about t
+  [ -z "$(ls -A "$A/n4.md")" ] && ok "and moves nothing into it" || no "register wrote into a record folder" "$(ls -A "$A/n4.md")"
+  rmdir "$A/n4.md"
+  # links planted at the guessable temp names of the next few hundred process ids aren't followed: planting takes one
+  # process each, so the update below runs inside the range, and the one link it clears shows which
+  printf 'untouched\n' > "$T/victim"; lo=$(($(sh -c 'echo $$') + 400)); i=$lo
+  while [ $i -lt $((lo + 400)) ]; do ln -s "$T/victim" "$A/n3.md.tmp.$i"; i=$((i+1)); done
+  as n3 update --about changed-again >/dev/null 2>&1; cleared=""; i=$lo
+  while [ $i -lt $((lo + 400)) ]; do [ -L "$A/n3.md.tmp.$i" ] || cleared=$i; i=$((i+1)); done
+  if [ "$(cat "$T/victim")" != untouched ] || [ -L "$A/n3.md" ]; then no "a write followed a planted temp link" "$(cat "$T/victim")"
+  elif [ -n "$cleared" ]; then ok "a planted temp link isn't followed"
+  else no "the update ran outside the planted process ids, so this test proved nothing" "$lo-$((lo + 399))"; fi
+  rm -f "$A"/n3.md.tmp.*
   # a .sig that's a link to a file outside the store is replaced, never read: its target never lands in the store
   printf 'outside-secret\n' > "$T/secret"; mv "$A/n3.md.sig" "$T/sig3c"; ln -s "$T/secret" "$A/n3.md.sig"
   mv_fails agents/n3.md n3 update --about changed >/dev/null 2>&1
@@ -488,6 +509,15 @@ if [ -n "$SSH" ]; then
     as n1 send n2 answer2 "$T/b" --consume "$q"
   [ -z "$(ls -A "$N/n2" | grep answer2)" ] && [ -f "$N/n1/$q" ] && ok "and also keeps the mail it answers" ||
     no "a send with the wrong key changed the store" "$(ls -A "$N/n1" "$N/n2")"
+  # n1's key gets a passphrase and loses its .pub: send can't tell whether it matches, so a strict store refuses
+  K1="$W/home-n1/.config/agent-mailbox/keys/n1"
+  if [ -f "$K1" ] && ssh-keygen -p -q -P '' -N pw -f "$K1" >/dev/null 2>&1 && rm -f "$K1.pub"; then
+    expect "a strict store refuses a send whose public key it can't read" 1 "can't read the public half" \
+      as n1 send n2 answer3 "$T/b" --consume "$q"
+    [ -z "$(ls -A "$N/n2" | grep answer3)" ] && [ -f "$N/n1/$q" ] && ok "and keeps the mail it answers" ||
+      no "an unreadable public key changed the store" "$(ls -A "$N/n1" "$N/n2")"
+    ssh-keygen -p -q -P pw -N '' -f "$K1" >/dev/null 2>&1; ssh-keygen -y -f "$K1" > "$K1.pub"
+  else no "couldn't set up the passphrase-protected key" "$K1"; fi
 fi
 
 if [ -n "$SSH" ]; then
