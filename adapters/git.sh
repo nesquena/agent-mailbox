@@ -55,18 +55,12 @@ ad_open() {
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
     d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
-    # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
-    # (a store that lacks the branch, ls-remote exit 2, is cloned without it; any other failure is an error)
+    # clone only the mailbox branch; a store that doesn't have it yet is cloned without it. clone itself says which it
+    # is (git's message, in the C locale), so nothing reads the store's name any other way than clone does; any other
+    # failure is an error
     rm -rf "$AD_DIR"
-    # (ls-remote sees the store as the clone does, from here and with URL rewrites; GIT_DIR names the temporary folder,
-    # just removed, which git takes as no repository, so none the caller is in lends it config. clone takes a name
-    # that exists here as a local path, as ls-remote doesn't for a bare one, with a colon (scp-style) or a remote's
-    # name, or one starting with -: so such a name gets a ./). ceiling: a writer in the state folder racing this command
-    # could put a repository at that temporary name first; the state folder is the agent's own
-    st=$STORE; case "$st" in (/*|./*|../*) ;; (*) for x in "" .git .bundle; do [ ! -e "$st$x" ] || { st=./$st; break; }; done ;; esac
-    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
-      (GIT_DIR=$AD_DIR && export GIT_DIR && ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1)
-      [ $? = 2 ] && err=$(ad_clone); } ||
+    err=$(LC_ALL=C && export LC_ALL && ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
+      case $err in (*"Remote branch $BRANCH not found in upstream"*) err=$(ad_clone) ;; (*) false ;; esac; } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
     ad_attrs || :
