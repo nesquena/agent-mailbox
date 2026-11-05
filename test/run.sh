@@ -1141,6 +1141,11 @@ mkdir -p "$T/nlk"; ln -s "$H/.ssh/id_ed25519" "$T/nlk/x
 ln -s "$H/.ssh" "$T/nlk/d
 "; mkdir -p "$T/nlk/d"; refused "or through a folder link so named" "$T/nlk/d
 /id_ed25519"
+# where readlink prints a byte it can't show as ? (macOS), a link chain through such a name is refused, not guessed
+mkdir -p "$T/qrl"; printf '#!/bin/sh\nt=$("%s" "$1"; echo .); t=${t%%.}; t=${t%%"\n"}\nprintf %%s "$t" | LC_ALL=C tr -c "[:print:]" "?"; echo\n' \
+  "$(command -v readlink)" > "$T/qrl/readlink"; chmod +x "$T/qrl/readlink"
+n=$((n+1)); expect "or such a chain where readlink shows the newline as ?" 1 "refusing to send" \
+  env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk/l"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"

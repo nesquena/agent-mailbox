@@ -89,7 +89,10 @@ hops() {
     # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
     # aren't walked again; but not under /proc, where self names the subshell phys ran in
     n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
-      (*) rp=${rd%/}/$rl ;; esac ;; esac; done; return 1
+      (*) rp=${rd%/}/$rl ;; esac ;; esac
+    # a target that isn't there wasn't read as stored (macOS's readlink prints some bytes as ?): refuse, not guess.
+    # /proc's own links (a pipe on stdin) name no file
+    case "$rd" in (/proc|/proc/*) ;; (*) [ -e "$rp" ] || [ -L "$rp" ] || return 1 ;; esac; done; return 1
 }
 real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
   while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .); do rl=${rl%.}; rl=${rl%"$NL"}; n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
