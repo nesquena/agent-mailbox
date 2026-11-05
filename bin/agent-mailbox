@@ -60,15 +60,17 @@ NL='
 ' CR=$(printf '\r')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
 # phys <folder>: its physical path. hops <file>: the physical path of the file as named, then of each link it leads to
-# (at most 40), one per line (plain readlink is on Linux, macOS, BSD); each hop's folders that are links are listed
-# too, as each sits in its own parent, so a file under a linked folder shows where that link is. real <file>: the
+# (at most 40), one per line (plain readlink is on Linux, macOS, BSD); each hop's folders that are links are followed
+# too, so a file under a linked folder shows where that link sits and where it leads. real <file>: the
 # file's own physical path. A relative path starting with '-' gets a ./ so no tool reads it as an option
 phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
 hops() {
-  rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
+  # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too
+  rp=$1; case "$rp" in (/*) ;; (*) rp=${PWD:-.}/$rp ;; esac; n=0
   while rd=$(phys "$(dirname "$rp")"); do printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"
     hd=$(dirname "$rp"); while [ "$hd" != / ] && [ "$hd" != . ]; do
-      [ ! -L "$hd" ] || { hp=$(phys "$(dirname "$hd")") && printf '%s/%s\n' "${hp%/}" "$(basename "$hd")"; }
+      # a folder that's a link: where it sits and everything it leads to (8 levels of such folders at most)
+      [ ! -L "$hd" ] || (HD=$((${HD:-0} + 1)); [ "$HD" -le 8 ] && hops "$hd") || return 1
       hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
     [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp") || return 0
     n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done; return 1
@@ -241,7 +243,8 @@ rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
 # however it's asked to.
 # ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine
 secret_file() {
-  sp="$NL$(hops "$1")$NL"
+  # a path hops can't follow to the end counts as secret: refuse rather than guess
+  sp=$(hops "$1") || return 0; sp="$NL$sp$NL"
   for SF in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
     [ -n "$SF" ] && sd=$(phys "$SF") || continue
     case "$sp" in (*"$NL${sd%/}"/*) return 0 ;; esac
@@ -421,7 +424,7 @@ send)
   # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
   if secret_file "$body"; then
     # the state folder also holds the git adapter's copy of the store, so a message received there is refused too
-    h=""; [ "$SF" = "$STATE" ] && case $(real "$body") in (*/checkouts/*/inbox/*/*.md) true ;; (*) false ;; esac &&
+    h=""; [ "$SF" = "$STATE" ] && case $(real "$body") in (*/checkouts/*/"$ROOT"/inbox/*/*.md) true ;; (*) false ;; esac &&
       h="; to forward a message, copy its text into a new file first"
     w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
