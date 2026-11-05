@@ -29,7 +29,8 @@ ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRAN
 # ceiling: clone reads the store's name as git does, from the folder the first command runs in, where a repository
 # of that name is taken before a relative path or host:path means anything else (docs/security.md); a full URL or
 # an absolute path avoids it
-ad_clone() { ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
+# (in the C locale, so its messages read the same everywhere; it runs only in $(...))
+ad_clone() { LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
@@ -59,10 +60,10 @@ ad_open() {
     # stays behind (removing another command's could break a setup still running); delete it by hand
     d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it. clone itself says which it
-    # is (git's message, in the C locale), so nothing reads the store's name any other way than clone does; any other
+    # is (git's message), so nothing reads the store's name any other way than clone does; any other
     # failure is an error
     rm -rf "$AD_DIR"
-    err=$(LC_ALL=C && export LC_ALL && ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
+    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
       case $err in (*"Remote branch $BRANCH not found in upstream"*) err=$(ad_clone) ;; (*) false ;; esac; } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false

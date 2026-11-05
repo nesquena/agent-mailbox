@@ -444,15 +444,18 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   sh -c "$gc '$SH' '$CLI' setup --store fake:fresh --name p13" >/dev/null 2>&1
   expect "and a store name an insteadOf rewrites" 1 "no mailbox at" sh -c "$gc '$SH' '$CLI' list"
   # ...even where a plain folder of that name sits in the folder the command runs from
-  mkdir -p "$T/decoydir/fake:fresh"; rm -rf "$W/home-p13/.local/state"
+  mkdir -p "$T/decoydir/fake:fresh"; gd=$(printf '%s\n' "$gc" | sed 's/home-p13/home-p16/')
+  sh -c "$gd '$SH' '$CLI' setup --store fake:fresh --name p16" >/dev/null 2>&1
   expect "and a folder named like the store where the command runs doesn't change that" 1 "no mailbox at" \
-    in_dir "$T/decoydir" sh -c "$gc '$SH' '$CLI' list"
+    in_dir "$T/decoydir" sh -c "$gd '$SH' '$CLI' list"
   # a store name that's also a configured remote's name is never looked up at that remote (GIT_SSH runs the fake
   # ssh without a shell, so a space in its path is fine)
   printf '#!/bin/sh\necho "$*" >> "%s/ssh.log"; exit 255\n' "$T" > "$T/fakessh"; chmod +x "$T/fakessh"
   gr="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.mailrem.url GIT_CONFIG_VALUE_0=hq:repo GIT_SSH='$T/fakessh' HOME='$W/home-p15'"
-  sh -c "$gr '$SH' '$CLI' setup --store mailrem --name p15" >/dev/null 2>&1; in_dir "$T" sh -c "$gr '$SH' '$CLI' list" >/dev/null 2>&1
-  [ ! -s "$T/ssh.log" ] && ok "a store named like a configured remote isn't looked up there" ||
+  sh -c "$gr '$SH' '$CLI' setup --store mailrem --name p15" >/dev/null 2>&1
+  expect "a store named like a configured remote is cloned by that name" 1 "repository 'mailrem' does not exist" \
+    in_dir "$T" sh -c "$gr '$SH' '$CLI' list"
+  [ ! -s "$T/ssh.log" ] && ok "and isn't looked up at that remote" ||
     no "the first setup contacted a remote the store's name matches" "$(cat "$T/ssh.log")"
   # a store .gitignore that matches mail doesn't stop a send, and an ignored file of the sender's isn't published
   (cd "$T/w" && git fetch -q && git reset -q --hard origin/main && printf '*.md\n*.sig\n' > .gitignore && git add .gitignore &&
