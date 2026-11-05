@@ -77,7 +77,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 
 ## Writing messages
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
-  with an ETA. Keep your watcher armed while any `needs` of yours is open.
+  with an ETA. Keep your watcher armed while any `needs` of yours is open. `agent-mailbox sent` lists your mail not
+  yet consumed; raise any marked `stale` (unconsumed after 24 hours) with your human.
 - **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`. A reply reuses
   the topic of the message it answers. A second message from you to the same agent on the same topic within one
   second is refused (`… exists`): wait a second and send it again.
