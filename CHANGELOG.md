@@ -117,7 +117,7 @@ First version.
 - **`send` refuses obvious secrets:** a body file in `~/.ssh` or the CLI's config or state folder (as named, or at
   any link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
   signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the
-  end (a name holding a newline, or folder links leading to folder links more than 8 deep), and a body (file or
+  end (a name holding a newline, or folder links nested more than 8 deep), and a body (file or
   stdin) holding a private-key block (`-----BEGIN ... PRIVATE KEY`, or a PuTTY key), are refused with exit 1 before anything is
   written; the error names the folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee.
   The state folder holds the git adapter's copy of the store, so to forward a message you received, copy its text

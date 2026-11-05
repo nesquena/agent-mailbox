@@ -69,6 +69,7 @@ matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" 
 # too, so a file under a linked folder shows where that link sits and where it leads. real <file>: the
 # file's own physical path. A relative path starting with '-' gets a ./ so no tool reads it as an option
 phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
+# hops keeps its state in plain variables: run it only in $(...) (it recurses in a subshell)
 hops() {
   # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too.
   # $2: how many folder links deep this call is (8 at most); $3 set: skip the folders above the first hop, which the
@@ -85,10 +86,13 @@ hops() {
       hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
     [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .) || return 0
     rl=${rl%.}; rl=${rl%"$NL"}
-    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done; return 1
+    # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
+    # aren't walked again; but not under /proc, where self names the subshell phys ran in
+    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
+      (*) rp=${rd%/}/$rl ;; esac ;; esac; done; return 1
 }
 real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
-  while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp"); do n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
+  while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .); do rl=${rl%.}; rl=${rl%"$NL"}; n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
   rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; }
 # this script's real path, following links (install.sh links it onto PATH)
 here() {
