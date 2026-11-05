@@ -135,10 +135,10 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
   END { if (closed && done) print v }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
-# temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found
-# there then isn't published. ceiling: a writer racing a live run can still have a write land on a device or FIFO behind a link swapped
-# in between the clear and the write, or swap a link in between the check and the move; that's outside the security
-# model (docs/security.md)
+# temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
+# then isn't published. ceiling: a writer racing a live run can still have a write land on a device or FIFO behind a
+# link swapped in between the clear and the write, or swap a link in between the check and the move; that's outside the
+# security model (docs/security.md)
 put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
   { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"
   (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && plain "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; }
@@ -278,8 +278,9 @@ put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
-# new_keep <path>: create an inbox's .keep with noclobber, so a link planted at its name isn't followed
-# (another send creating the same .keep at the same moment is fine: a plain file there is what's wanted)
+# new_keep <path>: create an inbox's .keep with noclobber, so a link left at its name isn't followed (another send
+# creating the same .keep at the same moment is fine: a plain file there is what's wanted). ceiling: as for put, a
+# link to a device or FIFO swapped in by a writer racing a live run can still be opened
 new_keep() { (set -C; : > "$1") 2>/dev/null || plain "$1" || die "can't create $(rel "$1")"; }
 # own_pub: the public half of $KEY as "<type> <base64>", derived from the key, or from $KEY.pub for one with a passphrase
 own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); matches "$KEY_RE" "$op" || op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null)

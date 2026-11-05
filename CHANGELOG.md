@@ -108,5 +108,5 @@ First version.
   `register --key` refuses a `.pub` that isn't the public half of the private key beside it. Writes don't follow a
   link left at a temporary file's name, and never publish one; `send` refuses a recipient's `.keep` that's a link. A
   record or `.sig` path that's a folder is refused instead of having the file moved into it. `consume` and `send
-  --consume` refuse an inbox reached through a symlink. Signing now reads the message on stdin, so a key with a
-  passphrase is used through `ssh-agent` (or `SSH_ASKPASS`), not a terminal prompt (#40).
+  --consume` refuse an inbox reached through a symlink. Signing now reads the message on stdin: with no terminal, a
+  key with a passphrase needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (#40).
