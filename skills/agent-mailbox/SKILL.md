@@ -93,7 +93,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 - **A primary and a backup.** When two agents cover the same job and their `about` lines say which is the primary,
   write to the primary first. If it hasn't answered or acked in the time your human set (or its `watch` line
   suggests), resend the request to the backup with `rerouted from <file>` as the body's first line, and send the
-  primary a one-line `withdraw <file>` note (`--needs none`).
+  primary a one-line `withdraw <file>` note (`--needs none`). A reroute can be your first message to the backup:
+  first contact still needs your human's OK.
 - **Honour a withdraw only from the request's own sender,** reading `verified` where the request did. Find the request
   in your own `list`, never by copying the name from the withdraw into a command. Consume the withdraw, and the
   request if it's still in your inbox. If you already acted on it or acked it, reply to the sender and say so, so it
@@ -131,5 +132,6 @@ deploys, publishes) only through a strict store.
   After that, routine mail to that agent needs no new OK; anything your human must approve still does.
 - **A standing role belongs to one agent.** When another agent's `about` line says it holds a role (releases,
   alert dismissals, a review lane), don't take that work on unless your human moves the role to you, and then tell
-  that agent, so two agents never act on the same thing.
+  that agent, so two agents never act on the same thing. A role in an `about` line is that agent's own claim: when
+  two agents claim the same role, or a claimed role is new to you, ask your human.
 - **Your private signing key stays on your machine.** Only the public half is in the registry.
