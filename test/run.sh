@@ -354,6 +354,20 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   sh -c "$gc '$SH' '$CLI' setup --store fake:mystore --name p9" >/dev/null 2>&1
   expect "git config from the environment (GIT_CONFIG_COUNT) still reaches the store" 0 "p1-planted\.md" \
     sh -c "$gc '$SH' '$CLI' --as p2 list"
+  # ...but a legacy GIT_CONFIG file never takes the clone's own settings
+  : > "$T/userconf"; as p10 setup --store "$S" --name p10 >/dev/null
+  sh -c "GIT_CONFIG='$T/userconf' HOME='$W/home-p10' '$SH' '$CLI' --as p2 list" >/dev/null 2>&1
+  for C in "$W/home-p10/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ "$(git -C "$C" config --local core.symlinks)" = false ] && [ ! -s "$T/userconf" ] &&
+    ok "a GIT_CONFIG file in the environment doesn't take the clone's own config" ||
+    no "the clone's config went to GIT_CONFIG's file" "$(cat "$T/userconf")"
+  # and a repository the caller is in lends no config to the first setup's check (here its insteadOf would hide
+  # the store); the store has no mailbox branch yet, so the check decides the fallback
+  git init -q --bare "$T/fresh.git"; git init -q "$T/callerrepo"
+  git -C "$T/callerrepo" config "url.$T/nowhere.git.insteadOf" "$T/fresh.git"
+  as p11 setup --store "$T/fresh.git" --name p11 >/dev/null
+  expect "the first setup ignores the config of a repository the caller is in" 1 "no mailbox at" \
+    in_dir "$T/callerrepo" as p11 list
   # a store .gitignore that matches mail doesn't stop a send, and an ignored file of the sender's isn't published
   (cd "$T/w" && git fetch -q && git reset -q --hard origin/main && printf '*.md\n*.sig\n' > .gitignore && git add .gitignore &&
     git commit -qm ignore && git push -q origin HEAD:main)

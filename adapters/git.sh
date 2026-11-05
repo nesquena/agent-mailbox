@@ -44,9 +44,10 @@ ad_attrs() {
 ad_open() {
   command -v git >/dev/null 2>&1 || die "the git adapter needs git"
   # git acts on this clone only, never on a repository the environment names (GIT_DIR and the like, as in a git hook);
-  # config passed through the environment (GIT_CONFIG_COUNT and the like: insteadOf, credentials, proxies) still applies
+  # config passed through the environment (GIT_CONFIG_COUNT and the like: insteadOf, credentials, proxies) still applies,
+  # but not GIT_CONFIG, which would send this clone's own config writes to another file
   # shellcheck disable=SC2046
-  unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG')
+  unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG_')
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
@@ -57,8 +58,11 @@ ad_open() {
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
     # (a store that lacks the branch, ls-remote exit 2, is cloned without it; any other failure is an error)
     rm -rf "$AD_DIR"
-    st=$STORE; case "$st" in (-*) st=./$st ;; esac
-    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"; ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1
+    # (ls-remote runs from the state folder, so no repository the caller is in lends it config; a local store path
+    # is made absolute first)
+    case "$STORE" in (/*|*:*) st=$STORE ;; (*) st=$PWD/$STORE ;; esac
+    err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
+      (cd "$STATE" && GIT_CEILING_DIRECTORIES=$STATE ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1)
       [ $? = 2 ] && err=$(ad_clone); } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
