@@ -16,15 +16,17 @@
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
 #   line-ending conversion, filters (Git LFS too) and diff drivers, and has merges use git's own text merge; git runs
-#   with submodule recursion off and without hooks, so every file is checked out exactly as stored and nothing the
-#   store names is contacted.
+#   with submodule recursion off, without hooks or a file-system monitor, and never on a repository the environment
+#   names (GIT_DIR, as in a git hook), so every file is checked out exactly as stored and nothing the store names is
+#   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null "$@"; }
+ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
-ad_clone() { git -c core.hooksPath=/dev/null clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
+ad_clone() { ad_g clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
@@ -40,9 +42,16 @@ ad_attrs() {
 
 ad_open() {
   command -v git >/dev/null 2>&1 || die "the git adapter needs git"
+  # git acts on this clone only, never on a repository the environment names (GIT_DIR and the like, as in a git hook)
+  # shellcheck disable=SC2046
+  unset $(git rev-parse --local-env-vars)
   AD_DIR="$STATE/checkouts/$STORE_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
+    # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
+    # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
+    # stays behind (removing another command's could break a setup still running); delete it by hand
+    d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it
     err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"; err=$(ad_clone); } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
@@ -52,13 +61,17 @@ ad_open() {
     # one, holding none of the default branch's files
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
-    else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; fi
+    else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty
+    fi || { rm -rf "$AD_DIR"; die "can't check out the store"; }
+    # (another command may have set up the same clone meanwhile: keep that one)
+    if [ -d "$d/.git" ]; then rm -rf "$AD_DIR"; else rm -rf "$d" && mv "$AD_DIR" "$d" || die "can't move a new clone to $d"; fi
+    AD_DIR=$d
   # an older clone may hold files checked out under the store's attributes: check them out again, as stored (read-tree
   # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged). The attributes are
   # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time
   elif ad_attrs '# retry'; then
     if ! ad_git rev-parse -q --verify HEAD >/dev/null ||
-      { ad_git read-tree HEAD && ad_git checkout -q -f HEAD -- .; } 2>/dev/null; then ad_attrs_put || :; fi
+      { ad_git read-tree HEAD && ad_git checkout-index -q -a -f -u; } 2>/dev/null; then ad_attrs_put || :; fi
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then
@@ -74,8 +87,9 @@ ad_open() {
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
-    # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is
-    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; [ $? = 2 ] && return 0
+    # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
+    # a branch gone from the store since this clone fetched it
+    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; [ $? = 2 ] && ! ad_remote_has_branch && return 0
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
@@ -112,7 +126,7 @@ ad_commit() {
   done
   [ -n "$keep" ] || return 0
   # shellcheck disable=SC2086
-  ad_git add -A -- $keep || die "git add failed"
+  ad_git add -A -f -- $keep || die "git add failed"
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
   ad_push

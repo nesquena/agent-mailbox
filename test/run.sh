@@ -288,12 +288,14 @@ case " $ADAPTERS " in *" git "*)
   for a in p1 p3; do g="$W/home-$a/.gitconfig"; git config -f "$g" filter.lfs.process "touch '$T/lfs-ran'; exit 1"
     git config -f "$g" filter.lfs.clean "touch '$T/lfs-ran'; cat"; git config -f "$g" filter.lfs.smudge "touch '$T/lfs-ran'; cat"
     git config -f "$g" filter.lfs.required true; git config -f "$g" submodule.recurse true; git config -f "$g" submodule.active .
-    git config -f "$g" core.hooksPath "$T/hooks"; done
+    git config -f "$g" core.hooksPath "$T/hooks"; git config -f "$g" core.fsmonitor "'$T/fsmonitor'"; done
   # and hooks of their own (git-lfs installs some); each notes when it runs in the CLI's checkout (a push to a store
   # on this disk also runs them in the store's own repository, which is the store's business)
   mkdir -p "$T/hooks"; for h in pre-commit post-commit pre-push post-checkout post-merge post-rewrite reference-transaction; do
     printf '#!/bin/sh\ncase "$PWD" in (*/checkouts/*) echo "${0##*/}" >> "%s/hook-ran" ;; esac\n' "$T" > "$T/hooks/$h"
     chmod +x "$T/hooks/$h"; done
+  printf '#!/bin/sh\ncase "$PWD" in (*/checkouts/*) echo fsmonitor >> "%s/hook-ran" ;; esac\nexit 1\n' "$T" > "$T/fsmonitor"
+  chmod +x "$T/fsmonitor"
   # the store gains line-ending and LFS rules, an LFS server address and a submodule, after p2 has its checkout
   git clone -q -b main "$S" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e &&
     printf '* -text -filter\n' > "$T/w/.git/info/attributes" && (cd "$T/w" &&
@@ -341,6 +343,26 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
   [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
   [ ! -e "$T/hook-ran" ] && ok "and none of the agents' own git hooks ran in its checkout" || no "a git hook ran in the CLI's checkout" "$(cat "$T/hook-ran")"
+  # nor does a command run from inside a git hook, where git names the caller's repository in GIT_DIR
+  git init -q "$T/mine"
+  expect "a command run with GIT_DIR set works in its own checkout" 0 "^sent mailbox/inbox/p2/" sh -c "echo hi |
+    GIT_DIR='$T/mine/.git' GIT_WORK_TREE='$T/mine' HOME='$W/home-p1' '$SH' '$CLI' send p2 from-hook -"
+  [ -z "$(git -C "$T/mine" for-each-ref)" ] && ok "and leaves the caller's repository alone" ||
+    no "the CLI's git ran in the caller's repository" "$(git -C "$T/mine" for-each-ref)"
+  # a store .gitignore that matches mail doesn't stop a send, and an ignored file of the sender's isn't published
+  (cd "$T/w" && git fetch -q && git reset -q --hard origin/main && printf '*.md\n*.sig\n' > .gitignore && git add .gitignore &&
+    git commit -qm ignore && git push -q origin HEAD:main)
+  as p1 list >/dev/null 2>&1; for C in "$W/home-p1/.local/state/agent-mailbox/checkouts/"*; do :; done; echo x > "$C/mailbox/inbox/p2/stray.md"
+  expect "a send works when the store's .gitignore matches mail" 0 "^sent mailbox/inbox/p2/" sh -c "echo hi | HOME='$W/home-p1' '$SH' '$CLI' send p2 ignored -"
+  expect "and the store holds it" 0 "p1-ignored\.md" git --git-dir="$S" ls-tree -r --name-only main mailbox/inbox/p2/
+  [ -z "$(git --git-dir="$S" ls-tree -r --name-only main | grep stray)" ] && ok "but not an ignored file it wasn't asked to send" ||
+    no "a send published a file it wasn't asked to"
+  # a first command cut off part-way (here at its first fetch, after the clone) leaves no checkout later ones take as ready
+  mkdir -p "$T/killfetch"; printf '#!/bin/sh\ncase " $* " in (*" fetch -q origin "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+    "$(command -v git)" > "$T/killfetch/git"; chmod +x "$T/killfetch/git"
+  as p6 setup --store "$S" --name p6 >/dev/null; env PATH="$T/killfetch:$PATH" HOME="$W/home-p6" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
+  expect "a first command cut off part-way is set up again by the next one" 0 "p1-planted\.md" as p6 --as p2 list
+  expect "so init still finds the mailbox, and leaves store.md alone" 1 "already exists" as p6 init
 
   # a new agent clones only the mailbox branch, however much else the store holds
   (cd "$T/w" && git checkout -q -b big && echo big > big.txt && git add big.txt && git commit -qm big && git push -q origin big)
@@ -362,6 +384,21 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   expect "and doctor says the store can't be reached" 1 "FAIL the store is reachable" as p2 doctor
   mv "$T/away.git" "$S"
   expect "list works again once it can be reached" 0 "p1-planted\.md" as p2 list
+  # so is a mailbox branch gone from the store, once this checkout has seen it
+  tip=$(git --git-dir="$S" rev-parse main); git --git-dir="$S" update-ref -d refs/heads/main
+  expect "list fails when the store no longer has the mailbox branch" 1 "can't update from the store" as p2 list
+  git --git-dir="$S" update-ref refs/heads/main "$tip"
+  # an older checkout of a branch whose tree is empty finishes its one-time second checkout
+  git --git-dir="$S" update-ref refs/heads/empty "$(env GIT_AUTHOR_NAME=e GIT_AUTHOR_EMAIL=e@e GIT_COMMITTER_NAME=e \
+    GIT_COMMITTER_EMAIL=e@e git --git-dir="$S" commit-tree -m empty "$(git --git-dir="$S" mktree < /dev/null)")"
+  rm -rf "$W/home-p6/.local/state/agent-mailbox/checkouts"
+  env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
+  for C in "$W/home-p6/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ -z "$(git -C "$C" ls-tree HEAD)" ] && [ "$(git -C "$C" symbolic-ref HEAD)" = refs/heads/empty ] &&
+    rm "$C/.git/info/attributes" && ok "(an older checkout of a branch whose tree is empty)" || no "the empty-branch setup failed"
+  env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
+  [ "$(head -n 1 "$C/.git/info/attributes")" = '* -text -eol -filter -ident -working-tree-encoding !diff merge' ] &&
+    ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
 
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
