@@ -317,6 +317,12 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   grep -q "$(printf '\r')" "$C/$f" && ok "(an older checkout took on the store's line endings)" || no "the older-checkout setup kept LF"
   expect "an older checkout the store's attributes changed reads again" 0 "p1-planted\.md" as p2 list
   cmp -s "$T/blob" "$C/$f" && ok "and holds the message as stored again" || no "the older checkout still differs from the store's"
+  # if that second checkout fails (here another git process holds the index), the next command tries again
+  printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
+  : > "$C/.git/index.lock"; as p2 list >/dev/null 2>&1; rm -f "$C/.git/index.lock"
+  expect "a second checkout that failed is tried again by the next command" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and the message is then as stored" || no "a failed second checkout was never retried"
   expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
   for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
   cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"

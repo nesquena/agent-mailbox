@@ -50,9 +50,10 @@ ad_open() {
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; fi
   # an older clone may hold files checked out under the store's attributes: check them out again, as stored (read-tree
-  # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged)
+  # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged); if that fails
+  # (another git process holds the index), drop the attributes file so the next command tries again
   elif ad_attrs && ad_git rev-parse -q --verify HEAD >/dev/null; then
-    ad_git read-tree HEAD && ad_git checkout -q -f HEAD -- . 2>/dev/null
+    { ad_git read-tree HEAD && ad_git checkout -q -f HEAD -- .; } 2>/dev/null || rm -f "$AD_DIR/.git/info/attributes"
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then
