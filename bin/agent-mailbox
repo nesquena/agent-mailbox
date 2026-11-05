@@ -242,6 +242,10 @@ verify_file() {
   rm -f "$allowed"; echo "$r"
 }
 sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || die "signing failed with $KEY"; }
+# put_signed <file> <content>: sign a temp copy and put the .sig in place before the file, so no reader sees the file
+# without its signature; a failed signing leaves neither behind
+put_signed() { ps="$1.tmp.$$"; ( put "$ps" "$2" && sign_file "$ps" ) || { rm -f "$ps" "$ps.sig"; exit 1; }
+  mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1" || { rm -f "$ps" "$ps.sig" "$1.sig"; die "can't write $(rel "$1")"; }; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
@@ -334,10 +338,11 @@ register|update)
   when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   no_link "$rec"; no_link "$M/inbox/$ME/.keep"
   mkdir -p "$M/agents"
-  put "$rec" "$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
-    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")"
+  record_text=$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
+    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")
   paths="$ROOT/agents/$ME.md"
-  if [ -n "$pub" ] && can_sign; then rm -f "$rec.sig"; sign_file "$rec"; paths="$paths $ROOT/agents/$ME.md.sig"; fi
+  if [ -n "$pub" ] && can_sign; then no_link "$rec.sig"; put_signed "$rec" "$record_text"; paths="$paths $ROOT/agents/$ME.md.sig"
+  else put "$rec" "$record_text"; fi
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { : > "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
@@ -424,10 +429,7 @@ send)
     "${hold:+hold: $hold
 }" "${release:+release: $release
 }" "$text")
-  # the signature is made on a temp copy and put in place first, so no reader sees the message without it
-  if [ -n "$signer" ]; then t="$f.tmp.$$"; ( put "$t" "$msg" && sign_file "$t" ) || { rm -f "$t" "$t.sig"; exit 1; }
-    mv -f "$t.sig" "$f.sig" && mv -f "$t" "$f" || { rm -f "$t" "$t.sig" "$f.sig"; die "can't write $(rel "$f")"; }
-    paths="$paths $(rel "$f") $(rel "$f").sig"
+  if [ -n "$signer" ]; then put_signed "$f" "$msg"; paths="$paths $(rel "$f") $(rel "$f").sig"
   else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086

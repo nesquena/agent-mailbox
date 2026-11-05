@@ -427,6 +427,14 @@ if [ -n "$SSH" ]; then
   expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
   [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
     no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
+  as n3 setup --store "$T/strict" --adapter dir --name n3 >/dev/null
+  (SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNLOG PATH; as n3 register --kind t --about t >/dev/null)
+  if grep -qxF n3.md "$T/signlog"; then no "a registry record appeared before its signature was made" "$(cat "$T/signlog")"
+  elif [ -f "$T/strict/mailbox/agents/n3.md.sig" ] && [ -z "$(ls -A "$T/strict/mailbox/agents" | grep tmp)" ]; then
+    ok "a registry record appears only once its signature is in place"
+  else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
+  as n3 send n2 hello "$T/b" >/dev/null
+  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified\]" as n2 read
   # n1's registry record loses its key: in this strict store, n1's send is refused before anything changes
   echo q | as n2 send n1 ask - >/dev/null; q=$(basename "$(ls "$N"/n1/*-n2-ask.md)")
   sed 's/^key: .*/key: /' "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
