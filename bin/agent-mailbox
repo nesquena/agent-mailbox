@@ -242,10 +242,15 @@ verify_file() {
   rm -f "$allowed"; echo "$r"
 }
 sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || die "signing failed with $KEY"; }
-# put_signed <file> <content>: sign a temp copy and put the .sig in place before the file, so no reader sees the file
-# without its signature; a failed signing leaves neither behind
-put_signed() { ps="$1.tmp.$$"; ( put "$ps" "$2" && sign_file "$ps" ) || { rm -f "$ps" "$ps.sig"; exit 1; }
-  mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1" || { rm -f "$ps" "$ps.sig" "$1.sig"; die "can't write $(rel "$1")"; }; }
+# put_signed <file> <content>: sign a temp copy and put the .sig in place before the file, so a new file never shows
+# without its signature; a failed signing leaves neither behind.
+# ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
+# dir store; only an atomic multi-file publish in the adapter would close that
+put_signed() { ps="$1.tmp.$$"; new=; [ -e "$1" ] || new=1
+  printf '%s\n' "$2" > "$ps" || { rm -f "$ps"; die "can't write $(rel "$1")"; }
+  (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
+  mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1" || { rm -f "$ps" "$ps.sig"; [ -z "$new" ] || rm -f "$1.sig"
+    die "can't write $(rel "$1")"; }; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
@@ -398,8 +403,8 @@ send)
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
   # sign when you hold a key and your record names one; a strict store refuses a send it can't sign before any write
-  signer=""; can_sign && [ -n "$(reg_key "$(record "$ME")")" ] && signer=1
-  if require_sigs && [ -z "$signer" ]; then can_sign || die "this store requires signatures, and no usable key is at $KEY"
+  cs=""; can_sign && cs=1; signer=""; [ -n "$cs" ] && [ -n "$(reg_key "$(record "$ME")")" ] && signer=1
+  if require_sigs && [ -z "$signer" ]; then [ -n "$cs" ] || die "this store requires signatures, and no usable key is at $KEY"
     die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"; fi
   for c in $consume; do valid_msg "$c"; no_link "$M/inbox/$ME/$c"; no_link "$M/inbox/$ME/$c.sig"
     [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
@@ -421,7 +426,7 @@ send)
   fi
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
-  no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
+  no_link "$f"; no_link "$f.sig"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
   [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
   msg=$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
@@ -430,7 +435,7 @@ send)
 }" "${release:+release: $release
 }" "$text")
   if [ -n "$signer" ]; then put_signed "$f" "$msg"; paths="$paths $(rel "$f") $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
+  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, or your registry record names no key)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths

@@ -418,18 +418,24 @@ if [ -n "$SSH" ]; then
   mkdir -p "$T/sk"; printf '%s\n' '#!/bin/sh' \
     'case " $* " in (*" -Y sign "*) for a; do f=$a; done; ls -a "$(dirname "$f")" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1 ;; esac' \
     "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
-  signing() { (SIGNFAIL=$1 SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG PATH; shift; as n1 send n2 "$@" "$T/b"); }
+  # and an mv that notes any .md moved into place while its .sig isn't there yet
+  printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done; case $d in (*.md) [ -f "$d.sig" ] || echo "$d" >> "$MVLOG" ;; esac' \
+    "exec '$(command -v mv)' \"\$@\"" > "$T/sk/mv"; chmod +x "$T/sk/mv"; : > "$T/mvlog"
+  signing() { (SIGNFAIL=$1 SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG MVLOG PATH; shift
+    as n1 send n2 "$@" "$T/b"); }
   out=$(signing "" in-order 2>&1); m=$(printf '%s\n' "$out" | sed -n 's|^sent mailbox/inbox/n2/||p')
   if [ -z "$m" ]; then no "a signed send works" "$out"
   elif grep -qxF "$m" "$T/signlog"; then no "a message appeared before its signature was made" "$(cat "$T/signlog")"
+  elif [ -s "$T/mvlog" ]; then no "a message was moved into place before its signature" "$(cat "$T/mvlog")"
   else ok "a message appears only once its signature is in place"; fi
   expect "and verifies" 0 "in-order\.md \[verified\]" as n2 read
   expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
   [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
     no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
   as n3 setup --store "$T/strict" --adapter dir --name n3 >/dev/null
-  (SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNLOG PATH; as n3 register --kind t --about t >/dev/null)
-  if grep -qxF n3.md "$T/signlog"; then no "a registry record appeared before its signature was made" "$(cat "$T/signlog")"
+  (SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNLOG MVLOG PATH; as n3 register --kind t --about t >/dev/null)
+  if grep -qxF n3.md "$T/signlog" || [ -s "$T/mvlog" ]; then
+    no "a registry record appeared before its signature" "$(cat "$T/signlog" "$T/mvlog")"
   elif [ -f "$T/strict/mailbox/agents/n3.md.sig" ] && [ -z "$(ls -A "$T/strict/mailbox/agents" | grep tmp)" ]; then
     ok "a registry record appears only once its signature is in place"
   else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
