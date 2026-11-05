@@ -438,6 +438,8 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # and a URL an insteadOf rewrites
   git init -q --bare "$T/fresh:2.git"; as p12 setup --store ./fresh:2.git --name p12 >/dev/null
   expect "the first setup finds a relative store path with a colon" 1 "no mailbox at" in_dir "$T" as p12 list
+  git init -q --bare "$T/fresh:3.git"; as p14 setup --store fresh:3.git --name p14 >/dev/null
+  expect "and one without ./, which git could read as host:path" 1 "no mailbox at" in_dir "$T" as p14 list
   gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$T/fresh.git.insteadOf' GIT_CONFIG_VALUE_0=fake:fresh HOME='$W/home-p13'"
   sh -c "$gc '$SH' '$CLI' setup --store fake:fresh --name p13" >/dev/null 2>&1
   expect "and a store name an insteadOf rewrites" 1 "no mailbox at" sh -c "$gc '$SH' '$CLI' list"

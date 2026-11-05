@@ -59,9 +59,11 @@ ad_open() {
     # (a store that lacks the branch, ls-remote exit 2, is cloned without it; any other failure is an error)
     rm -rf "$AD_DIR"
     # (ls-remote sees the store as the clone does, from here and with URL rewrites; GIT_DIR names the temporary folder,
-    # just removed, which git takes as no repository, so none the caller is in lends it config. It won't take a path
-    # starting with -, even after --)
-    st=$STORE; case "$st" in (-*) st=./$st ;; esac
+    # just removed, which git takes as no repository, so none the caller is in lends it config. clone takes a name
+    # that exists here as a local path, as ls-remote doesn't for a bare one, with a colon (scp-style) or a remote's
+    # name, or one starting with -: so such a name gets a ./). ceiling: a writer in the state folder racing this command
+    # could put a repository at that temporary name first; the state folder is the agent's own
+    st=$STORE; case "$st" in (/*|./*|../*) ;; (*) for x in "" .git .bundle; do [ ! -e "$st$x" ] || { st=./$st; break; }; done ;; esac
     err=$(ad_clone --branch "$BRANCH") || { rm -rf "$AD_DIR"
       (GIT_DIR=$AD_DIR && export GIT_DIR && ad_g ls-remote --exit-code -- "$st" "refs/heads/$BRANCH" >/dev/null 2>&1)
       [ $? = 2 ] && err=$(ad_clone); } ||
