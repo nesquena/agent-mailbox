@@ -69,7 +69,7 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   plugin's Stop hook blocks a turn from ending while your watcher is down, and says how to re-arm it.
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
-  reporting, or something they need to do.
+  reporting, something they need to do, or the watcher can't go on (exit 1).
 - **Consume first, or skip:** before re-arming, consume what you've handled, or pass `--except <file>` for mail
   you're deliberately holding. Otherwise the watcher exits at once.
 - **Without a wake on exit:** if your harness can't run background commands, or can't wake you when one exits,
