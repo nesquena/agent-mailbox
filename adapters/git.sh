@@ -19,19 +19,22 @@
 #   off and without hooks, so every file is checked out exactly as stored and nothing the store names is contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null "$@"; }
+ad_git() { git -C "$AD_DIR" -c submodule.recurse=false -c core.hooksPath=/dev/null -c merge.default=text "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
 ad_clone() { git -c core.hooksPath=/dev/null clone -q --no-checkout --single-branch "$@" -- "$STORE" "$AD_DIR" 2>&1; }
 
-# ad_attrs: make the store's own attributes inert in this clone; succeeds only when it had to write the file
+# ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
+# file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
 AD_ATTRS='* -text -eol -filter -ident -working-tree-encoding !diff !merge'
+ad_attrs_put() { mkdir -p "$AD_DIR/.git/info" &&
+  printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af"; }
 ad_attrs() {
   af="$AD_DIR/.git/info/attributes" al=
   [ ! -f "$af" ] || IFS= read -r al < "$af"
   [ "$al" = "$AD_ATTRS" ] && return 1
-  mkdir -p "$AD_DIR/.git/info" && printf '%s\n' "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af" || die "can't write $af"
+  ad_attrs_put "${1:-}" || die "can't write $af"
 }
 
 ad_open() {
@@ -50,12 +53,11 @@ ad_open() {
     if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; fi
   # an older clone may hold files checked out under the store's attributes: check them out again, as stored (read-tree
-  # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged); if that fails
-  # (another git process holds the index), the attributes stay in force but gain a first line, so the next command
-  # rewrites them and tries again
-  elif ad_attrs && ad_git rev-parse -q --verify HEAD >/dev/null; then
-    { ad_git read-tree HEAD && ad_git checkout -q -f HEAD -- .; } 2>/dev/null ||
-      { printf '# retry\n%s\n' "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af"; } || :
+  # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged). The attributes are
+  # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time
+  elif ad_attrs '# retry'; then
+    if ! ad_git rev-parse -q --verify HEAD >/dev/null ||
+      { ad_git read-tree HEAD && ad_git checkout -q -f HEAD -- .; } 2>/dev/null; then ad_attrs_put || :; fi
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then
