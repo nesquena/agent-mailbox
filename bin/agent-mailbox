@@ -21,6 +21,9 @@
 #        [--hold|--release "<item> <version>"]
 #                                       deliver a message; --consume also removes mail you're answering
 #   list                                your inbox, oldest first (exit 0: some, 3: none)
+#   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
+#                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
+#                                       names and from: headers, not signatures
 #   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
@@ -43,6 +46,8 @@ NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
 MSG_RE='^[A-Za-z0-9._-]+\.md$'
+# a message's sent time, as send writes it
+SENT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 # a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
 KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
 # the first line of a private key's text block: PEM (RSA, EC, PKCS#8, encrypted), OpenSSH, PGP, SSH2 and PuTTY alike
@@ -160,7 +165,16 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
-put() { tmp="$1.tmp.$$"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
+# put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
+# temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
+# then isn't published. ceiling: a writer racing a live run can still have a write land on a device or FIFO behind a
+# link swapped in between the clear and the write, or swap a link in between the check and the move; that's outside the
+# security model (docs/security.md)
+put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
+  { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"
+  (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && plain "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; }
+# plain <path>...: each is a regular file, not a link
+plain() { for pf; do [ -f "$pf" ] && [ ! -L "$pf" ] || return 1; done; }
 # set_cfg <key> <value>: replace or add one line of the config file
 set_cfg() {
   one_line "$1" "$2"; mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
@@ -244,7 +258,7 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
-rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
+rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
 # secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh or this CLI's config or state folder
 # (set in SF), or the file is its config file or signing key (either half; SF empty), or its path can't be followed
 # to the end (SF is -), so `send` won't mail it out
@@ -282,8 +296,41 @@ verify_file() {
   if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
   rm -f "$allowed"; echo "$r"
 }
-sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || die "signing failed with $KEY"; }
+# sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
+sign_file() { (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null || die "signing failed with $KEY"; }
+# put_signed <file> <content> [<key>]: sign a temp copy and put the .sig in place before the file, so a new file never
+# shows without its signature; with <key>, the signature must verify against it first. A failed signing or check
+# leaves neither behind.
+# ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
+# dir store; only an atomic multi-file publish in the adapter would close that. And a writer racing a live run can
+# swap the destination for a link to a folder between the check and the final mv; mv -T (not portable) would close
+# that. Both are outside the security model (docs/security.md: writers to a store trust each other)
+put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
+  for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
+  for pd in "$ps" "$ps.sig" "$ps.old" "$ps.ok"; do { rm -f "$pd" && [ ! -L "$pd" ]; } || die "can't clear $(rel "$pd")"; done
+  (set -C; printf '%s\n' "$2" > "$ps") 2>/dev/null || { rm -f "$ps"; die "can't write $(rel "$1")"; }
+  (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
+  if [ -n "${3:-}" ]; then
+    { (set -C; printf '%s %s\n' "$ME" "$3" > "$ps.ok") 2>/dev/null &&
+      ssh-keygen -Y verify -f "$ps.ok" -I "$ME" -n "$NS" -s "$ps.sig" < "$ps" >/dev/null 2>&1; } ||
+      { rm -f "$ps" "$ps.sig" "$ps.ok"; die "the signature made with $KEY doesn't verify against your registry record's key"; }
+    rm -f "$ps.ok"
+  fi
+  # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
+  # (only a regular file is kept: a .sig that's a link is replaced, never read, so nothing outside the store is copied in)
+  old=; if [ -f "$1.sig" ] && [ ! -L "$1.sig" ]; then
+    (set -C; cat "$1.sig" > "$ps.old") 2>/dev/null && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
+  if plain "$ps" "$ps.sig" && mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
+  rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
+  die "can't write $(rel "$1")"; }
 can_sign() { [ -f "$KEY" ] && have_ssh; }
+# new_keep <path>: create an inbox's .keep with noclobber, so a link left at its name isn't followed (another send
+# creating the same .keep at the same moment is fine: a plain file there is what's wanted). ceiling: as for put, a
+# link to a device or FIFO swapped in by a writer racing a live run can still be opened
+new_keep() { (set -C; : > "$1") 2>/dev/null || plain "$1" || die "can't create $(rel "$1")"; }
+# own_pub: the public half of $KEY as "<type> <base64>", derived from the key, or from $KEY.pub for one with a passphrase
+own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); matches "$KEY_RE" "$op" || op=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null)
+  printf '%s\n' "$op"; }
 
 # --- commands ------------------------------------------------------------------------------------------------------
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
@@ -345,7 +392,7 @@ register|update)
     # lost its key) the record is republished as it is, and nothing is pinned below
     pub=$(field key "$rec")
     if [ -f "$KEY" ]; then
-      own=$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null); matches "$KEY_RE" "$own" || own=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2)
+      own=$(own_pub)
       [ -n "$own" ] || [ -z "$pub" ] || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then run update again"
     fi
     if [ -n "$own" ] && [ -n "$pub" ] && [ "$pub" != "$own" ]; then
@@ -357,6 +404,7 @@ register|update)
       [ -f "$keyfile" ] || die "no such key file $keyfile"
       pub=$(cut -d' ' -f1,2 "$keyfile"); KEY="${keyfile%.pub}"
       [ -f "$KEY" ] || die "the private key ${KEY} (beside $keyfile) is missing"
+      [ "$(own_pub)" = "$pub" ] || die "$keyfile isn't the public half of $KEY"
       set_cfg key "$(CDPATH= cd -P -- "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
     elif have_ssh; then
       if [ ! -f "$KEY" ]; then
@@ -364,7 +412,7 @@ register|update)
         ssh-keygen -q -t ed25519 -N '' -C "$NS:$ME" -f "$KEY" || die "ssh-keygen failed"
         printf 'generated a signing key at %s (keep the private half on this machine only)\n' "$KEY"
       fi
-      pub=$(cut -d' ' -f1,2 "$KEY.pub")
+      pub=$(own_pub)
     else
       require_sigs && die "this store requires signatures, and ssh-keygen (OpenSSH 8+) isn't available here"
       warn "ssh-keygen not found: registering without a signing key (mail from you will be unsigned)"
@@ -375,11 +423,12 @@ register|update)
   when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   no_link "$rec"; no_link "$M/inbox/$ME/.keep"
   mkdir -p "$M/agents"
-  put "$rec" "$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
-    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")"
+  record_text=$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
+    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")
   paths="$ROOT/agents/$ME.md"
-  if [ -n "$pub" ] && can_sign; then rm -f "$rec.sig"; sign_file "$rec"; paths="$paths $ROOT/agents/$ME.md.sig"; fi
-  mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { : > "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
+  if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
+  else put "$rec" "$record_text"; fi
+  mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
@@ -444,8 +493,17 @@ send)
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
-  if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
-  for c in $consume; do valid_msg "$c"; [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+  # sign only with the key your registry record names, so what you send verifies; a strict store refuses otherwise
+  cs=""; can_sign && cs=1; rk=$(reg_key "$(record "$ME")"); mine=""; [ -z "$cs" ] || mine=$(own_pub); signer=""
+  [ -n "$cs" ] && [ -n "$rk" ] && [ "$rk" = "$mine" ] && signer=1
+  if require_sigs && [ -z "$signer" ]; then [ -n "$cs" ] || die "this store requires signatures, and no usable key is at $KEY"
+    [ -n "$rk" ] || die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"
+    matches "$KEY_RE" "$mine" || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then send again"
+    die "this store requires signatures, and your registry record's key isn't the one at $KEY"; fi
+  # removals go through your own inbox folder, never a link to elsewhere (a link inside it is removed as a link)
+  [ -z "$consume" ] || no_link "$M/inbox/$ME"
+  for c in $consume; do valid_msg "$c"
+    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
   if [ -z "$ctx_set" ] && matches "$MSG_RE" "$reply" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
@@ -464,17 +522,16 @@ send)
   fi
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
-  no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
+  no_link "$f"; no_link "$M/inbox/$to/.keep"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
-  [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
-  put "$f" "$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
+  [ -f "$M/inbox/$to/.keep" ] || { new_keep "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
+  msg=$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
     "$PROTOCOL" "$ME" "$to" "$topic" "$context" "$(stamp_iso "$stamp")" "$reply" "$needs" \
     "${hold:+hold: $hold
 }" "${release:+release: $release
-}" "$text")"
-  paths="$paths $(rel "$f")"
-  if can_sign && [ -n "$(reg_key "$(record "$ME")")" ]; then sign_file "$f"; paths="$paths $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; fi
+}" "$text")
+  if [ -n "$signer" ]; then put_signed "$f" "$msg" "$rk"; paths="$paths $(rel "$f") $(rel "$f").sig"
+  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -484,6 +541,38 @@ list)
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME"); [ -n "$mail" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean ;;
+sent)
+  for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
+  [ $# -le 1 ] || die "usage: sent [<to>]"
+  [ $# -eq 0 ] || valid_name "$1"; to=${1:-}
+  need_me; load_adapter; ad_sync; need_store
+  # mail from you is a message whose file name's sender field and from: header both name you, so another writer's
+  # file can't pass by one alone. Signatures aren't checked: a writer could plant both. Rows: <id> <path> <to> <sent>
+  # <needs>, sorted by id (time first), with sent as "?" when it isn't the form send writes
+  rows=$(for d in "$M"/inbox/*; do r=${d##*/}
+      [ -z "$to" ] || [ "$r" = "$to" ] || continue
+      [ -d "$d" ] && matches "$NAME_RE" "$r" || continue
+      inbox_files "$r" | while IFS= read -r p; do b=${p##*/}
+        case "$b" in (????????T??????Z-"$ME"-?*) ;; (*) continue ;; esac
+        [ "$(field from "$p")" = "$ME" ] || continue
+        s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
+        printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")"
+      done
+    done | LC_ALL=C sort)
+  [ -n "$rows" ] || { echo "no mail from $ME waiting${to:+ for $to}"; exit 3; }
+  # age from sent to now, both UTC, by days from the civil date (no date -d, which BSD date lacks)
+  printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    function ok(s,  y, m, d, n) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+      n = m == 2 ? (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31)
+      return m >= 1 && m <= 12 && d >= 1 && d <= n && substr(s, 12, 2) + 0 <= 23 && substr(s, 15, 2) + 0 <= 59 && substr(s, 18, 2) + 0 <= 60 }
+    function t(s,  y, m, e, d) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; if (m <= 2) y--; e = y % 400
+      d = int(y / 400) * 146097 + e * 365 + int(e / 4) - int(e / 100) + int((153 * ((m + 9) % 12) + 2) / 5) + substr(s, 9, 2) - 719469
+      return d * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2) }
+    { n = $0; sub(/^[^ ]* [^ ]* [^ ]* [^ ]* ?/, "", n); a = $4 == "?" || !ok($4) ? -1 : t(now) - t($4)
+      # a sent time ahead of now (a skewed clock, or a planted file) shows "?", allowing a minute of skew
+      if (a < 0 && a >= -60 && ok($4)) a = 0
+      g = a < 0 ? "?" : a < 60 ? a "s" : a < 3600 ? int(a / 60) "m" : a < 86400 ? int(a / 3600) "h" : int(a / 86400) "d" int(a % 86400 / 3600) "h"
+      print $2 " to " $3 " age " g (a > 86400 ? " stale" : "") (n != "" && n != "none" ? " needs: " n : "") }' | clean ;;
 read)
   except=""
   while [ $# -gt 0 ]; do
@@ -509,10 +598,11 @@ consume)
   done; shift "$na"
   [ $# -ge 1 ] || die "usage: consume [--] <file>..."
   need_me; load_adapter; ad_sync; need_store
-  paths=""
+  paths=""; no_link "$M/inbox/$ME"
   for a in "$@"; do
     b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
-    valid_msg "$b"; [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
+    valid_msg "$b"
+    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
   for a in "$@"; do b=$(basename -- "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
   # shellcheck disable=SC2086
@@ -552,7 +642,7 @@ holds)
       [ -n "$rec" ] || continue
       # every column of the row below is validated, so no header value can shift the others
       matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
-        field sent "$tmpd/m" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' &&
+        field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       v=$(verify_file "$tmpd/m" "$ME")
       # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
