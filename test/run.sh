@@ -25,6 +25,11 @@ SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq '
 # as <agent> <args...>: run the CLI as that agent, in its own home
 as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
        AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
+# pinned <agent> <file> <victim> <args...>: run the CLI as <agent> after planting links to <victim> at <file>'s temp
+# names for the process id the CLI will run as (exec keeps it); the id is left in <victim>.pid
+pinned() { a=$1 pf=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'echo $$ > "$2.pid"; ln -s "$2" "$1.tmp.$$"; ln -s "$2" "$1.tmp.$$.old"
+  shift 2; exec "$@"' sh "$pf" "$pv" "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
 # tamper <shell command>: change the store directly, as anyone with write access could, from the store's top folder
@@ -410,12 +415,22 @@ outside; expect "so does send --consume" 1 "symlink in the store: mailbox/inbox/
 kept "which deletes nothing outside the store either"
 [ "$(ls -A "$T/store/mailbox/inbox/m1")" = .keep ] && ok "and sends nothing" ||
   no "send --consume sent through a symlinked inbox" "$(ls -A "$T/store/mailbox/inbox/m1")"
+# a config path that's a folder is refused with a readable message, before any store is open
+mkdir -p "$T/cfgdir"; out=$(HOME="$W/home-m9" AGENT_MAILBOX_CONFIG="$T/cfgdir" XDG_CONFIG_HOME= "$SH" "$CLI" setup --store "$T/store" --adapter dir --name m9 2>&1)
+case $out in (*"$T/cfgdir isn't a file"*) case $out in (*"not set"*) no "setup's refusal names an unset variable" "$out" ;;
+  (*) ok "setup refuses a config path that's a folder, by name" ;; esac ;; (*) no "setup wrote a config into a folder" "$out" ;; esac
 # an unsigned write refuses a record path that's a folder, and moves nothing into it
 mkdir "$T/store/mailbox/agents/m3.md"; as m3 setup --store "$T/store" --adapter dir --name m3 >/dev/null
 expect "an unsigned register refuses a record path that's a folder" 1 "m3\.md isn't a file" as m3 register --kind t --about t --no-key
 [ -z "$(ls -A "$T/store/mailbox/agents/m3.md")" ] && ok "and moves nothing into it" ||
   no "an unsigned register wrote into a record folder" "$(ls -A "$T/store/mailbox/agents/m3.md")"
 rmdir "$T/store/mailbox/agents/m3.md"
+# ... and unsigned (put)
+printf 'untouched\n' > "$T/victim"; MA="$T/store/mailbox/agents"
+pinned m1 "$MA/m1.md" "$T/victim" update --about changed >/dev/null 2>&1
+[ "$(cat "$T/victim")" = untouched ] && [ ! -L "$MA/m1.md" ] && [ ! -L "$MA/m1.md.tmp.$(cat "$T/victim.pid")" ] &&
+  ok "an unsigned write doesn't follow a link at its temp name" || no "an unsigned write followed a planted temp link" "$(cat "$T/victim")"
+rm -f "$MA"/m1.md.tmp.*
 # a link inside a real inbox (here a message's .sig) doesn't jam it: consume removes the link, not what it points at
 rm "$T/store/mailbox/inbox/m2"; mkdir "$T/store/mailbox/inbox/m2"; : > "$T/store/mailbox/inbox/m2/.keep"
 as m1 send m2 linked "$T/b" >/dev/null 2>&1; l=$(basename "$(ls "$T"/store/mailbox/inbox/m2/*-m1-linked.md)")
@@ -477,15 +492,10 @@ if [ -n "$SSH" ]; then
   expect "register refuses a record path that's a folder" 1 "n4\.md isn't a file" as n4 register --kind t --about t
   [ -z "$(ls -A "$A/n4.md")" ] && ok "and moves nothing into it" || no "register wrote into a record folder" "$(ls -A "$A/n4.md")"
   rmdir "$A/n4.md"
-  # links planted at the guessable temp names of the next few hundred process ids aren't followed: planting takes one
-  # process each, so the update below runs inside the range, and the one link it clears shows which
-  printf 'untouched\n' > "$T/victim"; lo=$(($(sh -c 'echo $$') + 400)); i=$lo
-  while [ $i -lt $((lo + 400)) ]; do ln -s "$T/victim" "$A/n3.md.tmp.$i"; i=$((i+1)); done
-  as n3 update --about changed-again >/dev/null 2>&1; cleared=""; i=$lo
-  while [ $i -lt $((lo + 400)) ]; do [ -L "$A/n3.md.tmp.$i" ] || cleared=$i; i=$((i+1)); done
-  if [ "$(cat "$T/victim")" != untouched ] || [ -L "$A/n3.md" ]; then no "a write followed a planted temp link" "$(cat "$T/victim")"
-  elif [ -n "$cleared" ]; then ok "a planted temp link isn't followed"
-  else no "the update ran outside the planted process ids, so this test proved nothing" "$lo-$((lo + 399))"; fi
+  # links planted at the temp names the write will use aren't followed, signed (put_signed) ...
+  printf 'untouched\n' > "$T/victim"; pinned n3 "$A/n3.md" "$T/victim" update --about changed-again >/dev/null 2>&1
+  [ "$(cat "$T/victim")" = untouched ] && [ ! -L "$A/n3.md" ] && [ ! -L "$A/n3.md.tmp.$(cat "$T/victim.pid")" ] &&
+    ok "a signed write doesn't follow a link at its temp name" || no "a signed write followed a planted temp link" "$(cat "$T/victim")"
   rm -f "$A"/n3.md.tmp.*
   # a .sig that's a link to a file outside the store is replaced, never read: its target never lands in the store
   printf 'outside-secret\n' > "$T/secret"; mv "$A/n3.md.sig" "$T/sig3c"; ln -s "$T/secret" "$A/n3.md.sig"

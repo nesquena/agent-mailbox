@@ -137,7 +137,8 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
 # put and put_signed clear their temp paths before writing, so a link planted at a guessable temp name isn't followed.
 # ceiling: a writer racing the clear-then-create in a shared dir store isn't stopped; per-agent private temp folders
 # would close it
-put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"; rm -f "$tmp"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
+put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
+  { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"; printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $1"; }; }
 # set_cfg <key> <value>: replace or add one line of the config file
 set_cfg() {
   one_line "$1" "$2"; mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
@@ -221,7 +222,7 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
-rel() { printf '%s\n' "${1#"$AD_DIR"/}"; }
+rel() { case $1 in ("${AD_DIR:-/}"/*) printf '%s\n' "${1#"$AD_DIR"/}" ;; (*) printf '%s\n' "$1" ;; esac; }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
 # verify_file <message path> [<expected from>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
@@ -249,8 +250,9 @@ sign_file() { ssh-keygen -Y sign -q -n "$NS" -f "$KEY" "$1" >/dev/null 2>&1 || d
 # without its signature; a failed signing leaves neither behind.
 # ceiling: replacing a file that exists (a registry record) shows the new .sig beside the old file for a moment in a
 # dir store; only an atomic multi-file publish in the adapter would close that
-put_signed() { ps="$1.tmp.$$"; for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
-  rm -f "$ps" "$ps.sig" "$ps.old"
+put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
+  for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
+  for pd in "$ps" "$ps.sig" "$ps.old"; do { rm -f "$pd" && [ ! -L "$pd" ]; } || die "can't clear $(rel "$pd")"; done
   printf '%s\n' "$2" > "$ps" || { rm -f "$ps"; die "can't write $(rel "$1")"; }
   (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
   # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
