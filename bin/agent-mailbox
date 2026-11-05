@@ -250,7 +250,9 @@ put_signed() { ps="$1.tmp.$$"; [ ! -d "$1.sig" ] || die "$(rel "$1.sig") isn't a
   printf '%s\n' "$2" > "$ps" || { rm -f "$ps"; die "can't write $(rel "$1")"; }
   (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
   # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
-  old=; [ ! -f "$1.sig" ] || { cp -p "$1.sig" "$ps.old" && old=1; } || { rm -f "$ps" "$ps.sig"; die "can't write $(rel "$1")"; }
+  # (only a regular file is kept: a .sig that's a link is replaced, never read, so nothing outside the store is copied in)
+  old=; if [ -f "$1.sig" ] && [ ! -L "$1.sig" ]; then
+    cp -p "$1.sig" "$ps.old" && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
   if mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
@@ -409,10 +411,11 @@ send)
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
   # sign only with the key your registry record names, so what you send verifies; a strict store refuses otherwise
-  cs=""; can_sign && cs=1; rk=$(reg_key "$(record "$ME")"); signer=""
-  [ -n "$cs" ] && [ -n "$rk" ] && [ "$rk" = "$(own_pub)" ] && signer=1
+  cs=""; can_sign && cs=1; rk=$(reg_key "$(record "$ME")"); mine=""; [ -z "$cs" ] || mine=$(own_pub); signer=""
+  [ -n "$cs" ] && [ -n "$rk" ] && [ "$rk" = "$mine" ] && signer=1
   if require_sigs && [ -z "$signer" ]; then [ -n "$cs" ] || die "this store requires signatures, and no usable key is at $KEY"
     [ -n "$rk" ] || die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"
+    matches "$KEY_RE" "$mine" || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then send again"
     die "this store requires signatures, and your registry record's key isn't the one at $KEY"; fi
   # removals go through your own inbox folder, never a link to elsewhere (a link inside it is removed as a link)
   [ -z "$consume" ] || no_link "$M/inbox/$ME"

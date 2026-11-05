@@ -455,12 +455,25 @@ if [ -n "$SSH" ]; then
   expect "an update whose write fails fails" 1 "can't write" mv_fails agents/n3.md n3 update --about changed
   cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
     ok "and keeps the record with its own signature" || no "a failed update split the record from its signature" "$(ls -A "$A")"
+  # an update whose signing fails leaves the record and its signature as they were
+  sign_fails() { (SIGNFAIL=1 SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG PATH; as "$@"); }
+  expect "an update whose signing fails fails" 1 "signing failed" sign_fails n3 update --about changed
+  cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
+    ok "and keeps the record and its signature" || no "a failed signing changed the record" "$(ls -A "$A")"
   # a .sig path that's a folder is refused, and nothing is published into it
   mv "$A/n3.md.sig" "$T/sig3b"; mkdir "$A/n3.md.sig"
   expect "update refuses a .sig that's a folder" 1 "n3\.md\.sig isn't a file" as n3 update --about changed
   [ -z "$(ls -A "$A/n3.md.sig")" ] && [ -z "$(ls -A "$A" | grep tmp)" ] && ok "and writes nothing into it" ||
     no "update wrote into a .sig folder" "$(ls -A "$A/n3.md.sig" "$A")"
   rmdir "$A/n3.md.sig"; mv "$T/sig3b" "$A/n3.md.sig"
+  # a .sig that's a link to a file outside the store is replaced, never read: its target never lands in the store
+  printf 'outside-secret\n' > "$T/secret"; mv "$A/n3.md.sig" "$T/sig3c"; ln -s "$T/secret" "$A/n3.md.sig"
+  mv_fails agents/n3.md n3 update --about changed >/dev/null 2>&1
+  [ -z "$(grep -rl outside-secret "$T/strict")" ] && [ "$(cat "$T/secret")" = outside-secret ] &&
+    ok "a failed update never copies a linked .sig's target into the store" || no "a linked .sig's target reached the store" "$(grep -rl outside-secret "$T/strict")"
+  rm -f "$A/n3.md.sig"; ln -s "$T/secret" "$A/n3.md.sig"; as n3 update --about changed >/dev/null 2>&1
+  [ ! -L "$A/n3.md.sig" ] && [ -z "$(grep -rl outside-secret "$T/strict")" ] && [ "$(cat "$T/secret")" = outside-secret ] &&
+    ok "and an update replaces the link with its own signature" || no "update kept or followed a linked .sig" "$(ls -l "$A")"
   # n1's registry record loses its key: in this strict store, n1's send is refused before anything changes
   echo q | as n2 send n1 ask - >/dev/null; q=$(basename "$(ls "$N"/n1/*-n2-ask.md)")
   sed 's/^key: .*/key: /' "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
