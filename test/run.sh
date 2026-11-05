@@ -25,6 +25,11 @@ SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq '
 # as <agent> <args...>: run the CLI as that agent, in its own home
 as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
        AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
+# pinned <agent> <file> <victim> <args...>: run the CLI as <agent> after planting links to <victim> at <file>'s temp
+# names for the process id the CLI will run as (exec keeps it); the id is left in <victim>.pid
+pinned() { a=$1 pf=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'echo $$ > "$2.pid"; for x in "" .sig .old; do ln -s "$2" "$1.tmp.$$$x"; done
+  shift 2; exec "$@"' sh "$pf" "$pv" "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
 # tamper <shell command>: change the store directly, as anyone with write access could, from the store's top folder
@@ -456,6 +461,188 @@ for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename 
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+
+echo "== send and consume change the store in a safe order (dir)"
+T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
+for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as m1 init >/dev/null; for a in m1 m2; do as $a register --kind t --about t --no-key >/dev/null; done
+# m2's inbox is replaced with a link to a folder outside the store: nothing is deleted through it
+rm -rf "$T/store/mailbox/inbox/m2"; ln -s "$T/out" "$T/store/mailbox/inbox/m2"
+outside() { printf 'keep\n' > "$T/out/n.md"; printf 'keep\n' > "$T/out/n.md.sig"; }
+kept() { [ -f "$T/out/n.md" ] && [ -f "$T/out/n.md.sig" ] && ok "$1" || no "$1" "$(ls -A "$T/out")"; }
+outside; expect "consume refuses an inbox reached through a symlink" 1 "symlink in the store: mailbox/inbox/m2$" as m2 consume n.md
+kept "and deletes nothing outside the store"
+outside; expect "so does send --consume" 1 "symlink in the store: mailbox/inbox/m2$" as m2 send m1 n-reply "$T/b" --consume n.md
+kept "which deletes nothing outside the store either"
+[ "$(ls -A "$T/store/mailbox/inbox/m1")" = .keep ] && ok "and sends nothing" ||
+  no "send --consume sent through a symlinked inbox" "$(ls -A "$T/store/mailbox/inbox/m1")"
+# a config path that's a folder is refused with a readable message, before any store is open
+mkdir -p "$T/cfgdir"; out=$(HOME="$W/home-m9" AGENT_MAILBOX_CONFIG="$T/cfgdir" XDG_CONFIG_HOME= "$SH" "$CLI" setup --store "$T/store" --adapter dir --name m9 2>&1)
+case $out in (*"$T/cfgdir isn't a file"*) case $out in (*"not set"*) no "setup's refusal names an unset variable" "$out" ;;
+  (*) ok "setup refuses a config path that's a folder, by name" ;; esac ;; (*) no "setup wrote a config into a folder" "$out" ;; esac
+# an unsigned write refuses a record path that's a folder, and moves nothing into it
+mkdir "$T/store/mailbox/agents/m3.md"; as m3 setup --store "$T/store" --adapter dir --name m3 >/dev/null
+expect "an unsigned register refuses a record path that's a folder" 1 "m3\.md isn't a file" as m3 register --kind t --about t --no-key
+[ -z "$(ls -A "$T/store/mailbox/agents/m3.md")" ] && ok "and moves nothing into it" ||
+  no "an unsigned register wrote into a record folder" "$(ls -A "$T/store/mailbox/agents/m3.md")"
+rmdir "$T/store/mailbox/agents/m3.md"
+# a recipient's .keep that's a link is refused: nothing is created through it
+rm -f "$T/store/mailbox/inbox/m1/.keep"; ln -s "$T/out/keep-target" "$T/store/mailbox/inbox/m1/.keep"
+expect "send refuses a recipient .keep that's a link" 1 "symlink in the store" as m2 send m1 keeplink "$T/b"
+[ ! -e "$T/out/keep-target" ] && ok "and creates nothing outside the store" || no "send created a file through a linked .keep"
+rm -f "$T/store/mailbox/inbox/m1/.keep"; : > "$T/store/mailbox/inbox/m1/.keep"
+# an open store sends unsigned, with a warning, when the sender's record names a key that isn't its own, and still
+# consumes what it answers
+if [ -n "$SSH" ]; then
+  as m4 setup --store "$T/store" --adapter dir --name m4 >/dev/null; as m4 register --kind t --about t >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -f "$T/m4other"
+  sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/m4other.pub")|" "$T/store/mailbox/agents/m4.md" > "$T/m4rec" &&
+    cat "$T/m4rec" > "$T/store/mailbox/agents/m4.md"
+  echo q | as m1 send m4 ask4 - >/dev/null 2>&1; q4=$(basename "$(ls "$T"/store/mailbox/inbox/m4/*-m1-ask4.md)")
+  expect "an open store sends unsigned when the record names another key" 0 "sending unsigned" \
+    as m4 send m1 reply4 "$T/b" --consume "$q4"
+  r4=$(ls "$T"/store/mailbox/inbox/m1/*-m4-reply4.md 2>/dev/null)
+  [ -n "$r4" ] && [ ! -e "$r4.sig" ] && [ ! -e "$T/store/mailbox/inbox/m4/$q4" ] &&
+    ok "with no .sig, and the mail it answers consumed" || no "the open-store fallback didn't send unsigned and consume" "$(ls -A "$T/store/mailbox/inbox/m1" "$T/store/mailbox/inbox/m4")"
+fi
+# ... and unsigned (put)
+printf 'untouched\n' > "$T/victim"; MA="$T/store/mailbox/agents"
+pinned m1 "$MA/m1.md" "$T/victim" update --about changed >/dev/null 2>&1
+[ "$(cat "$T/victim")" = untouched ] && [ ! -L "$MA/m1.md" ] && [ ! -L "$MA/m1.md.tmp.$(cat "$T/victim.pid")" ] &&
+  ok "an unsigned write doesn't follow a link at its temp name" || no "an unsigned write followed a planted temp link" "$(cat "$T/victim")"
+rm -f "$MA"/m1.md.tmp.*
+# a link inside a real inbox (here a message's .sig) doesn't jam it: consume removes the link, not what it points at
+rm "$T/store/mailbox/inbox/m2"; mkdir "$T/store/mailbox/inbox/m2"; : > "$T/store/mailbox/inbox/m2/.keep"
+as m1 send m2 linked "$T/b" >/dev/null 2>&1; l=$(basename "$(ls "$T"/store/mailbox/inbox/m2/*-m1-linked.md)")
+printf 'keep\n' > "$T/out/target"; ln -s "$T/out/target" "$T/store/mailbox/inbox/m2/$l.sig"
+expect "a message whose .sig is a link is still consumed" 0 "consumed" as m2 consume "$l"
+[ -f "$T/out/target" ] && [ ! -e "$T/store/mailbox/inbox/m2/$l" ] && [ ! -L "$T/store/mailbox/inbox/m2/$l.sig" ] &&
+  ok "and only the link goes" || no "consuming beside a link removed the wrong thing" "$(ls -A "$T/out" "$T/store/mailbox/inbox/m2")"
+if [ -n "$SSH" ]; then
+  for a in n1 n2; do as $a setup --store "$T/strict" --adapter dir --name $a >/dev/null; done
+  as n1 init --require-signatures >/dev/null; for a in n1 n2; do as $a register --kind t --about t >/dev/null; done
+  N="$T/strict/mailbox/inbox"
+  # an ssh-keygen on PATH that lists SIGNDIR (the folder being written) when asked to sign, then signs (or fails, with
+  # SIGNFAIL, or signs with SIGNWITH's key instead)
+  mkdir -p "$T/sk"; printf '%s\n' '#!/bin/sh' \
+    'case " $* " in (*" -Y sign "*) ls -a "$SIGNDIR" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1' \
+    "  [ -z \"\$SIGNWITH\" ] || exec '$(command -v ssh-keygen)' -Y sign -q -n agent-mailbox -f \"\$SIGNWITH\" ;; esac" \
+    "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
+  # and an rm that puts a link back at a path it was asked to remove, with RMPLANT naming the path's end
+  printf '%s\n' '#!/bin/sh' "'$(command -v rm)' \"\$@\"; r=\$?" \
+    'if [ -n "$RMPLANT" ]; then for a; do case $a in (*"$RMPLANT") ln -s "$RMTO" "${a%"$RMSTRIP"}" ;; esac; done; fi; exit $r' > "$T/sk/rm"; chmod +x "$T/sk/rm"
+  # and an mv that notes any .md moved into place while its .sig isn't there yet
+  printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done; case $d in (*.md) [ -f "$d.sig" ] || echo "$d" >> "$MVLOG" ;; esac' \
+    'if [ -n "$MVFAIL" ]; then case $d in (*"$MVFAIL") exit 1 ;; esac; fi' \
+    "exec '$(command -v mv)' \"\$@\"" > "$T/sk/mv"; chmod +x "$T/sk/mv"; : > "$T/mvlog"
+  signing() { (SIGNFAIL=$1 SIGNDIR="$N/n2" SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNDIR SIGNLOG MVLOG PATH; shift
+    as n1 send n2 "$@" "$T/b"); }
+  out=$(signing "" in-order 2>&1); m=$(printf '%s\n' "$out" | sed -n 's|^sent mailbox/inbox/n2/||p')
+  if [ -z "$m" ]; then no "a signed send works" "$out"
+  elif grep -qxF "$m" "$T/signlog"; then no "a message appeared before its signature was made" "$(cat "$T/signlog")"
+  elif [ -s "$T/mvlog" ]; then no "a message was moved into place before its signature" "$(cat "$T/mvlog")"
+  else ok "a message appears only once its signature is in place"; fi
+  expect "and verifies" 0 "in-order\.md \[verified\]" as n2 read
+  expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
+  [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
+    no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
+  as n3 setup --store "$T/strict" --adapter dir --name n3 >/dev/null
+  (SIGNDIR="$T/strict/mailbox/agents" SIGNLOG="$T/signlog" MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export SIGNDIR SIGNLOG MVLOG PATH
+    as n3 register --kind t --about t >/dev/null)
+  if grep -qxF n3.md "$T/signlog" || [ -s "$T/mvlog" ]; then
+    no "a registry record appeared before its signature" "$(cat "$T/signlog" "$T/mvlog")"
+  elif [ -f "$T/strict/mailbox/agents/n3.md.sig" ] && [ -z "$(ls -A "$T/strict/mailbox/agents" | grep tmp)" ]; then
+    ok "a registry record appears only once its signature is in place"
+  else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
+  as n3 send n2 hello "$T/b" >/dev/null
+  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified\]" as n2 read
+  # an update whose final move fails leaves the record and the signature it had, so they still match
+  A="$T/strict/mailbox/agents"; cp "$A/n3.md" "$T/rec3"; cp "$A/n3.md.sig" "$T/sig3"
+  mv_fails() { (MVFAIL=$1 MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export MVFAIL MVLOG PATH; shift; as "$@"); }
+  expect "an update whose write fails fails" 1 "can't write" mv_fails agents/n3.md n3 update --about changed
+  cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
+    ok "and keeps the record with its own signature" || no "a failed update split the record from its signature" "$(ls -A "$A")"
+  # an update whose signing fails leaves the record and its signature as they were
+  sign_fails() { (SIGNFAIL=1 SIGNDIR="$A" SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNDIR SIGNLOG PATH; as "$@"); }
+  expect "an update whose signing fails fails" 1 "signing failed" sign_fails n3 update --about changed
+  cmp -s "$A/n3.md" "$T/rec3" && cmp -s "$A/n3.md.sig" "$T/sig3" && [ -z "$(ls -A "$A" | grep tmp)" ] &&
+    ok "and keeps the record and its signature" || no "a failed signing changed the record" "$(ls -A "$A")"
+  # a .sig path that's a folder is refused, and nothing is published into it
+  mv "$A/n3.md.sig" "$T/sig3b"; mkdir "$A/n3.md.sig"
+  expect "update refuses a .sig that's a folder" 1 "n3\.md\.sig isn't a file" as n3 update --about changed
+  [ -z "$(ls -A "$A/n3.md.sig")" ] && [ -z "$(ls -A "$A" | grep tmp)" ] && ok "and writes nothing into it" ||
+    no "update wrote into a .sig folder" "$(ls -A "$A/n3.md.sig" "$A")"
+  rmdir "$A/n3.md.sig"; mv "$T/sig3b" "$A/n3.md.sig"
+  # a .sig that's a link to a folder is replaced by the signature, not refused and not written into
+  mkdir -p "$T/sigdir"; mv "$A/n3.md.sig" "$T/sig3d"; ln -s "$T/sigdir" "$A/n3.md.sig"
+  expect "an update replaces a .sig linked to a folder" 0 "" as n3 update --about changed
+  [ -f "$A/n3.md.sig" ] && [ ! -L "$A/n3.md.sig" ] && [ -z "$(ls -A "$T/sigdir")" ] && ok "with its own signature, writing nothing into the folder" ||
+    no "a .sig linked to a folder was followed or kept" "$(ls -l "$A/n3.md.sig"; ls -A "$T/sigdir")"
+  # register --key refuses a .pub that isn't the public half of the private key beside it
+  ssh-keygen -q -t ed25519 -N '' -f "$T/k5" && ssh-keygen -q -t ed25519 -N '' -f "$T/k5b" && cp "$T/k5b.pub" "$T/k5.pub"
+  as n5 setup --store "$T/strict" --adapter dir --name n5 >/dev/null
+  expect "register --key refuses a .pub that doesn't match its private key" 1 "isn't the public half of" \
+    as n5 register --kind t --about t --key "$T/k5.pub"
+  # so is a record path that's a folder: register says so, and nothing is moved into it
+  mkdir "$A/n4.md"; as n4 setup --store "$T/strict" --adapter dir --name n4 >/dev/null
+  expect "register refuses a record path that's a folder" 1 "n4\.md isn't a file" as n4 register --kind t --about t
+  [ -z "$(ls -A "$A/n4.md")" ] && ok "and moves nothing into it" || no "register wrote into a record folder" "$(ls -A "$A/n4.md")"
+  rmdir "$A/n4.md"
+  # links planted at the temp names the write will use aren't followed, signed (put_signed) ...
+  printf 'untouched\n' > "$T/victim"; pinned n3 "$A/n3.md" "$T/victim" update --about changed-again >/dev/null 2>&1
+  [ "$(cat "$T/victim")" = untouched ] && [ ! -L "$A/n3.md" ] && [ ! -L "$A/n3.md.tmp.$(cat "$T/victim.pid")" ] &&
+    ok "a signed write doesn't follow a link at its temp name" || no "a signed write followed a planted temp link" "$(cat "$T/victim")"
+  rm -f "$A"/n3.md.tmp.*
+  # a .sig that's a link to a file outside the store is replaced, never read: its target never lands in the store
+  printf 'outside-secret\n' > "$T/secret"; mv "$A/n3.md.sig" "$T/sig3c"; ln -s "$T/secret" "$A/n3.md.sig"
+  mv_fails agents/n3.md n3 update --about changed >/dev/null 2>&1
+  [ -z "$(grep -rl outside-secret "$T/strict")" ] && [ "$(cat "$T/secret")" = outside-secret ] &&
+    ok "a failed update never copies a linked .sig's target into the store" || no "a linked .sig's target reached the store" "$(grep -rl outside-secret "$T/strict")"
+  rm -f "$A/n3.md.sig"; ln -s "$T/secret" "$A/n3.md.sig"; as n3 update --about changed >/dev/null 2>&1
+  [ ! -L "$A/n3.md.sig" ] && [ -z "$(grep -rl outside-secret "$T/strict")" ] && [ "$(cat "$T/secret")" = outside-secret ] &&
+    ok "and an update replaces the link with its own signature" || no "update kept or followed a linked .sig" "$(ls -l "$A")"
+  # n1's registry record loses its key: in this strict store, n1's send is refused before anything changes
+  echo q | as n2 send n1 ask - >/dev/null; q=$(basename "$(ls "$N"/n1/*-n2-ask.md)")
+  sed 's/^key: .*/key: /' "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  expect "a strict store refuses a send whose sender's record names no key" 1 "requires signatures.*names no usable key" \
+    as n1 send n2 answer "$T/b" --consume "$q"
+  [ -z "$(ls -A "$N/n2" | grep answer)" ] && [ -f "$N/n1/$q" ] && [ -f "$N/n1/$q.sig" ] &&
+    ok "it sends nothing and keeps the mail it answers" || no "a refused send changed the store" "$(ls -A "$N/n1" "$N/n2")"
+  # n1's record now names n2's key: signing with n1's own key wouldn't verify, so the send is refused too
+  k=$(sed -n 's/^key: //p' "$T/strict/mailbox/agents/n2.md")
+  sed "s|^key: .*|key: $k|" "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  expect "a strict store refuses a send whose sender's record names another key" 1 "record's key isn't the one at" \
+    as n1 send n2 answer2 "$T/b" --consume "$q"
+  [ -z "$(ls -A "$N/n2" | grep answer2)" ] && [ -f "$N/n1/$q" ] && ok "and also keeps the mail it answers" ||
+    no "a send with the wrong key changed the store" "$(ls -A "$N/n1" "$N/n2")"
+  # n1's key gets a passphrase and loses its .pub: send can't tell whether it matches, so a strict store refuses
+  K1="$W/home-n1/.config/agent-mailbox/keys/n1"
+  if [ -f "$K1" ] && ssh-keygen -p -q -P '' -N pw -f "$K1" >/dev/null 2>&1 && rm -f "$K1.pub"; then
+    expect "a strict store refuses a send whose public key it can't read" 1 "can't read the public half" \
+      as n1 send n2 answer3 "$T/b" --consume "$q"
+    [ -z "$(ls -A "$N/n2" | grep answer3)" ] && [ -f "$N/n1/$q" ] && ok "and keeps the mail it answers" ||
+      no "an unreadable public key changed the store" "$(ls -A "$N/n1" "$N/n2")"
+    ssh-keygen -p -q -P pw -N '' -f "$K1" >/dev/null 2>&1; ssh-keygen -y -f "$K1" > "$K1.pub"
+  else no "couldn't set up the passphrase-protected key" "$K1"; fi
+  # a signature that doesn't verify against the record's key (here, made with another key) is never published
+  sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$K1.pub")|" "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  ssh-keygen -q -t ed25519 -N '' -f "$T/otherkey"
+  expect "a send whose signature doesn't verify against the record is refused" 1 "doesn't verify against your registry record" \
+    sh -c "SIGNWITH='$T/otherkey' SIGNDIR='$N/n2' SIGNLOG='$T/signlog' PATH='$T/sk:$PATH'; export SIGNWITH SIGNDIR SIGNLOG PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= '$SH' '$CLI' send n2 answer4 '$T/b' --consume '$q'"
+  [ -z "$(ls -A "$N/n2" | grep answer4)" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
+    no "an unverifiable signature was published" "$(ls -A "$N/n1" "$N/n2")"
+  # a temp path that can't be cleared (a link put back as it's removed) stops the write
+  expect "a write stops when its temp path can't be cleared" 1 "can't clear" \
+    sh -c "RMPLANT=.tmp.\$\$ RMTO='$T/victim' PATH='$T/sk:$PATH'; export RMPLANT RMTO PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= exec '$SH' '$CLI' send n2 answer5 '$T/b'"
+  rm -f "$N"/n2/*.tmp.*
+  # a link to a device slipped in at the message's temp name after it was cleared (while the .sig's is cleared) is
+  # never published: the send fails and keeps the mail it answers
+  expect "a write never publishes a temp that became a link" 1 "can't write" \
+    sh -c "RMPLANT=.tmp.\$\$.sig RMSTRIP=.sig RMTO=/dev/null PATH='$T/sk:$PATH'; export RMPLANT RMSTRIP RMTO PATH; HOME='$W/home-n1' XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= exec '$SH' '$CLI' send n2 answer6 '$T/b' --consume '$q'"
+  [ -z "$(ls -A "$N/n2" | grep 'answer6\.md$')" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
+    no "a linked temp was published" "$(ls -lA "$N/n2")"
+  rm -f "$N"/n2/*.tmp.*
+fi
 
 if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
