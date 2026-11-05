@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,7 +14,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
+        # add macOS, whose minutes cost ten times as much on a private repository
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
