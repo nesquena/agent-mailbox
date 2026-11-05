@@ -97,3 +97,7 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
+- **Fix:** in a store that requires signatures, `send` refuses before changing anything when it can't sign (no
+  usable key, or your registry record names none), instead of sending unsigned and removing the mail it consumes. A
+  signed message's signature is in place before the message appears, so no reader sees it unsigned, and a send whose
+  signing fails leaves nothing behind. `consume` and `send --consume` refuse an inbox reached through a symlink (#XXXX).

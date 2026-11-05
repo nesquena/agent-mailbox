@@ -396,6 +396,46 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
 
+echo "== send and consume change the store in a safe order (dir)"
+T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
+for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as m1 init >/dev/null; for a in m1 m2; do as $a register --kind t --about t --no-key >/dev/null; done
+# m2's inbox is replaced with a link to a folder outside the store: nothing is deleted through it
+rm -rf "$T/store/mailbox/inbox/m2"; ln -s "$T/out" "$T/store/mailbox/inbox/m2"
+outside() { printf 'keep\n' > "$T/out/n.md"; printf 'keep\n' > "$T/out/n.md.sig"; }
+kept() { [ -f "$T/out/n.md" ] && [ -f "$T/out/n.md.sig" ] && ok "$1" || no "$1" "$(ls -A "$T/out")"; }
+outside; expect "consume refuses an inbox reached through a symlink" 1 "symlink in the store: mailbox/inbox/m2$" as m2 consume n.md
+kept "and deletes nothing outside the store"
+outside; expect "so does send --consume" 1 "symlink in the store: mailbox/inbox/m2$" as m2 send m1 n-reply "$T/b" --consume n.md
+kept "which deletes nothing outside the store either"
+[ "$(ls -A "$T/store/mailbox/inbox/m1")" = .keep ] && ok "and sends nothing" ||
+  no "send --consume sent through a symlinked inbox" "$(ls -A "$T/store/mailbox/inbox/m1")"
+if [ -n "$SSH" ]; then
+  for a in n1 n2; do as $a setup --store "$T/strict" --adapter dir --name $a >/dev/null; done
+  as n1 init --require-signatures >/dev/null; for a in n1 n2; do as $a register --kind t --about t >/dev/null; done
+  N="$T/strict/mailbox/inbox"
+  # an ssh-keygen on PATH that lists the folder of each file it's asked to sign, then signs it (or fails, with SIGNFAIL)
+  mkdir -p "$T/sk"; printf '%s\n' '#!/bin/sh' \
+    'case " $* " in (*" -Y sign "*) for a; do f=$a; done; ls -a "$(dirname "$f")" > "$SIGNLOG"; [ -z "$SIGNFAIL" ] || exit 1 ;; esac' \
+    "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/sk/ssh-keygen"; chmod +x "$T/sk/ssh-keygen"
+  signing() { (SIGNFAIL=$1 SIGNLOG="$T/signlog" PATH="$T/sk:$PATH"; export SIGNFAIL SIGNLOG PATH; shift; as n1 send n2 "$@" "$T/b"); }
+  out=$(signing "" in-order 2>&1); m=$(printf '%s\n' "$out" | sed -n 's|^sent mailbox/inbox/n2/||p')
+  if [ -z "$m" ]; then no "a signed send works" "$out"
+  elif grep -qxF "$m" "$T/signlog"; then no "a message appeared before its signature was made" "$(cat "$T/signlog")"
+  else ok "a message appears only once its signature is in place"; fi
+  expect "and verifies" 0 "in-order\.md \[verified\]" as n2 read
+  expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
+  [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
+    no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
+  # n1's registry record loses its key: in this strict store, n1's send is refused before anything changes
+  echo q | as n2 send n1 ask - >/dev/null; q=$(basename "$(ls "$N"/n1/*-n2-ask.md)")
+  sed 's/^key: .*/key: /' "$T/strict/mailbox/agents/n1.md" > "$T/rec" && cat "$T/rec" > "$T/strict/mailbox/agents/n1.md"
+  expect "a strict store refuses a send whose sender's record names no key" 1 "requires signatures.*names no usable key" \
+    as n1 send n2 answer "$T/b" --consume "$q"
+  [ -z "$(ls -A "$N/n2" | grep answer)" ] && [ -f "$N/n1/$q" ] && [ -f "$N/n1/$q.sig" ] &&
+    ok "it sends nothing and keeps the mail it answers" || no "a refused send changed the store" "$(ls -A "$N/n1" "$N/n2")"
+fi
+
 if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"

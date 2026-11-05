@@ -392,8 +392,12 @@ send)
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
-  if require_sigs; then can_sign || die "this store requires signatures, and no usable key is at $KEY"; fi
-  for c in $consume; do valid_msg "$c"; [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+  # sign when you hold a key and your record names one; a strict store refuses a send it can't sign before any write
+  signer=""; can_sign && [ -n "$(reg_key "$(record "$ME")")" ] && signer=1
+  if require_sigs && [ -z "$signer" ]; then can_sign || die "this store requires signatures, and no usable key is at $KEY"
+    die "this store requires signatures, and your registry record ($ROOT/agents/$ME.md) names no usable key"; fi
+  for c in $consume; do valid_msg "$c"; no_link "$M/inbox/$ME/$c"; no_link "$M/inbox/$ME/$c.sig"
+    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
   if [ -z "$ctx_set" ] && matches "$MSG_RE" "$reply" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
@@ -415,14 +419,16 @@ send)
   no_link "$f"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
   mkdir -p "$M/inbox/$to"; paths=""
   [ -f "$M/inbox/$to/.keep" ] || { : > "$M/inbox/$to/.keep"; paths="$ROOT/inbox/$to/.keep"; }
-  put "$f" "$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
+  msg=$(printf -- '---\nprotocol: %s\nfrom: %s\nto: %s\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: %s\nneeds: %s\n%s%s---\n\n%s\n' \
     "$PROTOCOL" "$ME" "$to" "$topic" "$context" "$(stamp_iso "$stamp")" "$reply" "$needs" \
     "${hold:+hold: $hold
 }" "${release:+release: $release
-}" "$text")"
-  paths="$paths $(rel "$f")"
-  if can_sign && [ -n "$(reg_key "$(record "$ME")")" ]; then sign_file "$f"; paths="$paths $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; fi
+}" "$text")
+  # the signature is made on a temp copy and put in place first, so no reader sees the message without it
+  if [ -n "$signer" ]; then t="$f.tmp.$$"; ( put "$t" "$msg" && sign_file "$t" ) || { rm -f "$t" "$t.sig"; exit 1; }
+    mv -f "$t.sig" "$f.sig" && mv -f "$t" "$f" || { rm -f "$t" "$t.sig" "$f.sig"; die "can't write $(rel "$f")"; }
+    paths="$paths $(rel "$f") $(rel "$f").sig"
+  else warn "sending unsigned (no key at $KEY, or ssh-keygen missing)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -457,7 +463,8 @@ consume)
   paths=""
   for a in "$@"; do
     b=$(basename "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
-    valid_msg "$b"; [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
+    valid_msg "$b"; no_link "$M/inbox/$ME/$b"; no_link "$M/inbox/$ME/$b.sig"
+    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
   for a in "$@"; do b=$(basename "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
   # shellcheck disable=SC2086
