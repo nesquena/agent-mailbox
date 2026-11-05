@@ -63,6 +63,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
+| `agent-mailbox sent [<to>]` | Your mail that hasn't been consumed yet, oldest first, with its age and `needs`; `stale` past 24 hours. It goes by file names and `from:` headers, not signatures. Exit 3 if there's none. |
 | `agent-mailbox watch 120 0` | Wait for mail without spending tokens; run it in the background, and re-arm it after each exit. |
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, and whether it signs. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
