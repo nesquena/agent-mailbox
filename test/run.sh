@@ -430,6 +430,20 @@ rm -f "$T/store/mailbox/inbox/m1/.keep"; ln -s "$T/out/keep-target" "$T/store/ma
 expect "send refuses a recipient .keep that's a link" 1 "symlink in the store" as m2 send m1 keeplink "$T/b"
 [ ! -e "$T/out/keep-target" ] && ok "and creates nothing outside the store" || no "send created a file through a linked .keep"
 rm -f "$T/store/mailbox/inbox/m1/.keep"; : > "$T/store/mailbox/inbox/m1/.keep"
+# an open store sends unsigned, with a warning, when the sender's record names a key that isn't its own, and still
+# consumes what it answers
+if [ -n "$SSH" ]; then
+  as m4 setup --store "$T/store" --adapter dir --name m4 >/dev/null; as m4 register --kind t --about t >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -f "$T/m4other"
+  sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/m4other.pub")|" "$T/store/mailbox/agents/m4.md" > "$T/m4rec" &&
+    cat "$T/m4rec" > "$T/store/mailbox/agents/m4.md"
+  echo q | as m1 send m4 ask4 - >/dev/null 2>&1; q4=$(basename "$(ls "$T"/store/mailbox/inbox/m4/*-m1-ask4.md)")
+  expect "an open store sends unsigned when the record names another key" 0 "sending unsigned" \
+    as m4 send m1 reply4 "$T/b" --consume "$q4"
+  r4=$(ls "$T"/store/mailbox/inbox/m1/*-m4-reply4.md 2>/dev/null)
+  [ -n "$r4" ] && [ ! -e "$r4.sig" ] && [ ! -e "$T/store/mailbox/inbox/m4/$q4" ] &&
+    ok "with no .sig, and the mail it answers consumed" || no "the open-store fallback didn't send unsigned and consume" "$(ls -A "$T/store/mailbox/inbox/m1" "$T/store/mailbox/inbox/m4")"
+fi
 # ... and unsigned (put)
 printf 'untouched\n' > "$T/victim"; MA="$T/store/mailbox/agents"
 pinned m1 "$MA/m1.md" "$T/victim" update --about changed >/dev/null 2>&1
