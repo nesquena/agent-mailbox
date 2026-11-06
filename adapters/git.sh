@@ -31,6 +31,8 @@ ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRAN
 # the path ssh:/h/x), so a store named by a URL, host:path or an absolute path is cloned from the agent's own folder,
 # where nothing else can put one. A relative path is the caller's own folder, read from where the command runs; as in
 # git, a name with a colon and no slash before it is host:path (write ./a:b for a folder). The remote is always origin
+# ceiling: an insteadOf alias spelled like a path (a slash before its colon) is read as that path where the command
+# runs, as git reads it; name such a store by its URL
 ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
