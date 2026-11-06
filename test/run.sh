@@ -1166,6 +1166,12 @@ pk='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPEN
 expect "send refuses a private key on stdin" 1 "holds a private key" sh -c "printf -- '$pk' | HOME='$H' '$SH' '$CLI' send sec2 sec-stdin -"
 printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\n' > "$T/rsa.md"
 refused "or in a body file" "$T/rsa.md"
+# a key whose first line was read off before send (a partly read file on stdin, or a pipe) is still refused
+printf -- "$pk" > "$T/k.pem"
+n=$((n+1)); expect "or a key file on stdin whose first line was already read" 1 "holds a private key" \
+  sh -c "{ IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; } < '$T/k.pem'"
+n=$((n+1)); expect "or a piped key whose first line was read off" 1 "holds a private key" \
+  sh -c "printf -- '$pk' | { IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; }"
 refused "or a PuTTY key" "$T/key.ppk"
 expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
 mkdir -p "$T/nl
