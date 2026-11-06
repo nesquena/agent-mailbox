@@ -521,6 +521,14 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" watch 1 1 >/dev/null 2>&
 # a session id ending in .config is a session like any other: it doesn't read another session's config as its name
 expect "a session named like a config record still has its own name" 0 "^name: *h2$" \
   env HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr.config "$SH" "$CLI" whoami
+cp "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" "$W/sr-config-before"
+HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr.config "$SH" "$CLI" --config "$W/home-h1/.config/agent-mailbox/config" watch 1 1 >/dev/null 2>&1
+# and a session id that could name another folder is no session at all
+expect "a session id holding a / names no other session's record" 0 "^name: *h2$" \
+  env HOME="$W/home-h2" AGENT_MAILBOX_SESSION=../session-configs/sr "$SH" "$CLI" whoami
+HOME="$W/home-h2" AGENT_MAILBOX_SESSION=../session-configs/sr AGENT_MAILBOX_NAME=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
+cmp -s "$W/sr-config-before" "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" &&
+  ok "and no other session's watch rewrites its config record" || no "another session's watch rewrote sr's config record"
 for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"

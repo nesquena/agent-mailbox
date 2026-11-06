@@ -38,9 +38,10 @@ word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' 
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 command -v agent-mailbox >/dev/null 2>&1 && cli=agent-mailbox
 cli=$(word "$cli")
-# ceiling: the config record and the name are two files, so a stale .config (left by a newer CLI before an older one
-# rewrote only the name, or by another watcher in the same session) can pair with a newer name; the commands then
-# name that config. Upgrade path: one record holding both, once no reader of the name-only format is left.
+# ceiling: the config record and the name are two files, so a stale config record (session-configs/<id>, left by a
+# newer CLI before an older one rewrote only the name, or by another watcher in the same session) can pair with a
+# newer name; the commands then name that config. Upgrade path: one record holding both, once no reader of the
+# name-only format is left.
 conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
 [ -z "$conf" ] || cli="$cli --config $(word "$conf")"
 # ceiling: a backtick in the config or plugin path ends the backtick-quoted command early for the agent reading the

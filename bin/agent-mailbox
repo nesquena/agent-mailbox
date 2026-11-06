@@ -122,6 +122,8 @@ BRANCH="${AGENT_MAILBOX_BRANCH:-$(cfg branch)}"; BRANCH="${BRANCH:-main}"
 # Where a session's name comes from: --as, then AGENT_MAILBOX_NAME, then the name this session's `watch` recorded
 # (shells that keep no exports between commands), then the config file.
 SESSION="${AGENT_MAILBOX_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
+# a session id that could name another folder (`.`, `..`, or holding a /) is no session, as the Stop hook reads it
+case "$SESSION" in (.|..|*/*) SESSION= ;; esac
 session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
 ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
 KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
@@ -641,7 +643,8 @@ watch)
   # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just
   # absolute, if its folder can't be reached), goes in a folder of its own (session-configs/), so that hook's re-arm
   # command uses this config, an older reader still finds the name, and no session id names another's record.
-  # ceiling: $(...) drops a trailing newline from a folder name in that path; the re-arm then fails, and says so
+  # ceiling: $(...) drops a trailing newline from a folder name in that path; the re-arm then fails, or names a
+  # folder of that name without the newline
   mkdir -p "$STATE/run" "$STATE/sessions" "$STATE/session-configs"
   if [ -n "$SESSION" ]; then
     if d=$(CDPATH= cd -P -- "$(dirname -- "$CONFIG")" 2>/dev/null && pwd -P); then c="${d%/}/$(basename -- "$CONFIG")"
