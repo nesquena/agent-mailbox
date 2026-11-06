@@ -140,4 +140,5 @@ First version.
   `<v>`, not that a particular one did (#26).
 - **Fix:** `send -` (or `/dev/stdin` as the body) with stdin closed fails at once (exit 1, "it's closed"); under bash
   it waited forever. Stdin is read as it is, not reopened by name, so a socket on stdin (as some harnesses give a
-  command) works, and a stdin open only for writing is refused instead of read from its file (#49).
+  command) works, a stdin open only for writing is refused instead of read from its file, and a stdin that was partly
+  read before sends only the unread rest, as a pipe always did (#49).
