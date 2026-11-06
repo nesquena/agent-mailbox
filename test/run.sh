@@ -442,6 +442,8 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # and a URL an insteadOf rewrites
   git init -q --bare "$T/fresh:2.git"; as p12 setup --store ./fresh:2.git --name p12 >/dev/null
   expect "the first setup finds a relative store path with a colon" 1 "no mailbox at" in_dir "$T" as p12 list
+  git init -q --bare "$T/sub/b:c.git"; as p18 setup --store sub/b:c.git --name p18 >/dev/null
+  expect "and one with a slash before its colon, which git reads as a path" 1 "no mailbox at" in_dir "$T" as p18 list
   # a store named by a URL is cloned from the agent's own folder: a bundle where the first command runs, at the path
   # the URL also names (file:///x is also the path file:/x), isn't taken for it
   git init -q "$T/plant2" && (cd "$T/plant2" && mkdir mailbox && echo planted > mailbox/store.md && git add . &&
@@ -453,10 +455,11 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$T/fresh.git.insteadOf' GIT_CONFIG_VALUE_0=fake:fresh HOME='$W/home-p13'"
   sh -c "$gc '$SH' '$CLI' setup --store fake:fresh --name p13" >/dev/null 2>&1
   expect "and a store name an insteadOf rewrites" 1 "no mailbox at" sh -c "$gc '$SH' '$CLI' list"
-  # ...even where a plain folder of that name sits in the folder the command runs from
-  mkdir -p "$T/decoydir/fake:fresh"; gd=$(printf '%s\n' "$gc" | sed 's/home-p13/home-p16/')
+  # ...even where a repository of that name sits in the folder the command runs from (git looks for a local path
+  # first, before any insteadOf): a host:path store is cloned from the agent's own folder
+  mkdir -p "$T/decoydir"; git clone -q --bare "$T/plant2" "$T/decoydir/fake:fresh"; gd=$(printf '%s\n' "$gc" | sed 's/home-p13/home-p16/')
   sh -c "$gd '$SH' '$CLI' setup --store fake:fresh --name p16" >/dev/null 2>&1
-  expect "and a folder named like the store where the command runs doesn't change that" 1 "no mailbox at" \
+  expect "and a repository named like the store where the command runs isn't taken for it" 1 "no mailbox at" \
     in_dir "$T/decoydir" sh -c "$gd '$SH' '$CLI' list"
   # a store name that's also a configured remote's name is never looked up at that remote (GIT_SSH runs the fake
   # ssh without a shell, so a space in its path is fine)

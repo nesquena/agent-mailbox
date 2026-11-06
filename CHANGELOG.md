@@ -126,7 +126,8 @@ First version.
 - **Fix:** with the git adapter, a store named by a URL, `host:path` or an absolute path is cloned from the agent's
   own state folder, so a repository or bundle file of that name in the folder an agent's first command runs in can't
   stand in for the store; and a `clone.defaultRemoteName` in your git config no longer breaks the clone. A relative
-  store path that holds a colon now needs a leading `./` (`./store:mail.git`), as git documents (#27).
+  store path with a colon and no slash before it now needs a leading `./` (`./store:mail.git`); git reads such a
+  name as `host:path` (#27).
 - **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
   empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
   initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete
