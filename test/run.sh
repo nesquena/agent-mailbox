@@ -677,16 +677,26 @@ as rw init >/dev/null; for a in rw rx; do as $a register --kind t --about t --no
 RS="$W/home-rw/.local/state/agent-mailbox"
 # cc.sh <session JSON> [args...]: a stand-in Claude Code, started with <args> (what its command line shows), that runs
 # the Stop hook as Claude Code does: the JSON on stdin, CLAUDE_PID naming it (or FAKEPID, a process that isn't it)
-printf '%s\n' 'j=$1; shift; printf "%s" "$j" | env CLAUDE_PID="${FAKEPID:-$$}" "$RSH" "$RHOOK"; exit $?' > "$T/cc.sh"
+# (the hook's stderr to CCERR, when set, so the stand-in's own output can stay a terminal)
+printf '%s\n' 'j=$1; shift; [ -z "${CCERR:-}" ] || exec 2>"$CCERR"' \
+  'printf "%s" "$j" | env CLAUDE_PID="${FAKEPID:-$$}" "$RSH" "$RHOOK"; exit $?' > "$T/cc.sh"
 STREAM="--input-format stream-json"
 # ccenv: the environment Claude Code 2.1.318 gives the hook (AI_AGENT names the version), in rw's home
 ccenv() { env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= \
   AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID= \
   CLAUDE_CODE_ENTRYPOINT= AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=2 RSH="$SH" \
   RHOOK="$P/hooks/claude-rewake.sh" FAKEPID= "$@"; }
-# rewake <session id> [VAR=value...]: what the hook prints on stderr (its exit code kept), under a Claude Code that
-# runs it in the background (a streaming launch), with a 1 s interval and a 2 s limit
-rewake() { s=$1; shift; ccenv "$@" "$SH" "$T/cc.sh" "{\"session_id\":\"$s\"}" $STREAM 2>&1 >/dev/null; }
+# rewakej <session JSON> [VAR=value...]: what the hook prints on stderr (its exit code kept), under a Claude Code that
+# runs it in the background, with a 1 s interval and a 2 s limit: a streaming launch where /proc shows each argument;
+# else (macOS) one on a terminal, which is the only evidence the hook takes there. rewake <session id> [VAR=value...]
+PROCOK=""; [ -r "/proc/$$/cmdline" ] && PROCOK=1
+# onterm.sh <command...>: it, on a terminal; then the text it wrote to the file CCERR names, its exit code kept
+printf '%s\n' 'e=$(mktemp "${TMPDIR:-/tmp}/amterm.XXXXXX") || exit 1' 'CCERR=$e python3 -c "import os, pty, sys' \
+  'sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))" "$@" < /dev/null > /dev/null 2>&1; r=$?' \
+  'cat "$e"; rm -f "$e"; exit $r' > "$T/onterm.sh"
+rewakej() { j=$1; shift; if [ -n "$PROCOK" ]; then ccenv "$@" "$SH" "$T/cc.sh" "$j" $STREAM 2>&1 >/dev/null
+  else ccenv "$@" "$SH" "$T/onterm.sh" "$SH" "$T/cc.sh" "$j"; fi; }
+rewake() { s=$1; shift; rewakej "{\"session_id\":\"$s\"}" "$@"; }
 # fakecc <args...>: the same under a stand-in started with <args> instead, under a host's entrypoint (as a nested
 # claude inherits one); ptycc <args...>: that, with its output a terminal (an interactive session)
 fakecc() { ccenv CLAUDE_CODE_ENTRYPOINT=remote FAKEPID="${FAKEPID:-}" "$SH" "$T/cc.sh" '{"session_id":"r1"}' "$@" 2>&1 >/dev/null; }
@@ -723,11 +733,13 @@ else sk "and the guard then asks for a re-arm without waiting (no jq)"; fi
 # would wait for the hook, so the hook needs evidence of one of the two
 expect "in an SDK session it exits at once" 0 '^$' rewake r1 CLAUDE_CODE_ENTRYPOINT=sdk-cli
 expect "and with its output to a file or pipe, under a host's entrypoint" 0 '^$' fakecc
-expect "but a streaming launch watches, even with --print" 2 "rw-1\.md" fakecc --print $STREAM
-expect "which clears the guard's note" 1 - test -e "$RS/rewake/rw/r1/declined"
-rm -f "$RS/rewake/rw/r1/woke"
-expect "and so does the cloud's preloaded launch" 2 "rw-1\.md" fakecc --preload /tmp/x.sock
-rm -f "$RS/rewake/rw/r1/woke"
+if [ -n "$PROCOK" ]; then
+  expect "but a streaming launch watches, even with --print" 2 "rw-1\.md" fakecc --print $STREAM
+  expect "which clears the guard's note" 1 - test -e "$RS/rewake/rw/r1/declined"
+  rm -f "$RS/rewake/rw/r1/woke"
+  expect "and so does the cloud's preloaded launch" 2 "rw-1\.md" fakecc --preload /tmp/x.sock
+  rm -f "$RS/rewake/rw/r1/woke"
+else sk "a streaming launch watches (no /proc: only a terminal counts there)"; fi
 if [ -r "/proc/$$/cmdline" ]; then
   expect "a multi-line prompt holding a line --preload isn't a streaming launch" 0 '^$' fakecc -p "$(printf 'hi\n--preload\nthere')"
 else sk "a multi-line prompt holding a line --preload isn't a streaming launch (no /proc)"; fi
@@ -750,21 +762,22 @@ if [ -n "$PTY" ]; then
 else sk "an interactive session (its output a terminal) watches (no python3 for a terminal)"; fi
 # Claude Code may run hooks through a wrapper (CLAUDE_CODE_SHELL_PREFIX), so it can be several steps up
 printf '%s\n' 'n=${DEPTH:-0}; if [ "$n" -lt 5 ]; then DEPTH=$((n + 1)) "$RSH" "$DEEP"; else "$RSH" "$HOOK"; fi; exit $?' > "$T/deep.sh"
-expect "a Claude Code five shells up is still found" 2 "rw-1\.md" ccenv DEEP="$T/deep.sh" HOOK="$P/hooks/claude-rewake.sh" \
-  RHOOK="$T/deep.sh" "$SH" "$T/cc.sh" '{"session_id":"r1"}' $STREAM
+expect "a Claude Code five shells up is still found" 2 "rw-1\.md" rewake r1 DEEP="$T/deep.sh" HOOK="$P/hooks/claude-rewake.sh" \
+  RHOOK="$T/deep.sh"
 rm -f "$RS/rewake/rw/r1/woke"
 # a stop that a Stop hook already kept going, at a prompt this hook already woke the session at, means Claude Code
 # waited for it: it steps aside instead of waiting again
 echo p-7 > "$RS/rewake/rw/r1/last"
-expect "a hook Claude Code waited for at this prompt steps aside the next time" 0 '^$' ccenv "$SH" "$T/cc.sh" \
-  '{"session_id":"r1","prompt_id":"p-7","stop_hook_active":true}' $STREAM
+expect "a hook Claude Code waited for at this prompt steps aside the next time" 0 '^$' \
+  rewakej '{"session_id":"r1","prompt_id":"p-7","stop_hook_active":true}'
 expect "leaving the guard a note" 0 - grep -qx p-7 "$RS/rewake/rw/r1/declined"
 if command -v node >/dev/null 2>&1; then
   # an npm install runs under node, and renames its process to claude, so without AI_AGENT nothing tells its version
   CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc"
   printf '%s\n' "process.title = 'claude'; if (process.argv.includes('--version')) { console.log('2.1.80 (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
-  printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' > "$CCD/cc/stop.sh"
+  printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
+    'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' > "$CCD/cc/stop.sh"
   N=$(command -v node); case "$N" in (/*) ;; (*) N="$(pwd -P)/$N" ;; esac
   expect "an npm install that doesn't say its version is left to the guard" 0 '^$' ccenv AI_AGENT= RH="$W/home-rw" \
     "$N" "$CCD/cc/cli.js" "$CCD/cc/stop.sh" $STREAM
@@ -775,7 +788,8 @@ CC=$(command -v cc || command -v gcc || command -v clang)
 if [ -n "$CC" ]; then
   [ -n "$CCD" ] || CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc" "$CCD/claude/versions"
   # (with this stop's prompt id, PRID, when set)
-  printf '%s\n' 'printf '"'"'{"session_id":"r1","prompt_id":"%s"}'"'"' "${PRID:-}" | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' \
+  printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
+    'printf '"'"'{"session_id":"r1","prompt_id":"%s"}'"'"' "${PRID:-}" | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' \
     > "$CCD/cc/stop.sh"
   # a native install's claude links to .../claude/versions/<version>, the path the process shows; this stand-in, built
   # there, answers --version (after CCDELAY seconds) and otherwise runs a script
@@ -785,7 +799,8 @@ if [ -n "$CC" ]; then
     '  char b[4096]; snprintf(b, sizeof b, "/bin/sh \"%s\"", v[1]); int r = system(b); return r > 255 ? r >> 8 : r; }' > "$CCD/cc.c"
   if "$CC" -o "$CCD/claude/versions/2.1.80" "$CCD/cc.c" 2>/dev/null; then
     # nat [VAR=value...]: the hook started by that native Claude Code 2.1.80, a streaming launch
-    nat() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 "$@" "$CCD/claude/versions/2.1.80" "$CCD/cc/stop.sh" $STREAM; }
+    nat() { if [ -n "$PROCOK" ]; then ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 "$@" "$CCD/claude/versions/2.1.80" "$CCD/cc/stop.sh" $STREAM
+      else ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 "$@" "$SH" "$T/onterm.sh" "$CCD/claude/versions/2.1.80" "$CCD/cc/stop.sh"; fi; }
     echo hi | as rx send rw rw-n - >/dev/null 2>&1
     expect "a native Claude Code is told by asking it, by its versions path" 2 "rw-n\.md" nat
     as rw consume "$(as rw list | grep rw-n)" >/dev/null; rm -f "$RS/rewake/rw/r1/woke"
@@ -811,7 +826,7 @@ expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd /
 # a plugin folder whose name holds a backslash sequence (\c ends echo's output in dash) still gets the whole command
 P3="$T/plug\\cache"; mkdir -p "$P3/hooks"; cp "$P/hooks/claude-rewake.sh" "$P3/hooks/"; ln -s "$ROOTDIR/bin" "$P3/bin"
 echo hi | as rx send rw rw-b - >/dev/null 2>&1
-r=$(ccenv RHOOK="$P3/hooks/claude-rewake.sh" "$SH" "$T/cc.sh" '{"session_id":"r1"}' $STREAM 2>&1 >/dev/null)
+r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh")
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
 expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
@@ -849,6 +864,8 @@ kill "$sp" 2>/dev/null; rm -f "$RS/rewake/rw/r1/pid"
 # through a shell of its own, and dies (killed, and reaped) while that shell lives on
 printf '%s\n' 'CC=$$; "$RSH" -c '"'"'printf "{\"session_id\":\"r1\"}" | env HOME="$RH" AI_AGENT=claude-code_2-1-318_harness \' \
   '  CLAUDE_PID=$1 AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 "$RSH" "$RHOOK" 2>&1 >/dev/null; sleep 30'"'"' sh "$CC"' > "$T/cc2.sh"
+# (with /proc only: the stand-in shows its evidence as a streaming launch)
+if [ -n "$PROCOK" ]; then
 env RH="$W/home-rw" RSH="$SH" RHOOK="$P/hooks/claude-rewake.sh" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= \
   AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$T/cc2.sh" $STREAM > "$T/bg.out" & bg=$!
 if up "$RS/rewake/rw/r1/pid"; then hp=$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid"); kill -KILL "$bg"; wait "$bg" 2>/dev/null
@@ -858,6 +875,7 @@ if up "$RS/rewake/rw/r1/pid"; then hp=$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid"); k
   expect "so the next session's hook wakes for it" 2 "rw-x\.md" rewake r1
   as rw consume "$(as rw list | grep rw-x)" >/dev/null
 else no "a hook whose Claude Code is gone wakes no one" "it didn't start"; kill "$bg" 2>/dev/null; fi
+else sk "a hook whose Claude Code is gone wakes no one (no /proc)"; fi
 # the real turn end: both hooks start together, and the guard waits for the rewake hook instead of asking for a re-arm
 rm -f "$RS/run/rw.pid"
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 > "$T/bg.out" & bg=$!
@@ -886,11 +904,11 @@ expect "and the error is forgotten" 1 - test -e "$RS/rewake/rw/r1/error"
 # an error whose only change is a count or a time (git's "after 21034 ms") is the same error; another one is new. A
 # stand-in CLI fails its watch with the text in FAKEERR, {} replaced by a count that rises at every try
 P2="$T/plug2"; mkdir -p "$P2/hooks" "$P2/bin"; cp "$P/hooks/claude-rewake.sh" "$P2/hooks/"
-printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${FAKEHANG:-}" ] || { sh -c "sleep 999; :"; exit 1; }' \
+printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${FAKEHANG:-}" ] || { sh -c "sleep $FAKEHANG; :"; exit 1; }' \
   'n=$(cat "$FAKEN" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKEN"' \
   'sed "s/{}/$n/g" "$FAKEERR" >&2; exit 1' > "$P2/bin/agent-mailbox"; chmod +x "$P2/bin/agent-mailbox"
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$RS/rewake/rw/r1/error" "$RS/run/rw.pid"
-fk() { ccenv RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@" "$SH" "$T/cc.sh" '{"session_id":"r1"}' $STREAM 2>&1 >/dev/null; }
+fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
 expect "an error wakes the session" 2 "can't go on .*after 1 ms" fk
 fk AGENT_MAILBOX_REWAKE_MAX=60 > "$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error with another count or time doesn't wake it again" ||
@@ -901,9 +919,10 @@ case "$rc $(cat "$T/bg.out")" in (*"can't go on"*"HTTP 404"*) ok "but a differen
 rm -f "$RS/rewake/rw/r1/error"
 # a watch that hangs (a fetch over a dead connection) can't run the hook past the day: at its deadline (here the 2 s
 # limit, an interval and 15 s, checked every 15 s) the session hears the daily note, and nothing it started lingers
-hung() { ps -eo pid=,args= | awk '$2 == "sleep" && $3 == "999" { print $1 }'; }
+# (its length, 99 then this run's pid, tells this run's hang from another's)
+hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG=1 > "$T/bg.out" & bg=$!; n=0
+fk FAKEHANG="99$$" > "$T/bg.out" & bg=$!; n=0
 while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
 if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
   kill "$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
@@ -926,6 +945,7 @@ rm -f "$RS/run/rw.pid"
 # a hook whose session's shell is gone (Claude Code stopped only that) stops itself, within its 15 s check
 printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID=$$ \
   AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 "$RSH" "$RHOOK" 2>/dev/null >/dev/null' > "$T/wrap.sh"
+if [ -n "$PROCOK" ]; then
 env RH="$W/home-rw" RSH="$SH" RHOOK="$P/hooks/claude-rewake.sh" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= \
   AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$T/wrap.sh" $STREAM & w=$!
 if up "$RS/rewake/rw/r1/pid"; then hp=$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid"); kill -TERM "$w"; n=0
@@ -934,6 +954,7 @@ if up "$RS/rewake/rw/r1/pid"; then hp=$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid"); k
     ok "a hook whose shell is gone stops itself"
   expect "and frees the lock" 1 - test -e "$RS/rewake/rw/r1/pid"
 else no "a hook whose shell is gone stops itself" "it didn't start"; kill "$w" 2>/dev/null; fi
+else sk "a hook whose shell is gone stops itself (no /proc)"; fi
 # a watcher the agent started itself wakes the session on its own: the hook stands aside while it runs. And a watcher
 # that ends (here A, at its limit) leaves the pid file of one started after it (B) alone
 mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" $(sed 's/^/--except /' "$RS/rewake/rw/r1/woke"); }
@@ -954,8 +975,7 @@ kill "$mw" 2>/dev/null; wait "$mw" 2>/dev/null
 # the two Stop hooks at one turn end, as Claude Code starts them (both get this stop's prompt id)
 # hookbg <prompt id>: the rewake hook in the background (its pid in bp); guardr <prompt id>: the guard's reason (empty:
 # it lets the stop through)
-hookbg() { ccenv AGENT_MAILBOX_REWAKE_MAX=60 "$SH" "$T/cc.sh" "{\"session_id\":\"r1\",\"prompt_id\":\"$1\"}" $STREAM \
-    > /dev/null 2> "$T/both.out" & bp=$!; }
+hookbg() { rewakej "{\"session_id\":\"r1\",\"prompt_id\":\"$1\"}" AGENT_MAILBOX_REWAKE_MAX=60 > "$T/both.out" & bp=$!; }
 guardr() { printf '{"session_id":"r1","prompt_id":"%s"}' "$1" | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= \
     AGENT_MAILBOX_STATE= "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r '.reason // empty'; }
 if command -v jq >/dev/null 2>&1; then rm -f "$RS/run/rw.pid"
