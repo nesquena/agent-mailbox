@@ -33,16 +33,19 @@ alive() {
   case "$args" in *agent-mailbox*watch*) return 0 ;; *) return 1 ;; esac
 }
 alive && exit 0
-# claude-rewake.sh, the watcher as an asyncRewake hook, starts at this same turn end: give it a moment (it, or the
-# watcher it starts, counts) before asking for a re-arm. Without asyncRewake nothing starts, and this blocks as before
+# claude-rewake.sh, the watcher as an asyncRewake hook, starts at this same turn end: give it a moment (it, for this
+# session, or the watcher it starts, counts) before asking for a re-arm. Where it has declined (a Claude Code too old
+# for it, or one whose version it can't find) it leaves a `declined` note, and this blocks at once, as before
 rewaking() {
-  rp=$(cat "$state/rewake/$name/pid" 2>/dev/null)
+  set -- $(cat "$state/rewake/$name/pid" 2>/dev/null); rp=${1:-}
   case "$rp" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${2:-}" = "$sid" ] || return 1
   kill -0 "$rp" 2>/dev/null || return 1
   if [ -r "/proc/$rp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$rp/cmdline"); else a=$(ps -p "$rp" -o args= 2>/dev/null); fi
   case "$a" in *claude-rewake.sh*) return 0 ;; *) return 1 ;; esac
 }
-n=0; while [ $n -lt 3 ]; do rewaking && exit 0; sleep 1; alive && exit 0; n=$((n+1)); done
+n=0; [ ! -f "$state/rewake/$name/declined" ] || n=3
+while [ $n -lt 3 ]; do rewaking && exit 0; sleep 1; alive && exit 0; n=$((n+1)); done
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"

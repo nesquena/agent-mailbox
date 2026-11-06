@@ -28,61 +28,90 @@ printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
 conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
+run="$state/rewake/$name"; mkdir -p "$run" 2>/dev/null || exit 0
+# mine: the pid file names a live claude-rewake.sh for this session (its fields: pid, session id)
+mine() {
+  set -- $(cat "$run/pid" 2>/dev/null)
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${2:-}" = "$sid" ] || return 1
+  kill -0 "$1" 2>/dev/null || return 1
+  if [ -r "/proc/$1/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$1/cmdline"); else a=$(ps -p "$1" -o args= 2>/dev/null); fi
+  case "$a" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
+}
+mine && exit 0
 # Claude Code runs asyncRewake hooks in the background from 2.1.69. An older one drops the key and would run this as an
 # ordinary Stop hook, holding every turn end until mail came. So the running version comes first: from AI_AGENT
 # (claude-code_2-1-318_..., which newer versions give hooks), else from the Claude Code process that started this hook
 # (a parent within three steps: a native `claude`, or node running Claude Code's cli.js), asked for --version by its
-# absolute path. Below 2.1.69, or when it can't tell, this exits 0 at once and claude-watch-guard.sh asks for a re-arm
-# as before.
+# absolute path. Below 2.1.69, or when it can't tell, this exits 0 at once, leaving a `declined` note so that
+# claude-watch-guard.sh asks for a re-arm at once, as before. ccver prints the version and Claude Code's pid (if known).
 ccver() {
   v=$(printf '%s\n' "${AI_AGENT:-}" | sed -n 's/^claude-code_\([0-9][0-9]*\)-\([0-9][0-9]*\)-\([0-9][0-9]*\)_.*/\1.\2.\3/p')
-  [ -z "$v" ] || { echo "$v"; return 0; }
+  [ -z "$v" ] || { echo "$v ${CLAUDE_PID:-}"; return 0; }
   p=$PPID n=0
   while [ $n -lt 3 ]; do
     case "$p" in ''|*[!0-9]*|0|1) return 1 ;; esac
-    if [ -r "/proc/$p/cmdline" ]; then x=$(readlink "/proc/$p/exe" 2>/dev/null); a=$(tr '\0' '\n' < "/proc/$p/cmdline" | sed -n 2p)
-    else x=$(ps -o comm= -p "$p" 2>/dev/null); a=$(ps -o args= -p "$p" 2>/dev/null | awk '{ print $2 }'); fi
+    # the executable and its first argument that isn't an option (the script, for node)
+    if [ -r "/proc/$p/cmdline" ]; then x=$(readlink "/proc/$p/exe" 2>/dev/null)
+      a=$(tr '\0' '\n' < "/proc/$p/cmdline" | sed -n '2,$p' | grep -v '^-' | head -n 1)
+    else x=$(ps -o comm= -p "$p" 2>/dev/null); a=$(ps -o args= -p "$p" 2>/dev/null | tr ' ' '\n' | sed -n '2,$p' | grep -v '^-' | head -n 1); fi
     out=""
     case "$x" in
-      (/*/claude|/*/claude.exe) out=$("$x" --version 2>/dev/null) ;;
+      # a native install's `claude` is a link to .../claude/versions/<version>, which /proc resolves
+      (/*/claude|/*/claude.exe|/*/claude/versions/[0-9]*) out=$("$x" --version 2>/dev/null) ;;
       (/*/node|/*/node.exe|/*/nodejs) case "$a" in (/*/cli.js|/*/claude) out=$("$x" "$a" --version 2>/dev/null) ;; esac ;;
     esac
     v=$(printf '%s\n' "$out" | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) (Claude Code).*/\1/p')
-    [ -z "$v" ] || { echo "$v"; return 0; }
+    [ -z "$v" ] || { echo "$v $p"; return 0; }
     q=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
     [ -n "$q" ] || q=$(sed -n 's/.*) [A-Za-z] \([0-9][0-9]*\) .*/\1/p' "/proc/$p/stat" 2>/dev/null)
     p=$q n=$((n+1))
   done
   return 1
 }
-ccv=$(ccver) && printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || exit 0
+cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
+printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' ||
+  { echo "${ccv:-unknown}" > "$run/declined"; exit 0; }
+rm -f "$run/declined"
+# a watcher already running for this name (one the agent started by hand) wakes the session itself; this hook starts
+# at the turn end after it exits. A stopped hook's own watcher, still finishing its last poll, isn't one: `child` names it
+wp=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
+case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
+  if kill -0 "$wp" 2>/dev/null; then
+    if [ -r "/proc/$wp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$wp/cmdline"); else a=$(ps -p "$wp" -o args= 2>/dev/null); fi
+    case "$a" in (*agent-mailbox*watch*) exit 0 ;; esac
+  fi ;;
+esac
+# the lock, taken with noclobber, so two hooks starting together can't both hold it; a stale one is replaced once
+claim() { ( set -C; printf '%s %s\n' $$ "$sid" > "$run/pid" ) 2>/dev/null; }
+if ! claim; then mine && exit 0; rm -f "$run/pid"; claim || exit 0; fi
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
-
-run="$state/rewake/$name"; mkdir -p "$run" 2>/dev/null || exit 0
-mine() {
-  case "$1" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$1" 2>/dev/null || return 1
-  if [ -r "/proc/$1/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$1/cmdline"); else a=$(ps -p "$1" -o args= 2>/dev/null); fi
-  case "$a" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
-}
-mine "$(cat "$run/pid" 2>/dev/null)" && exit 0
-echo $$ > "$run/pid"
-child=""
-cleanup() { [ -z "$child" ] || kill "$child" 2>/dev/null; [ "$(cat "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; }
+child="" dog=""
+cleanup() { [ -z "$child" ] || kill "$child" 2>/dev/null; [ -z "$dog" ] || kill "$dog" 2>/dev/null
+  [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; }
 trap 'cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
+# Claude Code may stop this hook by killing only the shell it started it through, or end the session without stopping
+# it: a hook left running would hold the lock, and its wake would reach no session. So it stops itself once that shell
+# or Claude Code (when its pid is known) is gone.
+top=$PPID
+( while kill -0 "$top" 2>/dev/null && { [ -z "$ccpid" ] || kill -0 "$ccpid" 2>/dev/null; }; do sleep 15; done
+  kill -TERM $$ 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
+dog=$!
 
 # the mail it already woke the session for, kept only while it's still in the inbox (when the inbox can't be read,
 # the list is kept as it is)
-inbox=$("$cli" "$@" list 2>/dev/null); lrc=$?
-if [ -s "$run/woke" ] && { [ $lrc = 0 ] || [ $lrc = 3 ]; }; then
-  inbox=$(printf '%s\n' "$inbox" | sed 's#.*/##')
-  while IFS= read -r f; do
-    [ -n "$f" ] && printf '%s\n' "$inbox" | grep -qxF -- "$f" && printf '%s\n' "$f"
-  done < "$run/woke" > "$run/woke.new"
-  mv -f "$run/woke.new" "$run/woke"
+if [ -s "$run/woke" ]; then
+  inbox=$("$cli" "$@" list 2>/dev/null); lrc=$?
+  if [ $lrc = 0 ] || [ $lrc = 3 ]; then
+    inbox=$(printf '%s\n' "$inbox" | sed 's#.*/##')
+    while IFS= read -r f; do
+      [ -n "$f" ] && printf '%s\n' "$inbox" | grep -qxF -- "$f" && printf '%s\n' "$f"
+    done < "$run/woke" > "$run/woke.new"
+    mv -f "$run/woke.new" "$run/woke"
+  fi
 fi
 # a message's file name holds only these characters (the CLI's own rule is narrower), so the list splits safely
 ex=""; [ ! -s "$run/woke" ] || while IFS= read -r f; do
@@ -92,7 +121,7 @@ done < "$run/woke" > /dev/null
 # the watcher in the background, so a stop (TERM) can end it too
 # shellcheck disable=SC2086
 "$cli" "$@" watch "${AGENT_MAILBOX_REWAKE_INTERVAL:-120}" "${AGENT_MAILBOX_REWAKE_MAX:-86100}" $ex > "$run/out" 2>&1 &
-child=$!
+child=$!; echo "$child" > "$run/child"
 wait "$child"; rc=$?; child=""
 case $rc in
   0)
@@ -104,8 +133,9 @@ case $rc in
   2)
     echo "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
     exit 2 ;;
-  130|143) exit 0 ;;
   *)
+    # a signal ended it (a stop, a time limit, the system): nothing to report
+    [ "$rc" -le 128 ] || exit 0
     # the same error again at the next turn end doesn't wake the session again
     err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ')"
     [ "$err" = "$(cat "$run/error" 2>/dev/null)" ] && exit 0
