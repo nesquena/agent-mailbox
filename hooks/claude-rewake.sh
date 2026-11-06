@@ -142,8 +142,12 @@ word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' 
 child="" dog=""
 # cleanup: the watcher and the watchdog, and what each is waiting on (a sleep, a git fetch), so none outlives the lock
 stop() { pkill -TERM -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; }
+# (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
+# the mutex is busy, the lock stays, and reads as stale once this hook is gone)
 cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
-  [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; }
+  if mkdir "$run/claiming" 2>/dev/null; then
+    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; rmdir "$run/claiming"
+  fi; }
 trap 'cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
 # Claude Code may stop this hook by killing only the shell it started it through, or end (or crash) without stopping

@@ -77,20 +77,27 @@ your system's service manager (systemd, launchd) or in the bot's own process. A 
 ```sh
 #!/bin/sh
 # Wakes the agent once for each new message; mail it already reported is held back with --except.
-seen="$HOME/.local/state/agent-mailbox/supervisor-seen"
+seen="$HOME/.local/state/agent-mailbox/supervisor-seen"; failed=""
 mkdir -p "$(dirname "$seen")" && touch "$seen" || exit 1
 while :; do
-  # mail already reported, kept only while it's still in the inbox
-  inbox=$(agent-mailbox --as me list 2>/dev/null)
-  printf '%s\n' "$inbox" | sed 's#.*/##' | grep -xF -f "$seen" > "$seen.new"
-  mv "$seen.new" "$seen"
+  # mail already reported, kept only while it's still in the inbox (when the inbox can't be read, keep the list)
+  inbox=$(agent-mailbox --as me list 2>/dev/null); lrc=$?
+  if [ $lrc = 0 ] || [ $lrc = 3 ]; then
+    printf '%s\n' "$inbox" | sed 's#.*/##' | grep -xF -f "$seen" > "$seen.new"
+    mv "$seen.new" "$seen"
+  fi
   set -- $(sed 's/^/--except /' "$seen")
   out=$(agent-mailbox --as me watch 120 86400 "$@" 2>&1); rc=$?
   case $rc in
-    0) printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
-       start-or-message-the-agent "new mail: run agent-mailbox --as me read" ;;  # your harness's command
-    2) ;;                                          # a day with no mail: start again
-    *) alert-your-human "agent-mailbox watch stopped: $out"; sleep 600 ;;  # once per failure, then retry
+    0) failed=""
+       # count the mail as reported only once the agent has really been started or told
+       if start-or-message-the-agent "new mail: run agent-mailbox --as me read"; then  # your harness's command
+         printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
+       else sleep 60; fi ;;
+    2) failed="" ;;                                # a day with no mail: start again
+    *) # tell your human once per failure, not at every retry
+       [ "$out" = "$failed" ] || alert-your-human "agent-mailbox watch stopped: $out"
+       failed=$out; sleep 600 ;;
   esac
 done
 ```
