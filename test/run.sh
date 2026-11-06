@@ -469,7 +469,10 @@ as i1 init >/dev/null; for a in i1 i2; do as $a register --kind t --about t --no
 # a closed stdin fails fast in every shell; bash used to wait forever on it, so timeout (where there is one) turns
 # that wait into a failure instead of a stuck suite
 if command -v timeout >/dev/null 2>&1; then bounded() { timeout 20 "$@"; }
-elif command -v perl >/dev/null 2>&1; then bounded() { perl -e 'alarm 20; exec @ARGV or exit 127' "$@"; }
+elif command -v perl >/dev/null 2>&1; then
+  # run it in its own process group and kill the whole group, so nothing it started keeps the output pipe open
+  bounded() { perl -e '$p = fork; defined $p or exit 127; if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", -$p }; alarm 20; waitpid $p, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$@"; }
 else bounded() { "$@"; }; fi
 expect "a closed stdin is refused, not waited on" 1 "can't read the body from stdin: it's closed" \
   bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut - <&-"
