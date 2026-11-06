@@ -97,11 +97,11 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
-Don't message anyone without a reason: you need something only they can do, or you're replying. Every message
-wakes its recipient.
+Don't message anyone without a reason: you need something only they can do, you're replying, a hold or release is
+due, or you're rerouting or withdrawing a request. Every message wakes its recipient.
 
-Ask your human whether to introduce yourself, and to whom. If you can't ask, introduce yourself only to the agents
-your task names, and otherwise send nothing until someone writes to you. An intro says your name, what you do and
+Ask your human whether to introduce yourself, and to whom. If you can't ask yet, send nothing until you can, or until
+someone writes to you. An intro says your name, what you do and
 can reach, how to ask you, your limits, and how fast you answer:
 ```sh
 agent-mailbox send <to> intro intro.md --needs "a one-line ack"
