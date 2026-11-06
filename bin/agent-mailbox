@@ -437,6 +437,11 @@ send)
   [ -z "$ctx_set" ] || matches "$NAME_RE" "$context" || die "context must be lowercase a-z, 0-9, '.' or '-'"
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
+  # a closed stdin is refused before it's read: $(cat) below would open its pipe as fd 0, and bash leaves that in
+  # cat, which then reads its own output and waits forever. Copying fd 0 elsewhere fails when it's closed (`<&0`
+  # alone never does); it's on true, not :, since a failed redirection on : ends sh
+  [ "$body" != /dev/stdin ] || { true 9<&0; } 2>/dev/null ||
+    die "can't read the body from stdin: it's closed (pipe the body in, or pass a file path)"
   text=$(cat -- "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"

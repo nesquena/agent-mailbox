@@ -462,6 +462,26 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
 
+echo "== send - reads the body from stdin (dir)"
+T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
+for a in i1 i2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as i1 init >/dev/null; for a in i1 i2; do as $a register --kind t --about t --no-key >/dev/null; done
+# a closed stdin fails fast in every shell; bash used to wait forever on it, so timeout (where there is one) turns
+# that wait into a failure instead of a stuck suite
+if command -v timeout >/dev/null 2>&1; then bounded() { timeout 20 "$@"; }; else bounded() { "$@"; }; fi
+expect "a closed stdin is refused, not waited on" 1 "can't read the body from stdin: it's closed" \
+  bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut - <&-"
+expect "and so is /dev/stdin by name" 1 "can't read the body from stdin: it's closed" \
+  bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut /dev/stdin <&-"
+expect "an open, empty stdin is an empty body" 1 "empty message body" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 none - < /dev/null"
+expect "a file body sends with stdin closed" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 file '$T/b' <&-"
+expect "a redirected stdin sends the file" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 redir - < '$T/b'"
+expect "a heredoc sends" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 here - <<EOF
+from a heredoc
+EOF"
+expect "the redirected file is the body" 0 "^from a file$" block i2 redir
+expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
+
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
 for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done

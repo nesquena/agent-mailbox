@@ -120,3 +120,4 @@ First version.
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
+- **Fix:** `send -` with stdin closed fails at once (exit 1, "it's closed"); under bash it waited forever (#34).
