@@ -486,6 +486,16 @@ expect "a redirected stdin sends the file" 0 "^sent" sh -c "HOME='$W/home-i1' '$
 expect "a heredoc sends" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 here - <<EOF
 from a heredoc
 EOF"
+# stdin is read as it is, not reopened by name: one open only for writing isn't read from its file, and a socket
+# (as some harnesses give a command) works
+expect "a stdin open only for writing is refused, not read from its file" 1 "can't read stdin" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 wonly - 0>>'$T/b'"
+if command -v perl >/dev/null 2>&1; then
+  expect "a socket on stdin sends" 0 "^sent" perl -MSocket -e 'socketpair(my $p, my $c, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or exit 127;
+    if (my $k = fork) { close $c; print $p "from a socket\n"; close $p; waitpid $k, 0; exit($? >> 8) }
+    close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
+  expect "and its text is the body" 0 "^from a socket$" block i2 sock
+else sk "a socket on stdin sends (no perl)"; fi
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
 
