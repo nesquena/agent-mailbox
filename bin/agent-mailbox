@@ -391,7 +391,7 @@ register|update)
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
-  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION" "$STATE/sessions/$SESSION.config"; fi
+  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"; fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
@@ -639,13 +639,14 @@ watch)
   need_active_me
   # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
   # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just
-  # absolute, if its folder can't be reached), goes in a file of its own beside the marker, so that hook's re-arm
-  # command uses this config, and an older reader still finds the name
-  mkdir -p "$STATE/run" "$STATE/sessions"
+  # absolute, if its folder can't be reached), goes in a folder of its own (session-configs/), so that hook's re-arm
+  # command uses this config, an older reader still finds the name, and no session id names another's record.
+  # ceiling: $(...) drops a trailing newline from a folder name in that path; the re-arm then fails, and says so
+  mkdir -p "$STATE/run" "$STATE/sessions" "$STATE/session-configs"
   if [ -n "$SESSION" ]; then
     if d=$(CDPATH= cd -P -- "$(dirname -- "$CONFIG")" 2>/dev/null && pwd -P); then c="${d%/}/$(basename -- "$CONFIG")"
     else case "$CONFIG" in (/*) c=$CONFIG ;; (*) c="$(pwd)/$CONFIG" ;; esac; fi
-    printf '%s\n' "$c" > "$STATE/sessions/$SESSION.config"
+    printf '%s\n' "$c" > "$STATE/session-configs/$SESSION"
     echo "$ME" > "$STATE/sessions/$SESSION"
   fi
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
