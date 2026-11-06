@@ -120,6 +120,6 @@ First version.
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
-- **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` when the watcher ran with a
-  config other than the default (`--config`, or `AGENT_MAILBOX_CONFIG` set only for it), quoted where the path needs
-  it, so the re-armed watcher uses the same store and name (#35).
+- **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
+  ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
+  config of its own is re-armed on it (#35).

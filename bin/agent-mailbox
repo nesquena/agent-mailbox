@@ -638,11 +638,14 @@ watch)
   load_adapter; ad_sync; need_store
   need_active_me
   # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
-  # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made absolute, goes in a file of its
-  # own beside the marker, so that hook's re-arm command uses this config, and an older reader still finds the name
+  # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just
+  # absolute, if its folder can't be reached), goes in a file of its own beside the marker, so that hook's re-arm
+  # command uses this config, and an older reader still finds the name
   mkdir -p "$STATE/run" "$STATE/sessions"
   if [ -n "$SESSION" ]; then
-    case "$CONFIG" in (/*) printf '%s\n' "$CONFIG" ;; (*) printf '%s/%s\n' "$(pwd)" "$CONFIG" ;; esac > "$STATE/sessions/$SESSION.config"
+    if d=$(CDPATH= cd -P -- "$(dirname -- "$CONFIG")" 2>/dev/null && pwd -P); then c="${d%/}/$(basename -- "$CONFIG")"
+    else case "$CONFIG" in (/*) c=$CONFIG ;; (*) c="$(pwd)/$CONFIG" ;; esac; fi
+    printf '%s\n' "$c" > "$STATE/sessions/$SESSION.config"
     echo "$ME" > "$STATE/sessions/$SESSION"
   fi
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"

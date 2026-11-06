@@ -412,20 +412,23 @@ if [ -n "$SSH" ]; then
 fi
 
 echo "== the Claude Code Stop hook (dir)"
-if command -v jq >/dev/null 2>&1; then
+# PATH without any folder holding an agent-mailbox, so the hook prints this checkout's CLI and nothing installed runs
+NOPATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -z "$d" ] || [ -e "$d/agent-mailbox" ] ||
+  printf '%s:' "$d"; done); NOPATH=${NOPATH%:}
+if PATH=$NOPATH command -v jq >/dev/null 2>&1; then
   T="$W/hook"; P="$T/plug 'in'"; mkdir -p "$T/cfg dir" "$T/run" "$P/hooks"
   # the plugin in a folder whose name needs quoting; its bin is this checkout's
   cp "$ROOTDIR/hooks/claude-watch-guard.sh" "$P/hooks/"; ln -s "$ROOTDIR/bin" "$P/bin"
   # hook <agent> <session id> [VAR=value...]: the reason the Stop hook gives that agent's session, run as Claude Code
   # runs it, in the agent's home
-  hook() { a=$1 s=$2; shift 2; printf '{"session_id":"%s"}' "$s" | env HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= \
-    AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$@" \
-    "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason; }
-  # rerun <reason> <n>: run the reason's nth command (1: read, 2: watch) as printed, from another folder, in hk's home
-  rerun() { c=$(printf '%s\n' "$1" | awk -F'`' -v n="$2" '{ print $(2 * n) }'); (cd / && HOME="$W/home-hk" XDG_CONFIG_HOME= \
-    XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" -c "$c"); }
-  # noflag <description> <reason>: the reason gives both commands, and neither has --config
-  noflag() { case "$2" in (*--config*) no "$1" "$2" ;; (*"read\`"*"watch 120 0\`"*) ok "$1" ;; (*) no "$1" "$2" ;; esac; }
+  hook() { a=$1 s=$2; shift 2; printf '{"session_id":"%s"}' "$s" | env PATH="$NOPATH" HOME="$W/home-$a" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$@" "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason; }
+  # rerun <agent> <reason> <n>: run the reason's nth command (1: read, 2: watch) as printed, from another folder, in
+  # the agent's home
+  rerun() { c=$(printf '%s\n' "$2" | awk -F'`' -v n="$3" '{ print $(2 * n) }'); (cd / && PATH="$NOPATH" HOME="$W/home-$1" \
+    XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" -c "$c"); }
   # hk keeps its own config, at a path with a space, a quote and a $; its default config is another agent's, on
   # another store
   C="$T/cfg dir/hk's \$x.cfg"
@@ -437,22 +440,33 @@ if command -v jq >/dev/null 2>&1; then
   echo hi | as hk --config "$C" send hk hook-1 - >/dev/null
   HOME="$W/home-hk" AGENT_MAILBOX_SESSION=h1 "$SH" "$CLI" --config "$C" watch 1 1 >/dev/null 2>&1
   r=$(hook hk h1)
-  expect "the Stop hook's read command uses the config the watcher ran with" 0 "hook-1\.md" rerun "$r" 1
-  expect "and so does its watch command" 0 "^mail for hk:" rerun "$r" 2
+  expect "the Stop hook's read command uses the config the watcher ran with" 0 "hook-1\.md" rerun hk "$r" 1
+  expect "and so does its watch command" 0 "^mail for hk:" rerun hk "$r" 2
   # AGENT_MAILBOX_CONFIG set only for the watcher, to a path relative to the folder it ran in
   cp "$C" "$T/run/hk.cfg"
   in_dir "$T/run" env HOME="$W/home-hk" AGENT_MAILBOX_CONFIG=hk.cfg AGENT_MAILBOX_SESSION=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
   r=$(hook hk h2)
-  expect "a config from the environment, relative to the watcher's folder, is carried too" 0 "hook-1\.md" rerun "$r" 1
-  # no --config where the commands pick that config anyway, by the CLI's own rule
-  noflag "the same AGENT_MAILBOX_CONFIG in the hook's environment needs no --config" "$(hook hk h2 AGENT_MAILBOX_CONFIG="$T/run/hk.cfg")"
+  expect "a config from the environment, relative to the watcher's folder, is carried too" 0 "hook-1\.md" rerun hk "$r" 1
+  # a config reached through a link to its folder is recorded where it really is, so the commands outlive the link
+  ln -s "$T/run" "$T/via"
+  HOME="$W/home-hk" AGENT_MAILBOX_SESSION=h5 "$SH" "$CLI" --config "$T/via/hk.cfg" watch 1 1 >/dev/null 2>&1; rm "$T/via"
+  expect "a config reached through a linked folder is recorded by its real path" 0 "hook-1\.md" rerun hk "$(hook hk h5)" 1
+  # the default config is carried too, since the default the hook would work out could differ from the agent's shell
   HOME="$W/home-hd" AGENT_MAILBOX_SESSION=h3 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
-  noflag "a watcher on the default config gets the commands without --config" "$(hook hd h3)"
+  r=$(hook hd h3)
+  case "$r" in (*"--config "*"home-hd/.config/agent-mailbox/config"*"watch 120 0\`"*)
+    expect "a watcher on the default config gets --config with its path" 3 "no mail for hd" rerun hd "$r" 1 ;;
+    (*) no "a watcher on the default config gets --config with its path" "$r" ;; esac
   # a record from before the config was kept (only the name) still gets both commands, without --config
   echo hk > "$W/home-hk/.local/state/agent-mailbox/sessions/h4"
   r=$(hook hk h4)
-  case "$r" in (*" for hk is not running"*) noflag "an older record, with only the name, still gets the commands" "$r" ;;
+  case "$r" in (*--config*) no "an older record, with only the name, still gets the commands" "$r" ;;
+    (*" for hk is not running"*"read\`"*"watch 120 0\`"*) ok "an older record, with only the name, still gets the commands" ;;
     (*) no "an older record, with only the name, still gets the commands" "$r" ;; esac
+  # a session id holding a / names no record: the hook allows the stop, even with a record at that path
+  mkdir -p "$W/home-hk/.local/state/agent-mailbox/sessions/sub"; echo hk > "$W/home-hk/.local/state/agent-mailbox/sessions/sub/h6"
+  r=$(hook hk sub/h6)
+  [ -z "$r" ] && ok "a session id holding a / is refused, and the stop allowed" || no "a session id holding a / is refused, and the stop allowed" "$r"
 else
   sk "the Claude Code Stop hook (no jq)"
 fi

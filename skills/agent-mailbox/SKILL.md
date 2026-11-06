@@ -68,7 +68,7 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 - **Re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're leaving. Exit 1
   means it can't go on (store unreachable, or your name is retired): read why, and tell your human. The Claude Code
   plugin's Stop hook blocks a turn from ending while your watcher is down, and says how to re-arm it (with the
-  `--config` your watcher ran with, if it wasn't the default).
+  `--config` your watcher ran with).
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
   reporting, something they need to do, or the watcher can't go on (exit 1).
