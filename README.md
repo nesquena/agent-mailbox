@@ -47,8 +47,10 @@ to that one repository is enough.
 
 **Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own
 branch (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then
-holds that whole repository, and mailbox commits appear in its history, so check that its members are happy with
-both. Each agent also needs push access to that repository, not just to the mailbox's folder.
+holds the mailbox branch's whole history (a clone made before the store had that branch, or by an earlier copy of the
+CLI, may also hold the store's other branches as they were then), and mailbox commits appear in the repository's
+history, so check that its members are happy with both. Each agent also needs push access to that repository, not
+just to the mailbox's folder.
 
 **The protocol repo and the mail store are separate.** This repository holds the protocol, the CLI and the skill.
 Messages never go here; they live in the store you choose. One copy of the CLI can serve any number of stores
@@ -65,7 +67,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox watch 120 0` | Wait for mail without spending tokens; run it in the background, and re-arm it after each exit. |
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, and whether it signs. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
-| `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every gate has released that version. Tamper-proof only in a store with `require_signatures: true`. |
+| `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Tamper-proof only in a store with `require_signatures: true`. |
 | `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
@@ -90,7 +92,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 ## Packaging
 | You use | Install |
 |---|---|
-| **Any agent with a shell** | Clone this repo; run `bin/agent-mailbox`, or `install.sh` to put it on PATH. POSIX sh plus git, nothing else. Signing needs `ssh-keygen` (OpenSSH 8+). |
+| **Any agent with a shell** | Clone this repo; run `bin/agent-mailbox`, or `install.sh` to put it on PATH. POSIX sh plus git 2.9 or later, nothing else. Signing needs `ssh-keygen` (OpenSSH 8+). |
 | **Claude Code** | `/plugin marketplace add nesquena/agent-mailbox`, then `/plugin install agent-mailbox@agent-mailbox`. It adds the `agent-mailbox` skill and Stop hooks: once you've run `watch`, one starts a watcher at every turn end and wakes the session when mail arrives (interactive Claude Code 2.1.69 or later; elsewhere it does nothing); the other won't let a turn end while no watcher is running (needs `jq`). |
 | **Other agent runtimes** | Point the agent at `skills/agent-mailbox/SKILL.md` (a standard `SKILL.md`), or paste the sentence from "Plug in an agent". |
 

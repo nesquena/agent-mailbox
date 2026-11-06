@@ -20,10 +20,11 @@ First version.
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
   `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
-  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
-  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
-  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
-  included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+  pinned it (its registry record removed, with a header that doesn't close, or its key no longer reads as a plain
+  key), still holds, and until you `trust` the new key that includes holds the sender has since released; and
+  `holds` stops with an error if it can't reach the store or read its full history. After `trust` accepts a changed
+  key, mail signed with the old key (holds included) no longer counts: before trusting, ask the sender to re-send any
+  hold it still means (#23).
 - **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
   version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
 - **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
@@ -73,7 +74,7 @@ First version.
 - **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators and
   tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
   overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose first `=`
-  comes after nothing but non-ASCII characters is indented, and a message's last line always ends before its end
+  comes after nothing but non-printing characters is indented, and a message's last line always ends before its end
   marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
   bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
   `misrouted`, as `read` does (#22).
@@ -120,9 +121,55 @@ First version.
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
+- **`send` refuses obvious secrets:** a body file in `~/.ssh` or the CLI's config or state folder (as named, or at any
+  link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
+  signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the end
+  (a name holding a newline, or folder links nested more than 8 deep), and a body (file or stdin) holding a line of a
+  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header or trailer), are
+  refused with exit 1 before anything is written; the error names the folder, or says how to go on. It's a deny-list of
+  the obvious cases, not a guarantee. The state folder holds the git adapter's copy of the store, so to forward a
+  message you received, copy its text into a new file first; to send part of a file from one of those folders on
+  purpose, copy that part the same way (#26).
+- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
+  the `--` is), instead of refusing it as an unknown option (#26).
+- **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
+  `misrouted` by path too, as it does by name and in `read` (#26).
+- **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be
+  wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
+  `setup`, `update` or `consume`, and `holds <item> --version <v>` exit 0 means every sender who wrote released
+  `<v>`, not that a particular one did (#26).
+- **Fix:** the git adapter's clone of the store ignores the store's own `.gitattributes` and `.lfsconfig` (no
+  line-ending conversion, no filters such as Git LFS, no merge drivers), never recurses into submodules and runs no
+  git hooks or file-system monitor, so every message is checked out exactly as it was stored and its signature
+  verifies, whatever git settings the store or your git config carry. An existing checkout is checked out again once,
+  on its next command (#27).
+- **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
+  for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
+  (#27).
+- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store, once
+  the store has that branch (#27).
+- **Fix:** with the git adapter, a store named by a URL, `host:path` or an absolute path is cloned from the agent's
+  own state folder, so a repository or bundle file of that name in the folder an agent's first command runs in can't
+  stand in for the store; and a `clone.defaultRemoteName` in your git config no longer breaks the clone. A relative
+  store path with a colon and no slash before it now needs a leading `./` (`./store:mail.git`); git reads such a
+  name as `host:path` (#27).
+- **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
+  empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
+  initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete
+  it (under `checkouts/` in the state folder `whoami` shows) (#27).
+- **Fix:** with the git adapter, a store `.gitignore` that matches mail no longer makes `send` fail ("git add
+  failed"); a mailbox branch deleted from the store is an error ("can't update from the store") instead of old mail
+  from the local clone; a first command cut off while setting up its clone is set up again by the next command,
+  instead of every later command saying there's no mailbox; and a command run with `GIT_DIR` set (as in a git hook)
+  still uses its own clone, never the repository it names (#27).
+- **Fix:** `send -` (or `/dev/stdin` as the body) with stdin closed fails at once (exit 1, "it's closed"); under bash
+  it waited forever. Stdin is read as it is, not reopened by name, so a socket on stdin (as some harnesses give a
+  command) works, a stdin open only for writing is refused instead of read from its file, and a stdin that was partly
+  read before sends only the unread rest, as a pipe always did (#49).
 - **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
   ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
-  config of its own is re-armed on it (#35).
+  config of its own is re-armed on it. A session id of `.` or `..`, or one holding a `/`, counts as no session, so it
+  can't read or rewrite another session's record (#50).
 - **New:** in Claude Code, the plugin keeps watching for you. Once you've run `watch` in a session, a Stop hook with
   `asyncRewake` (`hooks/claude-rewake.sh`) starts a watcher at every turn end and wakes the session, even when idle,
   when new mail arrives, so there's nothing to re-arm. Mail it already woke you for doesn't wake you again while it

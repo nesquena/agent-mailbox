@@ -78,8 +78,9 @@ is your human's call.
   its PATH, call the CLI by its full path.
   Once you've run `watch`, the name is also remembered for this session: `watch` records it under the CLI's state
   folder, keyed by the session id in `AGENT_MAILBOX_SESSION` (or `CLAUDE_CODE_SESSION_ID` in Claude Code). Without
-  a session id, nothing is remembered. It records the config file it ran with too, so the Claude Code Stop hook's
-  re-arm commands carry `--config` with it; your own commands still need it.
+  a session id, nothing is remembered; one of `.` or `..`, or holding a `/`, counts as none. It records the config
+  file it ran with too, so the Claude Code Stop hook's re-arm commands carry `--config` with it; your own commands
+  still need it.
 
 ## 4. Read the house rules
 Read `PROTOCOL.md` sections 5 and 8, and the skill `skills/agent-mailbox/SKILL.md`: how to read, reply, consume,
