@@ -107,9 +107,12 @@ ccver() {
 background() {
   [ -n "$ccpid" ] || return 1
   case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 1 ;; esac
-  if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\0' '\n' < "/proc/$ccpid/cmdline"); else av=$(args "$ccpid" | tr ' ' '\n'); fi
-  printf '%s\n' "$av" | awk 'p && $0 == "stream-json" { f = 1 } { p = ($0 == "--input-format") }
-    $0 == "--input-format=stream-json" || $0 == "--preload" { f = 1 } END { exit !f }' && return 0
+  # one argument per line, a line break inside an argument (a multi-line prompt) kept apart as \001; without /proc,
+  # the command line split at spaces, where a prompt's words can't be told from options, so only a terminal counts
+  if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline")
+    printf '%s\n' "$av" | awk 'p && $0 == "stream-json" { f = 1 } { p = ($0 == "--input-format") }
+      $0 == "--input-format=stream-json" || $0 == "--preload" { f = 1 } END { exit !f }' && return 0
+  else av=$(args "$ccpid" | tr ' ' '\n'); fi
   printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
   o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
   case "$o" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac
@@ -168,7 +171,7 @@ cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
   fi; }
 # (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
 trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
-  echo "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
+  printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
   cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
 # Claude Code may stop this hook by killing only the shell it started it through, or end (or crash) without stopping
@@ -207,7 +210,7 @@ while :; do
   # what's left of the day's limit
   left=$(( max - ($(date +%s) - start) ))
   [ "$left" -ge 1 ] || { note last
-    echo "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn's end." >&2; exit 2; }
+    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn's end." >&2; exit 2; }
   # the watcher in the background, so a stop (TERM) can end it too
   # shellcheck disable=SC2086
   "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
@@ -220,12 +223,12 @@ while :; do
       rm -f "$run/error"
       sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
       c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
-      { echo "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
+      { printf '%s\n' "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
       exit 2 ;;
     2)
       note last
       rm -f "$run/error"
-      echo "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
+      printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
       exit 2 ;;
   esac
   # a signal ended the watcher (the system, or someone stopping it) while this hook and its session go on: start it
@@ -237,11 +240,11 @@ while :; do
   ek=$(printf '%s' "$err" | sed -E 's/[0-9]+([.:][0-9]+)* ?(tries|try|ms|milliseconds?|seconds?|s|minutes?|m)([^A-Za-z]|$)/N \2\3/g')
   if [ "$rc" -le 128 ] && [ "$ek" != "$(cat "$run/error" 2>/dev/null)" ]; then
     printf '%s' "$ek" > "$run/error"; note last
-    echo "agent-mailbox: the watcher for $name can't go on ($err). It keeps retrying quietly; tell your human." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name can't go on ($err). It keeps retrying quietly; tell your human." >&2
     exit 2
   fi
   [ $(( $(date +%s) - start )) -lt "$max" ] || { note last
-    echo "agent-mailbox: the watcher for $name reached its daily limit, still failing ($err); it starts again at this turn's end." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing ($err); it starts again at this turn's end." >&2
     exit 2; }
   sleep "$iv" & child=$!; wait "$child"; child=""
 done

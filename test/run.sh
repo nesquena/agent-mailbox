@@ -728,6 +728,9 @@ expect "which clears the guard's note" 1 - test -e "$RS/rewake/rw/r1/declined"
 rm -f "$RS/rewake/rw/r1/woke"
 expect "and so does the cloud's preloaded launch" 2 "rw-1\.md" fakecc --preload /tmp/x.sock
 rm -f "$RS/rewake/rw/r1/woke"
+if [ -r "/proc/$$/cmdline" ]; then
+  expect "a multi-line prompt holding a line --preload isn't a streaming launch" 0 '^$' fakecc -p "$(printf 'hi\n--preload\nthere')"
+else sk "a multi-line prompt holding a line --preload isn't a streaming launch (no /proc)"; fi
 "$SH" -c 'sleep 30; :' $STREAM & FAKEPID=$!
 expect "a CLAUDE_PID handed down from an outer Claude Code isn't taken for this one's" 0 '^$' fakecc
 kill "$FAKEPID" 2>/dev/null; FAKEPID=
@@ -805,6 +808,12 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw. Read it: "*"--as rw read"*r
   (*) no "new mail wakes the session with the listing" "$rc $r" ;; esac
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd / && HOME='$W/home-rw' $c"
+# a plugin folder whose name holds a backslash sequence (\c ends echo's output in dash) still gets the whole command
+P3="$T/plug\\cache"; mkdir -p "$P3/hooks"; cp "$P/hooks/claude-rewake.sh" "$P3/hooks/"; ln -s "$ROOTDIR/bin" "$P3/bin"
+echo hi | as rx send rw rw-b - >/dev/null 2>&1
+r=$(ccenv RHOOK="$P3/hooks/claude-rewake.sh" "$SH" "$T/cc.sh" '{"session_id":"r1"}' $STREAM 2>&1 >/dev/null)
+c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
+expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
 expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
 r=$(rewake r1); rc=$?
