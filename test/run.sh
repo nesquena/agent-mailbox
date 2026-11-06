@@ -352,6 +352,196 @@ case " $ADAPTERS " in *" git "*)
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
 
+  echo "== git: what a store holds can't change how the CLI's checkout works"
+  T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
+  for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
+  k=--no-key; [ -z "$SSH" ] || k=
+  as p1 init >/dev/null; as p1 register --kind t --about t $k >/dev/null; as p2 register --kind t --about t $k >/dev/null
+  # p1 and p3 have git-lfs set up (a stand-in that leaves a mark when git runs it) and recurse into active submodules
+  for a in p1 p3; do g="$W/home-$a/.gitconfig"; git config -f "$g" filter.lfs.process "touch '$T/lfs-ran'; exit 1"
+    git config -f "$g" filter.lfs.clean "touch '$T/lfs-ran'; cat"; git config -f "$g" filter.lfs.smudge "touch '$T/lfs-ran'; cat"
+    git config -f "$g" filter.lfs.required true; git config -f "$g" submodule.recurse true; git config -f "$g" submodule.active .
+    git config -f "$g" core.hooksPath "$T/hooks"; git config -f "$g" core.fsmonitor "'$T/fsmonitor'"; done
+  # and hooks of their own (git-lfs installs some); each notes when it runs in the CLI's checkout (a push to a store
+  # on this disk also runs them in the store's own repository, which is the store's business)
+  mkdir -p "$T/hooks"; for h in pre-commit post-commit pre-push post-checkout post-merge post-rewrite reference-transaction; do
+    printf '#!/bin/sh\ncase "$PWD" in (*/checkouts/*) echo "${0##*/}" >> "%s/hook-ran" ;; esac\n' "$T" > "$T/hooks/$h"
+    chmod +x "$T/hooks/$h"; done
+  printf '#!/bin/sh\ncase "$PWD" in (*/checkouts/*) echo fsmonitor >> "%s/hook-ran" ;; esac\nexit 1\n' "$T" > "$T/fsmonitor"
+  chmod +x "$T/fsmonitor"
+  # the store gains line-ending and LFS rules, an LFS server address and a submodule, after p2 has its checkout
+  git clone -q -b main "$S" "$T/w" && git -C "$T/w" config user.email e@e && git -C "$T/w" config user.name e &&
+    printf '* -text -filter\n' > "$T/w/.git/info/attributes" && (cd "$T/w" &&
+    printf '[attr]merge filter=lfs text eol=crlf\n* text eol=crlf\nmailbox/inbox/** filter=lfs\n' > .gitattributes && printf '[lfs]\n\turl = http://127.0.0.1:9/\n' > .lfsconfig &&
+    printf '[submodule "s"]\n\tpath = mailbox/inbox/p2/s\n\turl = %s\n' "$T/none.git" > .gitmodules &&
+    git add -A && git update-index --add --cacheinfo "160000,1111111111111111111111111111111111111111,mailbox/inbox/p2/s" && git commit -qm plant &&
+    git push -q origin HEAD:main)
+  expect "a send through a checkout of that store works" 0 "^sent mailbox/inbox/p2/" sh -c "echo 'line one
+line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
+  [ ! -e "$T/lfs-ran" ] && ok "git never ran the LFS filter the store asked for" || no "git ran the LFS filter"
+  f=$(git --git-dir="$S" ls-tree -r --name-only main | grep 'p1-planted\.md$'); git --git-dir="$S" show "main:$f" > "$T/blob"
+  [ "$(head -n 1 "$T/blob")" = --- ] && ! grep -q "$(printf '\r')" "$T/blob" && ok "the store holds the message as written" ||
+    no "the store holds the message changed" "$(head -n 3 "$T/blob")"
+  for C in "$W/home-p2/.local/state/agent-mailbox/checkouts/"*; do :; done
+  expect "an existing checkout still reads" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and holds the message byte for byte" || no "the existing checkout's copy differs from the store's"
+  # a checkout made before this rule took on the store's line endings: its next command checks the files out again
+  printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  # and, as in real use, its index was written again later, so git trusts the files' stat data
+  find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
+  grep -q "$(printf '\r')" "$C/$f" && ok "(an older checkout took on the store's line endings)" || no "the older-checkout setup kept LF"
+  expect "an older checkout the store's attributes changed reads again" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and holds the message as stored again" || no "the older checkout still differs from the store's"
+  # if that second checkout fails (here another git process holds the index), the next command tries again
+  printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
+  : > "$C/.git/index.lock"; as p2 list >/dev/null 2>&1; rm -f "$C/.git/index.lock"
+  grep -qxF -- '* merge !diff -text -eol -filter -ident -working-tree-encoding' "$C/.git/info/attributes" &&
+    ok "the store's attributes stay inert while it waits" || no "a failed second checkout left the store's attributes in force"
+  expect "a second checkout that failed is tried again by the next command" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and the message is then as stored" || no "a failed second checkout was never retried"
+  # and so is one cut off part-way (here the command is killed as the second checkout starts)
+  printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
+  find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
+  mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree HEAD "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+    "$(command -v git)" > "$T/killgit/git"; chmod +x "$T/killgit/git"
+  env PATH="$T/killgit:$PATH" HOME="$W/home-p2" "$SH" "$CLI" list >/dev/null 2>&1
+  [ "$(head -n 1 "$C/.git/info/attributes")" = "# retry" ] && ok "(the command was cut off with the second checkout still to do)" ||
+    no "the cut-off setup didn't stop the second checkout" "$(head -n 1 "$C/.git/info/attributes")"
+  expect "a second checkout cut off part-way is redone by the next command" 0 "p1-planted\.md" as p2 list
+  cmp -s "$T/blob" "$C/$f" && ok "and the message is as stored after that" || no "a second checkout cut off part-way was never redone"
+  expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
+  for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
+  cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"
+  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
+  [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
+  [ ! -e "$T/hook-ran" ] && ok "and none of the agents' own git hooks ran in its checkout" || no "a git hook ran in the CLI's checkout" "$(cat "$T/hook-ran")"
+  # nor does a command run from inside a git hook, where git names the caller's repository in GIT_DIR
+  git init -q "$T/mine"
+  expect "a command run with GIT_DIR set works in its own checkout" 0 "^sent mailbox/inbox/p2/" sh -c "echo hi |
+    GIT_DIR='$T/mine/.git' GIT_WORK_TREE='$T/mine' HOME='$W/home-p1' '$SH' '$CLI' send p2 from-hook -"
+  [ -z "$(git -C "$T/mine" for-each-ref)" ] && ok "and leaves the caller's repository alone" ||
+    no "the CLI's git ran in the caller's repository" "$(git -C "$T/mine" for-each-ref)"
+  # config passed through the environment still applies: here an insteadOf maps a store name to the real store
+  gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$S.insteadOf' GIT_CONFIG_VALUE_0=fake:mystore HOME='$W/home-p9'"
+  sh -c "$gc '$SH' '$CLI' setup --store fake:mystore --name p9" >/dev/null 2>&1
+  expect "git config from the environment (GIT_CONFIG_COUNT) still reaches the store" 0 "p1-planted\.md" \
+    sh -c "$gc '$SH' '$CLI' --as p2 list"
+  # a clone.defaultRemoteName in git config doesn't rename the clone's remote
+  gn="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=clone.defaultRemoteName GIT_CONFIG_VALUE_0=upstream HOME='$W/home-p17'"
+  sh -c "$gn '$SH' '$CLI' setup --store '$S' --name p17" >/dev/null 2>&1
+  expect "a clone.defaultRemoteName in git config doesn't break the clone" 0 "p1-planted\.md" sh -c "$gn '$SH' '$CLI' --as p2 list"
+  # ...but a legacy GIT_CONFIG file never takes the clone's own settings
+  : > "$T/userconf"; as p10 setup --store "$S" --name p10 >/dev/null
+  sh -c "GIT_CONFIG='$T/userconf' HOME='$W/home-p10' '$SH' '$CLI' --as p2 list" >/dev/null 2>&1
+  for C in "$W/home-p10/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ "$(git -C "$C" config --local core.symlinks)" = false ] && [ ! -s "$T/userconf" ] &&
+    ok "a GIT_CONFIG file in the environment doesn't take the clone's own config" ||
+    no "the clone's config went to GIT_CONFIG's file" "$(cat "$T/userconf")"
+  # and a repository the caller is in lends no config to the first setup's check (here its insteadOf would hide
+  # the store); the store has no mailbox branch yet, so the check decides the fallback
+  git init -q --bare "$T/fresh.git"; git init -q "$T/callerrepo"
+  git -C "$T/callerrepo" config "url.$T/nowhere.git.insteadOf" "$T/fresh.git"
+  as p11 setup --store "$T/fresh.git" --name p11 >/dev/null
+  expect "the first setup ignores the config of a repository the caller is in" 1 "no mailbox at" \
+    in_dir "$T/callerrepo" as p11 list
+  # the check sees the store as the clone does: a relative path (here one with a colon) from where the command runs,
+  # and a URL an insteadOf rewrites
+  git init -q --bare "$T/fresh:2.git"; as p12 setup --store ./fresh:2.git --name p12 >/dev/null
+  expect "the first setup finds a relative store path with a colon" 1 "no mailbox at" in_dir "$T" as p12 list
+  git init -q --bare "$T/sub/b:c.git"; as p18 setup --store sub/b:c.git --name p18 >/dev/null
+  expect "and one with a slash before its colon, which git reads as a path" 1 "no mailbox at" in_dir "$T" as p18 list
+  # a store named by a URL is cloned from the agent's own folder: a bundle where the first command runs, at the path
+  # the URL also names (file:///x is also the path file:/x), isn't taken for it
+  git init -q "$T/plant2" && (cd "$T/plant2" && mkdir mailbox && echo planted > mailbox/store.md && git add . &&
+    git -c user.name=x -c user.email=x@x.invalid commit -qm p && git branch -M main)
+  mkdir -p "$T/decoy2/file:$T"; git -C "$T/plant2" bundle create -q "$T/decoy2/file:$T/fresh.git" main 2>/dev/null
+  as p14 setup --store "file://$T/fresh.git" --name p14 >/dev/null
+  expect "a bundle where the first command runs, named like a URL store, isn't taken for it" 1 "no mailbox at" \
+    in_dir "$T/decoy2" as p14 list
+  gc="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$T/fresh.git.insteadOf' GIT_CONFIG_VALUE_0=fake:fresh HOME='$W/home-p13'"
+  sh -c "$gc '$SH' '$CLI' setup --store fake:fresh --name p13" >/dev/null 2>&1
+  expect "and a store name an insteadOf rewrites" 1 "no mailbox at" sh -c "$gc '$SH' '$CLI' list"
+  # ...even where a repository of that name sits in the folder the command runs from (git looks for a local path
+  # first, before any insteadOf): a host:path store is cloned from the agent's own folder
+  mkdir -p "$T/decoydir"; git clone -q --bare "$T/plant2" "$T/decoydir/fake:fresh"; gd=$(printf '%s\n' "$gc" | sed 's/home-p13/home-p16/')
+  sh -c "$gd '$SH' '$CLI' setup --store fake:fresh --name p16" >/dev/null 2>&1
+  expect "and a repository named like the store where the command runs isn't taken for it" 1 "no mailbox at" \
+    in_dir "$T/decoydir" sh -c "$gd '$SH' '$CLI' list"
+  # a store name that's also a configured remote's name is never looked up at that remote (GIT_SSH runs the fake
+  # ssh without a shell, so a space in its path is fine)
+  printf '#!/bin/sh\necho "$*" >> "%s/ssh.log"; exit 255\n' "$T" > "$T/fakessh"; chmod +x "$T/fakessh"
+  gr="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.mailrem.url GIT_CONFIG_VALUE_0=hq:repo GIT_SSH='$T/fakessh' HOME='$W/home-p15'"
+  sh -c "$gr '$SH' '$CLI' setup --store mailrem --name p15" >/dev/null 2>&1
+  expect "a store named like a configured remote is cloned by that name" 1 "repository 'mailrem' does not exist" \
+    in_dir "$T" sh -c "$gr '$SH' '$CLI' list"
+  [ ! -s "$T/ssh.log" ] && ok "and isn't looked up at that remote" ||
+    no "the first setup contacted a remote the store's name matches" "$(cat "$T/ssh.log")"
+  # a store .gitignore that matches mail doesn't stop a send, and an ignored file of the sender's isn't published
+  (cd "$T/w" && git fetch -q && git reset -q --hard origin/main && printf '*.md\n*.sig\n' > .gitignore && git add .gitignore &&
+    git commit -qm ignore && git push -q origin HEAD:main)
+  as p1 list >/dev/null 2>&1; for C in "$W/home-p1/.local/state/agent-mailbox/checkouts/"*; do :; done; echo x > "$C/mailbox/inbox/p2/stray.md"
+  expect "a send works when the store's .gitignore matches mail" 0 "^sent mailbox/inbox/p2/" sh -c "echo hi | HOME='$W/home-p1' '$SH' '$CLI' send p2 ignored -"
+  expect "and the store holds it" 0 "p1-ignored\.md" git --git-dir="$S" ls-tree -r --name-only main mailbox/inbox/p2/
+  [ -z "$(git --git-dir="$S" ls-tree -r --name-only main | grep stray)" ] && ok "but not an ignored file it wasn't asked to send" ||
+    no "a send published a file it wasn't asked to"
+  # a first command cut off part-way (here at its first fetch, after the clone) leaves no checkout later ones take as ready
+  mkdir -p "$T/killfetch"; printf '#!/bin/sh\ncase " $* " in (*" fetch -q origin "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+    "$(command -v git)" > "$T/killfetch/git"; chmod +x "$T/killfetch/git"
+  as p6 setup --store "$S" --name p6 >/dev/null; env PATH="$T/killfetch:$PATH" HOME="$W/home-p6" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
+  expect "a first command cut off part-way is set up again by the next one" 0 "p1-planted\.md" as p6 --as p2 list
+  expect "so init still finds the mailbox, and leaves store.md alone" 1 "already exists" as p6 init
+  # two first commands setting up one clone at once: the one that loses (here another clone appears just before its
+  # move) keeps the winner's checkout, which still holds what was sent through it, and leaves no copy of its own
+  mkdir -p "$T/racemv"; printf '#!/bin/sh
+for a; do d=$a; done; case $1 in (*/checkouts/.*) [ ! -d "$1/.git" ] || { [ -e "$d" ] || cp -R "$1" "$d"; echo kept > "$d/winner"; } ;; esac
+exec "%s" "$@"
+' \
+    "$(command -v mv)" > "$T/racemv/mv"; chmod +x "$T/racemv/mv"
+  as p7 setup --store "$S" --name p7 >/dev/null
+  env PATH="$T/racemv:$PATH" HOME="$W/home-p7" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
+  for C in "$W/home-p7/.local/state/agent-mailbox/checkouts/"*; do :; done
+  CK="$W/home-p7/.local/state/agent-mailbox/checkouts"
+  [ -f "$C/winner" ] && [ -z "$(ls -A "$C" | grep '^\.[0-9a-f]*\.[0-9]*$')" ] && [ -z "$(ls -A "$CK" | grep '^\.')" ] &&
+    ok "a setup that loses a race keeps the other's checkout and leaves no copy" ||
+    no "a lost setup race removed the other's checkout or left a copy" "$(ls -A "$C" "$CK")"
+
+  # a new agent clones only the mailbox branch, however much else the store holds
+  (cd "$T/w" && git checkout -q -b big && echo big > big.txt && git add big.txt && git commit -qm big && git push -q origin big)
+  as p4 list >/dev/null 2>&1
+  for C in "$W/home-p4/.local/state/agent-mailbox/checkouts/"*; do :; done
+  # (a clone from a local path copies every object, so look at what it tracks: over a network that's what it fetches)
+  [ -z "$(git -C "$C" for-each-ref --format='%(refname)' | grep big)" ] && ok "a new checkout fetches only the mailbox branch" ||
+    no "a new checkout fetched another branch" "$(git -C "$C" for-each-ref --format='%(refname)')"
+  # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
+  expect "doctor on a branch the store doesn't have says it isn't initialized" 1 "FAIL the store is reachable and initialized" \
+    env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
+  expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
+  [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
+    ok "and the new branch holds only its own mailbox" || no "the new branch carries other files" "$(git --git-dir="$S" ls-tree -r --name-only other)"
+
+  # an unreachable store is an error, never an empty inbox
+  mv "$S" "$T/away.git"
+  expect "list on an unreachable store fails, rather than say there's no mail" 1 "can't update from the store" as p2 list
+  expect "and doctor says the store can't be reached" 1 "FAIL the store is reachable" as p2 doctor
+  mv "$T/away.git" "$S"
+  expect "list works again once it can be reached" 0 "p1-planted\.md" as p2 list
+  # so is a mailbox branch gone from the store, once this checkout has seen it
+  tip=$(git --git-dir="$S" rev-parse main); git --git-dir="$S" update-ref -d refs/heads/main
+  expect "list fails when the store no longer has the mailbox branch, saying how to recover" 1 "no longer has the branch main; if it was re-created, delete" as p2 list
+  git --git-dir="$S" update-ref refs/heads/main "$tip"
+  # an older checkout of a branch whose tree is empty finishes its one-time second checkout
+  git --git-dir="$S" update-ref refs/heads/empty "$(env GIT_AUTHOR_NAME=e GIT_AUTHOR_EMAIL=e@e GIT_COMMITTER_NAME=e \
+    GIT_COMMITTER_EMAIL=e@e git --git-dir="$S" commit-tree -m empty "$(git --git-dir="$S" mktree < /dev/null)")"
+  rm -rf "$W/home-p6/.local/state/agent-mailbox/checkouts"
+  env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
+  for C in "$W/home-p6/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ -z "$(git -C "$C" ls-tree HEAD)" ] && [ "$(git -C "$C" symbolic-ref HEAD)" = refs/heads/empty ] &&
+    rm "$C/.git/info/attributes" && ok "(an older checkout of a branch whose tree is empty)" || no "the empty-branch setup failed"
+  env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
+  [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
+    ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
+
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -1115,7 +1305,7 @@ expect "a file name ending in a space doesn't stop holds" 0 "item#9 released by 
 # 13. a store that can't be reached: holds won't decide from the clone it last synced, which still shows the release
 echo r | as u2 send u1 r-18 - --release "item#18 v1" >/dev/null; as u1 holds "item#18" --version v1 >/dev/null 2>&1
 echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" "$T/store.away"
-expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
+expect "holds won't decide while the store can't be reached" 1 "can't update from the store" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
 

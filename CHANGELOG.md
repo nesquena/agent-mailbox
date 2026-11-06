@@ -138,6 +138,30 @@ First version.
   wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
   `setup`, `update` or `consume`, and `holds <item> --version <v>` exit 0 means every sender who wrote released
   `<v>`, not that a particular one did (#26).
+- **Fix:** the git adapter's clone of the store ignores the store's own `.gitattributes` and `.lfsconfig` (no
+  line-ending conversion, no filters such as Git LFS, no merge drivers), never recurses into submodules and runs no
+  git hooks or file-system monitor, so every message is checked out exactly as it was stored and its signature
+  verifies, whatever git settings the store or your git config carry. An existing checkout is checked out again once,
+  on its next command (#27).
+- **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
+  for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
+  (#27).
+- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store, once
+  the store has that branch (#27).
+- **Fix:** with the git adapter, a store named by a URL, `host:path` or an absolute path is cloned from the agent's
+  own state folder, so a repository or bundle file of that name in the folder an agent's first command runs in can't
+  stand in for the store; and a `clone.defaultRemoteName` in your git config no longer breaks the clone. A relative
+  store path with a colon and no slash before it now needs a leading `./` (`./store:mail.git`); git reads such a
+  name as `host:path` (#27).
+- **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
+  empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
+  initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete
+  it (under `checkouts/` in the state folder `whoami` shows) (#27).
+- **Fix:** with the git adapter, a store `.gitignore` that matches mail no longer makes `send` fail ("git add
+  failed"); a mailbox branch deleted from the store is an error ("can't update from the store") instead of old mail
+  from the local clone; a first command cut off while setting up its clone is set up again by the next command,
+  instead of every later command saying there's no mailbox; and a command run with `GIT_DIR` set (as in a git hook)
+  still uses its own clone, never the repository it names (#27).
 - **Fix:** `send -` (or `/dev/stdin` as the body) with stdin closed fails at once (exit 1, "it's closed"); under bash
   it waited forever. Stdin is read as it is, not reopened by name, so a socket on stdin (as some harnesses give a
   command) works, a stdin open only for writing is refused instead of read from its file, and a stdin that was partly
