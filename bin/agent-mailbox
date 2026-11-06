@@ -25,9 +25,9 @@
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
 #                                       names and from: headers, not signatures
 #   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
-#   consume <file>...                   remove messages you've acted on (the read receipt)
-#   verify <file>                       check one message's signature; a bare file name is looked up in your
-#                                       inbox (exit 0: verified, 6: not)
+#   consume [--] <file>...              remove messages you've acted on (the read receipt)
+#   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
+#                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
 #   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
 #                                       --version, exit 0 only if every sender's latest record releases it (else 5)
 #   watch [interval=120] [max=7000] [--except <file>]...
@@ -50,6 +50,8 @@ MSG_RE='^[A-Za-z0-9._-]+\.md$'
 SENT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 # a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
 KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
+# the first line of a private key's text block: PEM (RSA, EC, PKCS#8, encrypted), OpenSSH, PGP, SSH2 and PuTTY alike
+PRIVKEY_RE='-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:'
 
 # printf, not echo, so a value quoted in a message is shown as is
 die() { printf 'agent-mailbox: %s\n' "$*" >&2; exit 1; }
@@ -62,16 +64,46 @@ unknown() { misplaced "$1"; die "unknown option $1"; }
 NL='
 ' CR=$(printf '\r')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
-# this script's real path, following links (install.sh links it onto PATH); plain readlink is on Linux, macOS, BSD
+# phys <folder>: its physical path. hops <file>: the physical path of the file as named, then of each link it leads to
+# (at most 40), one per line (plain readlink is on Linux, macOS, BSD); each hop's folders that are links are followed
+# too, so a file under a linked folder shows where that link sits and where it leads. real <file>: the
+# file's own physical path. A relative path starting with '-' gets a ./ so no tool reads it as an option
+phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && pp=$(pwd -P) && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
+# hops keeps its state in plain variables: run it only in $(...) (it recurses in a subshell)
+hops() {
+  # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too.
+  # $2: how many folder links deep this call is (8 at most); $3 set: skip the folders above the first hop, which the
+  # caller walks itself
+  rp=$1 hl=${2:-0} hs=${3:-} pr=; [ "$hl" -le 8 ] || return 1
+  case "$rp" in (/*) ;; (*) rp=${PWD:-.}/$rp ;; esac; n=0 h1=$rp
+  # a name holding a newline can't be followed exactly ($(...) drops trailing ones): refuse it
+  while case "$rp" in (*"$NL"*) return 1 ;; esac; rd=$(phys "$(dirname "$rp")"); do
+    printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; case "$rd" in (/proc|/proc/*) pr=1 ;; esac
+    hd=$(dirname "$rp"); [ -z "$hs" ] || hd=/; hs=""
+    while [ "$hd" != / ] && [ "$hd" != . ]; do
+      # a folder that's a link: where it sits and everything it leads to
+      [ ! -L "$hd" ] || (hops "$hd" $((hl + 1)) 1) || return 1
+      hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
+    # the end must be the very file named, or a link was read as a name other than the one stored (macOS's readlink
+    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file
+    if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || [ "$rp" -ef "$h1" ]; return; fi
+    rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
+    # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
+    # aren't walked again; but not under /proc, where self names the subshell phys ran in
+    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
+      (*) rp=${rd%/}/$rl ;; esac ;; esac; done; return 1
+}
+real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
+  while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .); do rl=${rl%.}; rl=${rl%"$NL"}; n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
+  rd=$(phys "$(dirname "$rp")") && printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; }
+# this script's real path, following links (install.sh links it onto PATH)
 here() {
-  p=$0
   # a $0 without a slash (bash searched PATH for the script) names no folder: fail rather than guess this one
-  case "$p" in (*/*) ;; (*) [ -f "$p" ] || return 1 ;; esac
-  while [ -L "$p" ]; do l=$(readlink "$p") || break; case "$l" in (/*) p=$l ;; (*) p=$(dirname "$p")/$l ;; esac; done
-  CDPATH= cd -P -- "$(dirname "$p")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$p")"
+  case "$0" in (*/*) ;; (*) [ -f "$0" ] || return 1 ;; esac
+  real "$0"
 }
 SELF=$(here) || SELF=""
-SELF_DIR=${SELF%/*} SELF_NAME=${SELF##*/}
+SELF_DIR=${SELF%/*} SELF_NAME=${SELF##*/}; [ -z "$SELF" ] || [ -n "$SELF_DIR" ] || SELF_DIR=/
 # the mailbox folder: a relative path whose parts can't be read as options or reach outside, or into git's own folder
 root_ok() { matches '^[A-Za-z0-9._][A-Za-z0-9._-]*(/[A-Za-z0-9._][A-Za-z0-9._-]*)*$' "$ROOT" &&
   case "/$ROOT/" in (*/../*|*/.[Gg][Ii][Tt]/*) false ;; (*) true ;; esac; }
@@ -233,9 +265,24 @@ no_link() {
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
 rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
+# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh or this CLI's config or state folder
+# (set in SF), or the file is its config file or signing key (either half; SF empty), or its path can't be followed
+# to the end (SF is -), so `send` won't mail it out
+# however it's asked to.
+# ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine
+secret_file() {
+  # a path hops can't follow to the end counts as secret: refuse rather than guess
+  SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"
+  for SF in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
+    [ -n "$SF" ] && sd=$(phys "$SF") || continue
+    case "$sp" in (*"$NL${sd%/}"/*) return 0 ;; esac
+  done; SF=""
+  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] && rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac; done
+  return 1
+}
 
 # --- signatures ----------------------------------------------------------------------------------------------------
-# verify_file <message path> [<expected from>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
+# verify_file <message path> [<inbox it sits in>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
 verify_file() {
   f=$1 inb=${2:-}
   from=$(field from "$f"); to=$(field to "$f")
@@ -437,15 +484,26 @@ send)
   [ -z "$ctx_set" ] || matches "$NAME_RE" "$context" || die "context must be lowercase a-z, 0-9, '.' or '-'"
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
-  # a closed stdin is refused before it's read: $(cat) below would open its pipe as fd 0, and bash leaves that in
-  # cat, which then reads its own output and waits forever. Copying fd 0 elsewhere fails when it's closed (in dash and
-  # bash, `<&0` alone never does); it's on true, not :, since a failed redirection on : ends sh. Stdin itself is read
-  # as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
-  if [ "$body" = /dev/stdin ]; then
-    { true 9<&0; } 2>/dev/null || die "can't read the body from stdin: it's closed (pipe the body in, or pass a file path)"
-    text=$(cat) || die "can't read stdin"
+  # a closed stdin is refused before anything reads it: $(cat) below would open its pipe as fd 0, and bash leaves that
+  # in cat, which then reads its own output and waits forever. Copying fd 0 elsewhere fails when it's closed (in dash
+  # and bash, `<&0` alone never does); it's on true, not :, since a failed redirection on : ends sh
+  [ "$body" != /dev/stdin ] || { true 9<&0; } 2>/dev/null ||
+    die "can't read the body from stdin: it's closed (pipe the body in, or pass a file path)"
+  # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
+  if secret_file "$body"; then
+    # the state folder also holds the git adapter's copy of the store, so a message received there is refused too
+    h=""; [ "$SF" = "$STATE" ] && case $(real "$body") in (*/checkouts/*/"$ROOT"/inbox/*/*.md) true ;; (*) false ;; esac &&
+      h="; to forward a message, copy its text into a new file first"
+    w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
+    [ "$SF" != - ] || w="a path whose links can't be followed to the end"
+    die "refusing to send $body: it's $w$h (never put secrets in mail)"
+  fi
+  # stdin itself is read as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
+  if [ "$body" = /dev/stdin ]; then text=$(cat) || die "can't read stdin"
   else text=$(cat -- "$body") || die "can't read $body"; fi
   [ -n "$text" ] || die "empty message body"
+  ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" ||
+    die "refusing to send: the body holds a private key's first line (never put secrets in mail; to discuss a key, describe it, or send its public half)"
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
@@ -540,26 +598,29 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # a body line can't pass for a boundary: a line whose first = comes after nothing but non-ASCII bytes (so no
-    # visible ASCII text, and no invisible character can hide what comes first) is indented; a last line without its newline gets one, and each
-    # message ends with its own marker
+    # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
+    # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes
+    # first) is indented; a last line without its newline gets one, and each message ends with its own marker
     clean 's/^[^ -~]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   [ -n "$shown" ] || { echo "no mail for $ME"; exit 3; }
   printf '%s\n' "$shown" ;;
 consume)
-  [ $# -ge 1 ] || die "usage: consume <file>..."
-  for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
+  # an argument starting with '-' is a name when it's a message file name, and every argument after the first -- is one
+  na=$# e=""; for a in "$@"; do
+    if [ -z "$e" ]; then case "$a" in (--) e=1; continue ;; (-*) matches "$MSG_RE" "$a" || unknown "$a" ;; esac; fi; set -- "$@" "$a"
+  done; shift "$na"
+  [ $# -ge 1 ] || die "usage: consume [--] <file>..."
   need_me; load_adapter; ad_sync; need_store
   paths=""; no_link "$M/inbox/$ME"
   for a in "$@"; do
-    b=$(basename "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
+    b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
     valid_msg "$b"
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
-  for a in "$@"; do b=$(basename "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
+  for a in "$@"; do b=$(basename -- "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
   # shellcheck disable=SC2086
-  ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename "$a" .md; done | tr '\n' ' ')" $paths
+  ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename -- "$a" .md; done | tr '\n' ' ')" $paths
   echo "consumed" ;;
 verify)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync
@@ -568,6 +629,8 @@ verify)
   f=$1 inb=""; [ -f "$f" ] || f="$AD_DIR/$1"
   if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && { need_me; f="$M/inbox/$ME/$b" inb=$ME; }; fi
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
+  # by path, a message sitting in an inbox is checked against that inbox, so a misrouted copy reads misrouted there too
+  if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
   v=$(verify_file "$f" "$inb"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)
   item="" version=""

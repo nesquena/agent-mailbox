@@ -90,6 +90,13 @@ for AD in $ADAPTERS; do
   expect "and a misplaced --as" 1 "goes before the command" as alice sent --as bob
   expect "sent with nothing waiting exits 3" 3 "no mail from bob waiting" as bob sent
   f=$(as bob list | head -n 1); fb=$(basename "$f")
+  # the git adapter's copy of the store is in the state folder: forwarding a message from there is refused, saying how
+  [ "$AD" != git ] || expect "send refuses a message in its copy of the store, saying how to forward it" 1 "copy its text into a new file" \
+    as bob send alice fwd "$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts"/*/"$f")"
+  # ...but the hint is only for a received message, not other store files there (store.md, a registry record)
+  if [ "$AD" = git ]; then out=$(as bob send alice fwd2 "$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts"/*/mailbox/store.md)" 2>&1)
+    case $out in (*"refusing to send"*"copy its text"*) no "the forward hint shows for a store file that isn't a message" "$out" ;;
+      (*"refusing to send"*) ok "and refuses other store files without the forward hint" ;; (*) no "send didn't refuse store.md in its copy of the store" "$out" ;; esac; fi
 
   echo "yes" > "$T/reply"
   expect "a reply consumes what it answers" 0 "^sent mailbox/inbox/alice/" as bob send alice review-1-reply "$T/reply" --consume "$fb"
@@ -838,6 +845,15 @@ expect "verify refuses a misplaced --as" 1 "goes before the command" as o1 verif
 expect "verify takes a name, never a pattern" 1 "no such message" as o1 verify '*.md'
 cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/-z.md"
 expect "verify takes a name starting with - as a file name" 6 "^(unsigned|nokey)$" env HOME="$W/home-o1" "$SH" "$CLI" verify -z.md
+# consume takes a message name starting with '-', and any name after --; other options are still refused
+for n in -rf -q -m -n; do cp "$(ls "$T"/store/mailbox/inbox/o1/*c-y.md)" "$T/store/mailbox/inbox/o1/$n.md"; done
+expect "consume takes a message name starting with -" 0 "^consumed$" as o1 consume -rf.md
+[ ! -e "$T/store/mailbox/inbox/o1/-rf.md" ] && ok "and removes it" || no "consume left -rf.md in the inbox"
+expect "consume takes names after --" 0 "^consumed$" as o1 consume -- -q.md
+[ ! -e "$T/store/mailbox/inbox/o1/-q.md" ] && ok "and removes them" || no "consume -- left -q.md in the inbox"
+expect "and after a -- that follows a name" 0 "^consumed$" as o1 consume -m.md -- -n.md
+expect "consume still refuses an unknown option" 1 "unknown option --bogus" as o1 consume --bogus
+expect "and a misplaced --as" 1 "goes before the command" as o1 consume -z.md --as o2
 # a dir store given by a relative path starting with '-'
 mkdir -p "$T/rel2"
 for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done
@@ -967,6 +983,14 @@ expect "verify by name doesn't pick a message from another inbox" 1 "no such mes
 expect "it finds one in yours" 6 "^unsigned$" as x1 verify 20260101T000004Z-x2-md.md
 sed 's/^to: x1$/to: x3/' "$I/20260101T000004Z-x2-md.md" > "$I/20260101T000012Z-x2-mis.md"
 expect "and reads one addressed to someone else as misrouted, as read does" 6 "^misrouted$" as x1 verify 20260101T000012Z-x2-mis.md
+# by path, a message is checked against the inbox it sits in
+expect "verify by store path reads a misrouted copy as misrouted" 6 "^misrouted$" as x1 verify mailbox/inbox/x1/20260101T000012Z-x2-mis.md
+expect "and by absolute path" 6 "^misrouted$" as x1 verify "$I/20260101T000012Z-x2-mis.md"
+expect "and by a path with a leading //" 6 "^misrouted$" as x1 verify "/$I/20260101T000012Z-x2-mis.md"
+expect "and by a path relative to the current folder" 6 "^misrouted$" in_dir "$I" env HOME="$W/home-x1" "$SH" "$CLI" verify ./20260101T000012Z-x2-mis.md
+expect "verify by path reads a message in the right inbox as before" 6 "^unsigned$" as x1 verify "$I/20260101T000004Z-x2-md.md"
+cp "$I/20260101T000012Z-x2-mis.md" "$T/mis-copy.md"
+expect "and a copy outside any inbox as before" 6 "^unsigned$" as x1 verify "$T/mis-copy.md"
 echo "== holds and header rules (git)"
 T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -1094,6 +1118,104 @@ echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" 
 expect "holds won't decide while the store can't be reached" 1 "can't read this store's full, latest history" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
+
+echo "== send refuses obvious secrets (dir)"
+T="$W/sec"; mkdir -p "$T"
+for a in sec1 sec2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as sec1 init >/dev/null; for a in sec1 sec2; do as $a register --kind t --about t --no-key >/dev/null; done
+H="$W/home-sec1" C="$W/home-sec1/.config/agent-mailbox" S="$W/home-sec1/.local/state/agent-mailbox"
+mkdir -p "$H/.ssh" "$C/keys" "$S"; for f in "$H/.ssh/id_ed25519" "$C/keys/sec1" "$S/note" "$T/own" "$T/own.pub"; do echo "x" > "$f"; done
+ln -s "$H/.ssh/id_ed25519" "$T/notes.md"; ln -s "$H/.ssh" "$T/dotssh"
+# ~/.ssh/config as a dotfile manager links it in, to a file outside ~/.ssh, and a link to that link
+echo "Host x" > "$T/ssh-config"; ln -s "$T/ssh-config" "$H/.ssh/config"; ln -s "$H/.ssh/config" "$T/via-ssh.md"
+# a folder in ~/.ssh linked in from outside (config.d from a dotfiles repo), a link to a file in it, and a folder
+# linked to ~/.ssh that holds such a folder
+mkdir -p "$T/dotfiles/config.d"; echo "Host w" > "$T/dotfiles/config.d/work"; ln -s "$T/dotfiles/config.d" "$H/.ssh/config.d"
+ln -s "$H/.ssh/config.d/work" "$T/via-dir.md"
+printf 'PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAA\n' > "$T/key.ppk"
+# refused <description> <body file>: sec1's send of it fails, saying why (each on its own topic, so none is refused
+# for sharing a second with another)
+n=0; refused() { n=$((n+1)); expect "$1" 1 "refusing to send" as sec1 send sec2 "sec-$n" "$2"; }
+refused "send refuses a file in ~/.ssh" "$H/.ssh/id_ed25519"
+refused "or a link to one" "$T/notes.md"
+refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
+refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
+refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
+refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+refused "or a link to such a file" "$T/via-dir.md"
+refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
+ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"
+refused "or one reached through a folder outside that links to such a folder" "$T/cfgln/work"
+refused "or through a chain of such folder links" "$T/cfgln2/work"
+n=$((n+1)); expect "or a relative path given from inside such a folder" 1 "refusing to send" in_dir "$H/.ssh/config.d" as sec1 send sec2 "sec-$n" work
+refused "or the CLI's config" "$C/config"
+refused "or its signing key" "$C/keys/sec1"
+refused "or a file in its state folder" "$S/note"
+refused "or one named with a leading //" "/$H/.ssh/id_ed25519"
+# only where /dev/stdin is a link through /proc (Linux) can send see which file was redirected in
+case $(readlink /dev/stdin 2>/dev/null) in
+  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI" ;;
+  (*) sk "or one redirected to stdin (/dev/stdin isn't a link through /proc here)" ;;
+esac
+for f in own own.pub; do
+  expect "or a signing key kept elsewhere ($f)" 1 "refusing to send" env HOME="$H" AGENT_MAILBOX_KEY="$T/own" "$SH" "$CLI" send sec2 "sec-$f" "$T/$f"
+done
+cp "$C/config" "$T/cfg"
+expect "or a config file kept elsewhere" 1 "refusing to send" env HOME="$H" "$SH" "$CLI" --config "$T/cfg" send sec2 sec-cfg "$T/cfg"
+pk='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n'
+expect "send refuses a private key on stdin" 1 "holds a private key" sh -c "printf -- '$pk' | HOME='$H' '$SH' '$CLI' send sec2 sec-stdin -"
+printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\n' > "$T/rsa.md"
+refused "or in a body file" "$T/rsa.md"
+refused "or a PuTTY key" "$T/key.ppk"
+expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
+mkdir -p "$T/nl
+"; echo hi > "$T/nl
+/b.md"
+n=$((n+1)); expect "or one whose path can't be followed to the end, saying so" 1 "can't be followed" as sec1 send sec2 "sec-$n" "$T/nl
+/b.md"
+# a link whose name ends in a newline, reached through a link to it, and a folder link so named: neither is taken
+# for the name without it
+mkdir -p "$T/nlk"; ln -s "$H/.ssh/id_ed25519" "$T/nlk/x
+"; ln -s "x
+" "$T/nlk/l"; refused "or a key reached through a link named with a trailing newline" "$T/nlk/l"
+ln -s "$H/.ssh" "$T/nlk/d
+"; mkdir -p "$T/nlk/d"; refused "or through a folder link so named" "$T/nlk/d
+/id_ed25519"
+# where readlink prints a byte it can't show as ? (macOS), a link chain through such a name is refused, not guessed
+mkdir -p "$T/qrl"; printf '#!/bin/sh\nt=$("%s" "$1"; echo .); t=${t%%.}; t=${t%%"\n"}\nprintf %%s "$t" | LC_ALL=C tr -c "[:print:]" "?"; echo\n' \
+  "$(command -v readlink)" > "$T/qrl/readlink"; chmod +x "$T/qrl/readlink"
+n=$((n+1)); expect "or such a chain where readlink shows the newline as ?" 1 "refusing to send" \
+  env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk/l"
+# ...and a decoy file named as that readlink shows it doesn't stand in for the real target
+mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
+"; ln -s "a
+" "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
+n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
+  env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
+# a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
+mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
+refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
+[ -z "$(ls "$T/store/mailbox/inbox/sec2")" ] && ok "and writes nothing for any of them" || no "a refused send wrote mail" "$(ls "$T/store/mailbox/inbox/sec2")"
+# ordinary bodies still send: prose about keys, public keys, and a file beside ~/.ssh whose name starts the same
+printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here.\n' > "$T/prose.md"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me\n-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n' > "$T/pub.md"
+echo "notes" > "$H/.ssh-notes.md"
+expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
+expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
+expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"
+# nine folder links in a row on the path, and an HD in the environment, don't stop an ordinary file
+mkdir -p "$T/farm"; p="$T/farm"; for i in 1 2 3 4 5 6 7 8 9; do mkdir -p "$T/farm/d$i"; ln -s "$T/farm/d$i" "$p/l$i"; p=$p/l$i; done
+echo hi > "$T/farm/d9/b.md"; echo hi > "$T/farm/d1/b.md"
+expect "a file under nine folder links in a row sends" 0 "^sent " as sec1 send sec2 farm "$p/b.md"
+mkdir -p "$T/rfarm/d1"; ln -s d1 "$T/rfarm/l1"; p="$T/rfarm/l1"
+for i in 2 3 4 5 6 7 8 9 10; do mkdir -p "$T/rfarm/d$i"; ln -s "../d$i" "$T/rfarm/d$((i - 1))/l$i"; p=$p/l$i; done
+echo hi > "$T/rfarm/d10/b.md"
+expect "and so does one under ten nested relative folder links" 0 "^sent " as sec1 send sec2 rfarm "$p/b.md"
+expect "and one under a folder link sends whatever HD says" 0 "^sent " env HD=9 HOME="$H" "$SH" "$CLI" send sec2 hd "$T/farm/l1/b.md"
+echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
+expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
+ln -s kloop "$T/kloop"
+expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
 
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
