@@ -166,3 +166,7 @@ First version.
   it waited forever. Stdin is read as it is, not reopened by name, so a socket on stdin (as some harnesses give a
   command) works, a stdin open only for writing is refused instead of read from its file, and a stdin that was partly
   read before sends only the unread rest, as a pipe always did (#49).
+- **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
+  ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
+  config of its own is re-armed on it. A session id of `.` or `..`, or one holding a `/`, counts as no session, so it
+  can't read or rewrite another session's record (#50).
