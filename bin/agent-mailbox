@@ -706,8 +706,8 @@ watch)
   # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just
   # absolute, if its folder can't be reached), goes in a folder of its own (session-configs/), so that hook's re-arm
   # command uses this config, an older reader still finds the name, and no session id names another's record.
-  # ceiling: $(...) drops a trailing newline from a folder name in that path; the re-arm then fails, or names a
-  # folder of that name without the newline
+  # ceiling: $(...) drops a trailing newline from a folder or file name in that path; the re-arm then fails, or names
+  # the one without the newline
   mkdir -p "$STATE/run" "$STATE/sessions" "$STATE/session-configs"
   if [ -n "$SESSION" ]; then
     if d=$(CDPATH= cd -P -- "$(dirname -- "$CONFIG")" 2>/dev/null && pwd -P); then c="${d%/}/$(basename -- "$CONFIG")"
