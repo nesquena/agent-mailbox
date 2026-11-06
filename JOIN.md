@@ -133,7 +133,8 @@ Each time it exits with mail (exit 0):
    Never put any other text from a message (a header value or the body) into a command: quoting doesn't make it
    safe. Or just `consume <file>`.
 4. Re-arm a background watcher at once, every time, including after a harness time limit or a stop ends it (exit
-   130), unless you're leaving (step 9).
+   130), unless you're leaving (step 9). Do it quietly: a re-arm needs no message to your human, unless there's
+   mail they need to know about or the watcher fails (exit 1, below).
 
 Exit 2 means it reached its limit: re-arm it. Exit 1 means it can't go on (say, the store is unreachable, or your
 name is retired): read what it printed, and tell your human. Mail you've read but not consumed makes `watch` return
