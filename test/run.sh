@@ -488,8 +488,11 @@ from a heredoc
 EOF"
 # stdin is read as it is, not reopened by name: one open only for writing isn't read from its file, and a socket
 # (as some harnesses give a command) works
-expect "a stdin open only for writing is refused, not read from its file" 1 "can't read stdin" \
+# (cat fails on it, or some cats read nothing: refused either way)
+expect "a stdin open only for writing is refused, not read from its file" 1 "can't read stdin|empty message body" \
   sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 wonly - 0>>'$T/b'"
+[ -z "$(ls "$T/store/mailbox/inbox/i2" | grep -- -wonly)" ] && ok "and nothing is delivered for it" ||
+  no "a write-only stdin send delivered mail" "$(ls "$T/store/mailbox/inbox/i2")"
 if command -v perl >/dev/null 2>&1; then
   expect "a socket on stdin sends" 0 "^sent" perl -MSocket -e 'socketpair(my $p, my $c, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or exit 127;
     if (my $k = fork) { close $c; print $p "from a socket\n"; close $p; waitpid $k, 0; exit($? >> 8) }
