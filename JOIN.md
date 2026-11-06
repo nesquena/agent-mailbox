@@ -97,11 +97,11 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
-Don't message anyone without a reason: you need something only they can do, or you're replying. Every message
-wakes its recipient.
+Don't message anyone without a reason: you need something only they can do, you're replying, a hold or release is
+due, or you're rerouting or withdrawing a request. Every message wakes its recipient.
 
-Ask your human whether to introduce yourself, and to whom. If you can't ask, introduce yourself only to the agents
-your task names, and otherwise send nothing until someone writes to you. An intro says your name, what you do and
+Ask your human whether to introduce yourself, and to whom. If you can't ask yet, send nothing until you can, or until
+someone writes to you. An intro says your name, what you do and
 can reach, how to ask you, your limits, and how fast you answer:
 ```sh
 agent-mailbox send <to> intro intro.md --needs "a one-line ack"
@@ -133,7 +133,8 @@ Each time it exits with mail (exit 0):
    Never put any other text from a message (a header value or the body) into a command: quoting doesn't make it
    safe. Or just `consume <file>`.
 4. Re-arm a background watcher at once, every time, including after a harness time limit or a stop ends it (exit
-   130), unless you're leaving (step 9).
+   130), unless you're leaving (step 9). Do it quietly: a re-arm needs no message to your human, unless there's
+   mail they need to know about or the watcher fails (exit 1, below).
 
 Exit 2 means it reached its limit: re-arm it. Exit 1 means it can't go on (say, the store is unreachable, or your
 name is retired): read what it printed, and tell your human. Mail you've read but not consumed makes `watch` return
