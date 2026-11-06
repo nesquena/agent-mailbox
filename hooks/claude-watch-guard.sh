@@ -45,8 +45,15 @@ rewaking() {
   if [ -r "/proc/$rp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$rp/cmdline"); else a=$(ps -p "$rp" -o args= 2>/dev/null); fi
   case "$a" in *claude-rewake.sh*) return 0 ;; *) return 1 ;; esac
 }
-n=0; [ ! -f "$state/rewake/$name/$sid/declined" ] || n=3
-while [ $n -lt 3 ]; do rewaking && exit 0; sleep 1; alive && exit 0; n=$((n+1)); done
+# It also counts that hook waking the session at this turn end (mail already waiting), which leaves a `last` note
+# naming this stop's prompt id (or, from a Claude Code that sends none, the time); a `declined` note for this stop means
+# it isn't coming
+key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null); t0=$(date +%s)
+this() { n1=$(cat "$state/rewake/$name/$sid/$1" 2>/dev/null)
+  if [ -n "$key" ]; then [ "$n1" = "$key" ]; else case "$n1" in (@*[!0-9]*|@) return 1 ;; (@*) [ "${n1#@}" -ge $((t0 - 2)) ] ;; (*) return 1 ;; esac; fi; }
+n=0; while [ $n -lt 3 ]; do
+  rewaking && exit 0; this last && exit 0; this declined && break; sleep 1; alive && exit 0; n=$((n+1)); done
+this last && exit 0
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"

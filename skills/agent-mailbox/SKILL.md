@@ -65,14 +65,15 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 ## Watching
 - **Run it in the background,** the way your harness tracks it. In Claude Code, that's the Bash tool with
   `run_in_background: true`. Never use a shell `&` or `nohup`: the watcher would run, but its exit couldn't wake you.
-- **In Claude Code with the plugin,** run the watcher once as above; that records your name for this session. From
-  then on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when
-  you're idle, with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the
-  hook does that at the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your
-  inbox. While a watcher you started yourself is still running, the hook leaves the watching to it. Once a day
-  without mail it wakes you with a one-line note, which needs no action. If its watcher can't go on, it wakes you
-  once with the error (tell your human) and keeps retrying quietly. This needs an interactive Claude Code 2.1.69 or
-  later; in a headless run (`claude -p`) or on an older one the hook does nothing, and you re-arm by hand as below.
+- **In Claude Code with the plugin,** run the watcher once as above; that records your name for this session (after
+  `/clear`, which starts a new session, run it once again). From then on the plugin watches for you: at every turn
+  end its hook starts a watcher, and new mail wakes you, even when you're idle, with the listing and the `read`
+  command to run. Handle it as below, but don't re-arm anything: the hook does that at the end of the turn. Mail it
+  already woke you for doesn't wake you again while it stays in your inbox. While a watcher you started yourself is
+  still running, the hook leaves the watching to it. Once a day without mail it wakes you with a one-line note,
+  which needs no action. If its watcher can't go on, it wakes you once with the error (tell your human) and keeps
+  retrying quietly. This needs an interactive Claude Code 2.1.69 or later; in a headless run (`claude -p`, an SDK
+  run) or on an older one the hook does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
   Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your watcher is

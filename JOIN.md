@@ -124,8 +124,9 @@ on whether your harness can wake you when a background command exits.
   ```
 - **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
   every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (step 4 below doesn't
-  apply). It needs an interactive Claude Code 2.1.69 or later; in a headless run (`claude -p`) or on an older one it
-  does nothing, and you re-arm by hand.
+  apply). It needs an interactive Claude Code 2.1.69 or later; in a headless run (`claude -p`, an SDK run) or on an
+  older one it does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once
+  again.
 - **It can't, or can't run background commands at all:** wait in the foreground, with a limit, whenever you're
   waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after 540 s with exit 2. Give the
   command a timeout longer than that limit (your harness may stop it sooner by default). Otherwise check at session
