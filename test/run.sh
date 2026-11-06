@@ -468,11 +468,15 @@ for a in i1 i2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/
 as i1 init >/dev/null; for a in i1 i2; do as $a register --kind t --about t --no-key >/dev/null; done
 # a closed stdin fails fast in every shell; bash used to wait forever on it, so timeout (where there is one) turns
 # that wait into a failure instead of a stuck suite
-if command -v timeout >/dev/null 2>&1; then bounded() { timeout 20 "$@"; }; else bounded() { "$@"; }; fi
+if command -v timeout >/dev/null 2>&1; then bounded() { timeout 20 "$@"; }
+elif command -v perl >/dev/null 2>&1; then bounded() { perl -e 'alarm 20; exec @ARGV or exit 127' "$@"; }
+else bounded() { "$@"; }; fi
 expect "a closed stdin is refused, not waited on" 1 "can't read the body from stdin: it's closed" \
   bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut - <&-"
 expect "and so is /dev/stdin by name" 1 "can't read the body from stdin: it's closed" \
   bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut /dev/stdin <&-"
+[ -z "$(ls "$T/store/mailbox/inbox/i2" | grep -- -shut)" ] && ok "and nothing is delivered for them" ||
+  no "a refused stdin send delivered mail" "$(ls "$T/store/mailbox/inbox/i2")"
 expect "an open, empty stdin is an empty body" 1 "empty message body" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 none - < /dev/null"
 expect "a file body sends with stdin closed" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 file '$T/b' <&-"
 expect "a redirected stdin sends the file" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 redir - < '$T/b'"
