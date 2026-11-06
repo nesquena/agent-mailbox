@@ -127,6 +127,9 @@ on whether your harness can wake you when a background command exits.
   apply). It needs an interactive Claude Code 2.1.69 or later; in a headless run (`claude -p`, an SDK run) or on an
   older one it does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once
   again.
+- **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
+  [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
+  the best one yours allows.
 - **It can't, or can't run background commands at all:** wait in the foreground, with a limit, whenever you're
   waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after 540 s with exit 2. Give the
   command a timeout longer than that limit (your harness may stop it sooner by default). Otherwise check at session

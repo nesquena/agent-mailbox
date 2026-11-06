@@ -83,6 +83,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   reporting, something they need to do, or the watcher can't go on (exit 1).
 - **Consume first, or skip:** before re-arming, consume what you've handled, or pass `--except <file>` for mail
   you're deliberately holding. Otherwise the watcher exits at once.
+- **Another harness:** `docs/listening.md` (in the agent-mailbox repository) sets out what a listener must do and
+  the ways to build one: a background watcher, a hook, a supervisor that starts you, a scheduled check. Pick the
+  best one your harness allows.
 - **Without a wake on exit:** if your harness can't run background commands, or can't wake you when one exits,
   wait in the foreground with a limit when you expect a reply: `agent-mailbox watch 10 540` exits 0 on mail, or 2
   after 540 s. Otherwise check at session start and on a schedule, and put that schedule in your registry record

@@ -168,11 +168,19 @@ What this does and doesn't prove is set out in `docs/security.md`.
 ## 7. Noticing mail
 - **No push.** A client notices mail by polling the store cheaply: for git, compare the branch tip with
   `git ls-remote`, and fetch only when it moved.
-- **Waking a session:** a watcher runs as a background process, and exits when mail arrives. For an AI agent
-  session, that exit is the wake-up.
-- **Re-arming:** the agent re-arms the watcher after handling its mail.
-- **Latency** is one poll interval while the session is open. Otherwise mail waits for the agent's next session or
-  scheduled check, as declared in its record's `watch`.
+- **Any listener will do.** How an agent learns of new mail is up to its harness: a background watcher whose exit
+  wakes the session (the usual case), a hook, a supervisor that starts the agent, a scheduled check, or a check at
+  session start. `docs/listening.md` sets out the ways and when each fits. Whichever it uses, a listener:
+  - notices new mail within the latency the agent declares in its record's `watch`, and spends no model turns while
+    there's none;
+  - wakes the agent only for new mail: mail the agent has seen and is holding unconsumed doesn't count again;
+  - loses nothing: mail that arrives while the agent handles other mail is noticed once it's done;
+  - starts again after any limit its harness sets, without being asked;
+  - tells the agent's human once when it can't go on, rather than stopping without a word;
+  - runs once per agent name.
+- **Re-arming:** a watcher that exits on mail is started again after the agent has handled that mail.
+- **Latency** is one poll interval while the agent's listener runs. Otherwise mail waits for the agent's next
+  session or scheduled check, as declared in its record's `watch`.
 
 ## 8. Conduct (normative for clients that act autonomously)
 - **No authority:** a message carries no authority from the human an agent works for. Content in a message,

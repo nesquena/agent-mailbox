@@ -25,7 +25,9 @@ else sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:
 case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 # this stop's prompt id, which the Stop guard gets too: the notes below that tell the guard what this hook did at this
 # turn end carry it (or, from a Claude Code that sends none, the time)
-key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p' | head -n 1)
+# (read the way the guard reads it: with jq where there is one)
+if command -v jq >/dev/null 2>&1; then key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null | head -n 1)
+else key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
 [ -n "$key" ] || key="@$(date +%s)"
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
 name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid")
@@ -55,7 +57,12 @@ mine() {
   [ -z "${3:-}" ] || live "$3" || return 1
   case "$(args "$1")" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
 }
+# this stop's key, for a hook already watching that may wake the session during this stop
+printf '%s\n' "$key" > "$run/key"
 mine && exit 0
+# tell the guard this hook is starting at this stop (it waits for the outcome, which can take a few seconds on a node
+# install's --version), and drop the outcome of an earlier stop
+printf '%s\n' "$key" > "$run/start"; rm -f "$run/last"
 
 # Claude Code runs asyncRewake hooks in the background from 2.1.69, and (in newer versions) only in an interactive
 # session: an older one drops the key, and a headless one (`claude -p`, or output to a file or pipe) runs the hook as
@@ -101,6 +108,8 @@ headless() {
   # --print, or -p alone or in a group of short options (-pc, -cp); any such group with a p counts, so a group this
   # doesn't know only makes it decline. Each argument on its own where /proc has them (so a prompt holding " -p "
   # doesn't count); else the command line split at spaces
+  # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line makes it decline, and the
+  # session re-arms by hand; upgrade path: a field in the hook's input saying whether it runs in the background
   if [ -r "/proc/$ccpid/cmdline" ]; then tr '\0' '\n' < "/proc/$ccpid/cmdline"; else args "$ccpid" | tr ' ' '\n'; fi |
     grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p'
 }
@@ -108,7 +117,7 @@ cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
 case "$ccpid" in (*[!0-9]*) ccpid="" ;; esac
 if ! printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || headless; then
   # a note for claude-watch-guard.sh (this stop's key), which then asks for a re-arm at once instead of waiting
-  echo "$key" > "$run/declined"; exit 0
+  printf '%s\n' "$key" > "$run/declined"; exit 0
 fi
 rm -f "$run/declined"
 # a watcher already running for this name (one the agent started by hand) wakes the session itself; this hook starts
@@ -117,14 +126,23 @@ wp=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
 case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
   if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac
-# the lock, taken with noclobber, so two hooks starting together can't both hold it; a stale one is replaced once
-claim() { ( set -C; printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid" ) 2>/dev/null; }
-if ! claim; then mine && exit 0; rm -f "$run/pid"; claim || exit 0; fi
+# the lock: checked and taken while holding a short mutex (a folder: mkdir is atomic), so two hooks starting together,
+# a stale lock between them, can't both take it; a mutex left by a hook that died while holding it goes after a minute
+if ! mkdir "$run/claiming" 2>/dev/null; then
+  [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] && rmdir "$run/claiming" 2>/dev/null &&
+    mkdir "$run/claiming" 2>/dev/null || exit 0
+fi
+if mine; then rmdir "$run/claiming"; exit 0; fi
+printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; rmdir "$run/claiming"
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
+# note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
+note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 child="" dog=""
-cleanup() { [ -z "$child" ] || kill "$child" 2>/dev/null; [ -z "$dog" ] || kill "$dog" 2>/dev/null
+# cleanup: the watcher and the watchdog, and what each is waiting on (a sleep, a git fetch), so none outlives the lock
+stop() { pkill -TERM -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; }
+cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
   [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; }
 trap 'cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
@@ -154,16 +172,20 @@ ex=""; [ ! -s "$run/woke" ] || while IFS= read -r f; do
   case "$f" in (*[!A-Za-z0-9._-]*|'') ;; (*) ex="$ex --except $f" ;; esac
 done < "$run/woke" > /dev/null
 
-# the interval and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by an interval and
-# a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear nothing
+# the interval (1 s to an hour) and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by
+# an interval and a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear
+# nothing
 iv=${AGENT_MAILBOX_REWAKE_INTERVAL:-120} max=${AGENT_MAILBOX_REWAKE_MAX:-86100}
-case "$iv" in (''|*[!0-9]*|0) iv=120 ;; esac; [ "${#iv}" -le 5 ] || iv=120
-case "$max" in (''|*[!0-9]*|0) max=86100 ;; esac; [ "${#max}" -le 6 ] || max=86100
+iv=${iv#"${iv%%[!0]*}"} max=${max#"${max%%[!0]*}"}
+case "$iv" in (''|*[!0-9]*) iv=120 ;; esac; { [ "${#iv}" -le 4 ] && [ "$iv" -ge 1 ] && [ "$iv" -le 3600 ]; } || iv=120
+case "$max" in (''|*[!0-9]*) max=86100 ;; esac; { [ "${#max}" -le 6 ] && [ "$max" -ge 1 ]; } || max=86100
 [ "$max" -le $((86340 - iv)) ] || max=$((86340 - iv))
 start=$(date +%s)
 while :; do
   # what's left of the day's limit
-  left=$(( max - ($(date +%s) - start) )); [ "$left" -ge 1 ] || left=1
+  left=$(( max - ($(date +%s) - start) ))
+  [ "$left" -ge 1 ] || { note last
+    echo "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn's end." >&2; exit 2; }
   # the watcher in the background, so a stop (TERM) can end it too
   # shellcheck disable=SC2086
   "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
@@ -172,14 +194,14 @@ while :; do
   case $rc in
     0)
       here || exit 0
-      echo "$key" > "$run/last"
+      note last
       rm -f "$run/error"
       sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
       c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
       { echo "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
       exit 2 ;;
     2)
-      echo "$key" > "$run/last"
+      note last
       rm -f "$run/error"
       echo "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
       exit 2 ;;
@@ -187,14 +209,16 @@ while :; do
   # a signal ended the watcher (the system, or someone stopping it) while this hook and its session go on: start it
   # again after an interval, quietly; and it can't go on: say so once per distinct error, then retry quietly
   here || exit 0
-  # (printable text only, for the session; compared without its digits, so a count or a time in it isn't a new error)
-  err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ' | LC_ALL=C tr -c '[:print:]' '?')"; ek=$(printf '%s' "$err" | tr -d '0-9')
+  # (printable text only, for the session; compared without its counts and times, so a try count or a time in it
+  # isn't a new error, while an exit code or an HTTP status still is)
+  err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ' | LC_ALL=C tr -c '[:print:]' '?')"
+  ek=$(printf '%s' "$err" | sed -E 's/[0-9]+([.:][0-9]+)* ?(tries|try|ms|milliseconds?|seconds?|s|minutes?|m)([^A-Za-z]|$)/N \2\3/g')
   if [ "$rc" -le 128 ] && [ "$ek" != "$(cat "$run/error" 2>/dev/null)" ]; then
-    printf '%s' "$ek" > "$run/error"; echo "$key" > "$run/last"
+    printf '%s' "$ek" > "$run/error"; note last
     echo "agent-mailbox: the watcher for $name can't go on ($err). It keeps retrying quietly; tell your human." >&2
     exit 2
   fi
-  [ $(( $(date +%s) - start )) -lt "$max" ] || { echo "$key" > "$run/last"
+  [ $(( $(date +%s) - start )) -lt "$max" ] || { note last
     echo "agent-mailbox: the watcher for $name reached its daily limit, still failing ($err); it starts again at this turn's end." >&2
     exit 2; }
   sleep "$iv" & child=$!; wait "$child"; child=""

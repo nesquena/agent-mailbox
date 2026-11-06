@@ -728,20 +728,31 @@ expect "nor is an outer Claude Code's CLAUDE_PID, handed down" 2 "rw-1\.md" fake
 kill "$FAKEPID" 2>/dev/null; FAKEPID=; rm -f "$RS/rewake/rw/r1/woke"
 if command -v node >/dev/null 2>&1; then
   # an older Claude Code ran under node; this stand-in answers --version like its cli.js, and otherwise runs a script
-  CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc"; printf '%s\n' "if (process.argv.includes('--version')) { console.log(process.env.CCV + ' (Claude Code)'); process.exit(0) }" \
+  CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc"; printf '%s\n' "if (process.argv.includes('--version')) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000 * (+process.env.CCDELAY || 0)); console.log(process.env.CCV + ' (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
   printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' > "$CCD/cc/stop.sh"
   N=$(command -v node); case "$N" in (/*) ;; (*) N="$(pwd -P)/$N" ;; esac
   # ccstop <version>: the Stop hook as that Claude Code under node starts it, without AI_AGENT
   ccstop() { env CCV="$1" RH="$W/home-rw" RSH="$SH" RHOOK="$P/hooks/claude-rewake.sh" AI_AGENT="${AIA:-}" XDG_CONFIG_HOME= XDG_STATE_HOME= \
     AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
-    AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=2 "$N" ${2:-} "$CCD/cc/cli.js" "$CCD/cc/stop.sh"; }
+    AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX="${AGENT_MAILBOX_REWAKE_MAX:-2}" CCDELAY="${CCDELAY:-}" "$N" ${2:-} \
+    "$CCD/cc/cli.js" "$CCD/cc/stop.sh"; }
   expect "a Claude Code under node below 2.1.69 is told by asking it" 0 '^$' ccstop 2.1.68
   AIA=claude-code_2-1-318_agent
   expect "even with an AI_AGENT handed down from a newer one" 0 '^$' ccstop 2.1.68
   AIA=
   expect "and at 2.1.69 it watches, node's options before the script and all" 2 "new mail for rw" ccstop 2.1.69 --no-warnings
   expect "which clears the guard's note" 1 - test -e "$RS/rewake/rw/r1/declined"
+  # a slow --version (a node install on a busy machine): the guard waits for the hook's answer instead of asking for a
+  # re-arm while the hook is about to watch
+  if command -v jq >/dev/null 2>&1; then rm -f "$RS/run/rw.pid" "$RS/rewake/rw/r1/last"
+    for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r1/woke"; done
+    CCDELAY=4 AGENT_MAILBOX_REWAKE_MAX=60; export CCDELAY; ccstop 2.1.69 > /dev/null & sb=$!
+    g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
+      "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r '.reason // empty')
+    [ -z "$g" ] && ok "a slow version check doesn't make the guard ask for a re-arm" || no "a slow version check doesn't make the guard ask for a re-arm" "$g"
+    kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid" 2>/dev/null)" 2>/dev/null; wait "$sb" 2>/dev/null; unset CCDELAY
+  else sk "a slow version check doesn't make the guard ask for a re-arm (no jq)"; fi
   rm -f "$RS/rewake/rw/r1/woke"
 else sk "a Claude Code under node is told by asking it (no node)"; fi
 CC=$(command -v cc || command -v gcc || command -v clang)
@@ -856,10 +867,18 @@ if up "$RS/rewake/rw/r1/pid"; then hp=$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid"); k
     ok "a hook whose shell is gone stops itself"
   expect "and frees the lock" 1 - test -e "$RS/rewake/rw/r1/pid"
 else no "a hook whose shell is gone stops itself" "it didn't start"; kill "$w" 2>/dev/null; fi
-# a watcher the agent started itself wakes the session on its own: the hook stands aside while it runs
-HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 30 $(sed 's/^/--except /' "$RS/rewake/rw/r1/woke") \
-  > /dev/null 2>&1 & mw=$!
-if up "$RS/run/rw.pid"; then rm -f "$RS/rewake/rw/r1/out"
+# a watcher the agent started itself wakes the session on its own: the hook stands aside while it runs. And a watcher
+# that ends (here A, at its limit) leaves the pid file of one started after it (B) alone
+mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" $(sed 's/^/--except /' "$RS/rewake/rw/r1/woke"); }
+n=0; while [ $n -lt 10 ] && p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do
+  sleep 1; n=$((n+1)); done
+# isb: the pid file names watcher B (the one with the 30 s limit)
+isb() { p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && ps -o args= -p "$p" 2>/dev/null | grep -q 'watch 1 30'; }
+mwatch 3 > /dev/null 2>&1 & wa=$!; sleep 1; mwatch 30 > /dev/null 2>&1 & mw=$!
+n=0; while [ $n -lt 10 ] && ! isb; do sleep 1; n=$((n+1)); done
+wait "$wa"
+expect "a watcher that ends leaves a later watcher's pid file alone" 0 - isb
+if kill -0 "$mw" 2>/dev/null; then rm -f "$RS/rewake/rw/r1/out"
   expect "a hook stands aside while the agent's own watcher runs" 0 '^$' rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
   expect "starting no watcher of its own" 1 - test -e "$RS/rewake/rw/r1/out"
 else no "a hook stands aside while the agent's own watcher runs" "the watcher didn't start"; fi
@@ -884,6 +903,9 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/run/rw.pid"
     no "mail already waiting: the hook wakes the session and the guard lets the stop through" "hook exit $rc: $(cat "$T/both.out") | guard: $g"
   case "$(guardr p-9)" in (*"is not running"*) ok "but a wake at an earlier stop doesn't satisfy the guard" ;;
     (*) no "but a wake at an earlier stop doesn't satisfy the guard" "$(guardr p-9)" ;; esac
+  echo p-4 > "$RS/rewake/rw/r1/declined"; echo p-4 > "$RS/rewake/rw/r1/last"; rm -f "$RS/run/rw.pid"
+  case "$(guardr p-4)" in (*"is not running"*) ok "a declined note for this stop beats a wake note for it" ;;
+    (*) no "a declined note for this stop beats a wake note for it" "$(guardr p-4)" ;; esac
   echo p-0 > "$RS/rewake/rw/r1/declined"
   hookbg p-2; g=$(guardr p-2)
   [ -z "$g" ] && kill -0 "$bp" 2>/dev/null && ok "a declined note from an earlier stop doesn't make the guard block" ||
@@ -900,6 +922,14 @@ echo hi | as rx send rw rw-i - >/dev/null 2>&1
 expect "a bad interval falls back to the default" 2 "rw-i\.md" rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=0
 echo hi | as rx send rw rw-j - >/dev/null 2>&1
 expect "and so does a bad limit" 2 "rw-j\.md" rewake r1 AGENT_MAILBOX_REWAKE_MAX=x
+# an interval over an hour, or a limit of 00, is the default too: the watcher it starts says so
+for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r1/woke"; done; rm -f "$RS/run/rw.pid"
+rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=86400 AGENT_MAILBOX_REWAKE_MAX=00 > /dev/null & bg=$!
+if up "$RS/run/rw.pid"; then a=$(ps -o args= -p "$(cut -d' ' -f1 "$RS/run/rw.pid")" 2>/dev/null)
+  case "$a" in (*" watch 120 86"[0-9][0-9][0-9]" "*|*" watch 120 86"[0-9][0-9][0-9]) ok "an interval over an hour and a limit of 00 are the defaults" ;;
+    (*) no "an interval over an hour and a limit of 00 are the defaults" "$a" ;; esac
+else no "an interval over an hour and a limit of 00 are the defaults" "no watcher started"; fi
+kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid" 2>/dev/null)" 2>/dev/null; wait "$bg" 2>/dev/null
 
 echo "== received headers (dir)"
 T="$W/hdr"; mkdir -p "$T/store"

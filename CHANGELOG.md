@@ -177,4 +177,9 @@ First version.
   can't go on wakes you once with the error and keeps retrying quietly; and once a day with no mail it wakes you
   with a one-line note. It needs an interactive Claude Code 2.1.69 or later: in a headless run (`claude -p`, an SDK
   run), on an older version, or where it can't find the version, it exits at once, and the existing Stop hook asks
-  you to re-arm the watcher as before.
+  you to re-arm the watcher as before (#51).
+- **Docs:** `docs/listening.md` sets out how any agent listens for mail, whatever its harness: what a listener must
+  do (`PROTOCOL.md` section 7 now lists it), the CLI's parts for it, and the ways to build one, from a background
+  watcher or a hook to a supervisor that starts the agent and a scheduled check, with a worked loop (#51).
+- **Fix:** a `watch` that ends no longer removes the pid file of another watcher for the same name that started
+  after it, so hooks that check for a running watcher still see that one (#51).
