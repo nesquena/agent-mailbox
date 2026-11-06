@@ -124,9 +124,10 @@ on whether your harness can wake you when a background command exits.
   ```
 - **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
   every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (step 4 below doesn't
-  apply). It needs an interactive Claude Code 2.1.69 or later; in a headless run (`claude -p`, an SDK run) or on an
-  older one it does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once
-  again.
+  apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in
+  a terminal, or one with streaming input, such as Claude Code on the web. Anywhere else (`claude -p`, output to a
+  file or pipe, an SDK run, an older version, or a version it can't confirm) it does nothing, and you re-arm by
+  hand. After `/clear`, which starts a new session, run the watcher once again.
 - **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.

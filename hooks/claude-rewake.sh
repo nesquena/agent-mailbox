@@ -8,7 +8,9 @@
 # - just before the hook's timeout (a day) it exits 2 with a one-line note, so a session that saw no turn all day
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
-# It needs an interactive Claude Code 2.1.69 or later (see the checks below); anywhere else it exits 0 at once.
+# It acts only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal,
+# or one with streaming input (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
+# for a re-arm as before.
 # One instance per session: a pid file that counts only while that pid is still this script and the Claude Code it
 # ran under is still alive (so neither a pid reused after a restart nor a hook left behind by a crash counts). Mail
 # it already woke the session for is passed to `watch` as --except at its next start, so mail you read but haven't
@@ -61,61 +63,67 @@ mine() {
 printf '%s\n' "$key" > "$run/key"
 mine && exit 0
 # tell the guard this hook is starting at this stop (it waits for the outcome, which can take a few seconds on a node
-# install's --version), and drop the outcome of an earlier stop
-printf '%s\n' "$key" > "$run/start"; rm -f "$run/last"
+# install's --version), and drop the outcome (a wake or a decline) of an earlier stop
+prev=$(cat "$run/last" 2>/dev/null); printf '%s\n' "$key" > "$run/start"; rm -f "$run/last" "$run/declined"
 
-# Claude Code runs asyncRewake hooks in the background from 2.1.69, and (in newer versions) only in an interactive
-# session: an older one drops the key, and a headless one (`claude -p`, or output to a file or pipe) runs the hook as
-# an ordinary Stop hook, so the run would wait at every turn end until mail came. So both come first.
+# Claude Code runs asyncRewake hooks in the background from 2.1.69, and (in newer versions) only in a session that is
+# interactive or has streaming input. Anywhere else (an older version that drops the key, `claude -p`, output to a file
+# or pipe) it runs the hook as an ordinary Stop hook, and the run would wait at every turn end until mail came. So the
+# hook acts only on positive evidence of both, and declines when it can't tell.
 # The version: from AI_AGENT when Claude Code set it for its hooks (claude-code_2-1-318_harness; another suffix is a
-# value passed down from an outer Claude Code), else from the Claude Code process that started this hook (a parent
-# within three steps: a native `claude`, or node running Claude Code's cli.js), asked for --version by its absolute
-# path. ccver prints the version and Claude Code's pid (if known).
+# value passed down from an outer Claude Code), with Claude Code's pid from CLAUDE_PID; else from a native install,
+# whose `claude` links to .../claude/versions/<version> (the path /proc shows), asked for --version by that absolute
+# path. Either must be the hook's nearest parent that isn't a shell (Claude Code runs a hook through sh -c, and maybe
+# a wrapper script, CLAUDE_CODE_SHELL_PREFIX), up to 16 steps: an npm install renames its process, so without
+# AI_AGENT its version can't be told, and an outer Claude Code is never read for an inner one; the hook declines. ccver
+# prints the version and Claude Code's pid.
 ccver() {
   v=$(printf '%s\n' "${AI_AGENT:-}" | sed -n 's/^claude-code_\([0-9][0-9]*\)-\([0-9][0-9]*\)-\([0-9][0-9]*\)_harness$/\1.\2.\3/p')
-  # CLAUDE_PID counts only if it's this hook's Claude Code, a parent within three steps (an outer one exports it too)
-  if [ -n "$v" ]; then p=$PPID n=0 c=""
-    while [ $n -lt 3 ] && [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do
-      [ "$p" != "${CLAUDE_PID:-}" ] || { c=$p; break; }; p=$(ppid "$p"); n=$((n+1)); done
-    echo "$v $c"; return 0
-  fi
   p=$PPID n=0
-  while [ $n -lt 3 ]; do
+  while [ $n -lt 16 ]; do
     case "$p" in ''|*[!0-9]*|0|1) return 1 ;; esac
-    # the executable and its first argument that isn't an option (the script, for node)
-    if [ -r "/proc/$p/cmdline" ]; then x=$(readlink "/proc/$p/exe" 2>/dev/null)
-      a=$(tr '\0' '\n' < "/proc/$p/cmdline" | sed -n '2,$p' | grep -v '^-' | head -n 1)
-    else x=$(ps -o comm= -p "$p" 2>/dev/null); a=$(ps -o args= -p "$p" 2>/dev/null | tr ' ' '\n' | sed -n '2,$p' | grep -v '^-' | head -n 1); fi
-    out=""
-    case "$x" in
-      # a native install's `claude` is a link to .../claude/versions/<version>, which /proc resolves
-      (/*/claude|/*/claude.exe|/*/claude/versions/[0-9]*) out=$("$x" --version 2>/dev/null) ;;
-      (/*/node|/*/node.exe|/*/nodejs) case "$a" in (/*/cli.js|/*/claude) out=$("$x" "$a" --version 2>/dev/null) ;; esac ;;
+    [ -z "$v" ] || [ "$p" != "${CLAUDE_PID:-}" ] || { echo "$v $p"; return 0; }
+    if [ -r "/proc/$p/cmdline" ]; then x=$(readlink "/proc/$p/exe" 2>/dev/null); else x=$(ps -o comm= -p "$p" 2>/dev/null); fi
+    case "${x##*/}" in
+      # Claude Code runs a hook through a shell (sh -c, a wrapper script): pass over those
+      (sh|dash|bash|zsh|ksh|mksh|ash|busybox) p=$(ppid "$p") n=$((n+1)); continue ;;
     esac
-    v=$(printf '%s\n' "$out" | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) (Claude Code).*/\1/p')
-    [ -z "$v" ] || { echo "$v $p"; return 0; }
-    p=$(ppid "$p") n=$((n+1))
+    # the first other process is Claude Code: told by AI_AGENT (above), or a native install asked for its version
+    case "$x" in (/*/claude|/*/claude.exe|/*/claude/versions/[0-9]*) [ -z "$v" ] || return 1
+      w=$(printf '%s\n' "$("$x" --version 2>/dev/null)" | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) (Claude Code).*/\1/p')
+      [ -z "$w" ] || { echo "$w $p"; return 0; } ;;
+    esac
+    return 1
   done
   return 1
 }
-# Headless: Claude Code names an SDK or GitHub Action run in CLAUDE_CODE_ENTRYPOINT (sdk-cli for -p, or output that
-# isn't a terminal), and a -p run under a host that set its own entrypoint still has -p or --print in its arguments.
-# ceiling: a run without -p whose output isn't a terminal, under a host's entrypoint (remote, a desktop app), isn't
-# seen as headless; upgrade path: a hook field from Claude Code saying the hook runs in the background.
-headless() {
-  case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 0 ;; esac
+# background: Claude Code (ccpid) runs this hook in the background. The evidence: streaming input (realtime
+# `--input-format stream-json`, or the cloud's preloaded launch, `--preload`), or an interactive session: none of the
+# options that make it headless (-p alone or in a group of short options such as -pc, --print, --init-only,
+# --sdk-url), and its output a terminal. Each argument is read on its own where /proc has them, else from the command
+# line split at spaces.
+# ceiling: without /proc (macOS), a word like -help in a prompt given on the command line reads as -p, and the hook
+# declines; upgrade path: a field in the hook's input saying whether it runs in the background
+background() {
   [ -n "$ccpid" ] || return 1
-  # --print, or -p alone or in a group of short options (-pc, -cp); any such group with a p counts, so a group this
-  # doesn't know only makes it decline. Each argument on its own where /proc has them (so a prompt holding " -p "
-  # doesn't count); else the command line split at spaces
-  # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line makes it decline, and the
-  # session re-arms by hand; upgrade path: a field in the hook's input saying whether it runs in the background
-  if [ -r "/proc/$ccpid/cmdline" ]; then tr '\0' '\n' < "/proc/$ccpid/cmdline"; else args "$ccpid" | tr ' ' '\n'; fi |
-    grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p'
+  case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 1 ;; esac
+  if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\0' '\n' < "/proc/$ccpid/cmdline"); else av=$(args "$ccpid" | tr ' ' '\n'); fi
+  printf '%s\n' "$av" | awk 'p && $0 == "stream-json" { f = 1 } { p = ($0 == "--input-format") }
+    $0 == "--input-format=stream-json" || $0 == "--preload" { f = 1 } END { exit !f }' && return 0
+  printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
+  o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+  case "$o" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac
+  return 1
 }
+# a stop that a Stop hook already kept going (stop_hook_active) at the prompt this hook already woke the session at
+# means Claude Code waited for it: run as an ordinary Stop hook after all, so it steps aside
+if command -v jq >/dev/null 2>&1; then sha=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
+else sha=$(printf '%s' "$input" | sed -n 's/.*"stop_hook_active"[[:space:]]*:[[:space:]]*\(true\).*/\1/p' | head -n 1); fi
+looped() { [ "$sha" = true ] && [ "$prev" = "$key" ]; }
 cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
 case "$ccpid" in (*[!0-9]*) ccpid="" ;; esac
-if ! printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || headless; then
+if ! printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || ! background || looped
+then
   # a note for claude-watch-guard.sh (this stop's key), which then asks for a re-arm at once instead of waiting
   printf '%s\n' "$key" > "$run/declined"; exit 0
 fi
@@ -140,29 +148,48 @@ note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 child="" dog=""
-# cleanup: the watcher and the watchdog, and what each is waiting on (a sleep, a git fetch), so none outlives the lock
-stop() { pkill -TERM -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; }
+# the interval (1 s to an hour) and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by
+# an interval and a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear
+# nothing
+iv=${AGENT_MAILBOX_REWAKE_INTERVAL:-120} max=${AGENT_MAILBOX_REWAKE_MAX:-86100}
+iv=${iv#"${iv%%[!0]*}"} max=${max#"${max%%[!0]*}"}
+case "$iv" in (''|*[!0-9]*) iv=120 ;; esac; { [ "${#iv}" -le 4 ] && [ "$iv" -ge 1 ] && [ "$iv" -le 3600 ]; } || iv=120
+case "$max" in (''|*[!0-9]*) max=86100 ;; esac; { [ "${#max}" -le 6 ] && [ "$max" -ge 1 ]; } || max=86100
+[ "$max" -le $((86340 - iv)) ] || max=$((86340 - iv))
+start=$(date +%s)
+# cleanup: the watcher and the watchdog, and everything under them (a sleep, a git fetch and its ssh), deepest first,
+# so none outlives the lock
+stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>/dev/null; }
 # (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
 # the mutex is busy, the lock stays, and reads as stale once this hook is gone)
 cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
   if mkdir "$run/claiming" 2>/dev/null; then
     [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; rmdir "$run/claiming"
   fi; }
-trap 'cleanup; exit 0' TERM INT HUP
+# (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
+trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
+  echo "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
+  cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
 # Claude Code may stop this hook by killing only the shell it started it through, or end (or crash) without stopping
 # it: a hook left running would hold the lock, and its wake would reach no session. So it stops itself once that shell
-# or Claude Code (when its pid is known) is gone, and it doesn't record mail it would wake no one for.
+# or Claude Code (when its pid is known) is gone, and it doesn't record mail it would wake no one for. It also keeps a
+# deadline, the day's limit plus an interval and a little more, so a command that hangs (a git fetch over a dead
+# connection) can't run the hook into Claude Code's timeout, which would end it without a word.
 top=$PPID
 here() { live "$top" && { [ -z "$ccpid" ] || live "$ccpid"; }; }
 hook=$$
-( while here && kill -0 "$hook" 2>/dev/null; do sleep 15; done; kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
+dl=$((start + max + iv + 15)); rm -f "$run/deadline"
+( while here && kill -0 "$hook" 2>/dev/null; do
+    [ "$(date +%s)" -lt "$dl" ] || { : > "$run/deadline"; break; }; sleep 15; done
+  kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!
 
 # the mail it already woke the session for, kept only while it's still in the inbox (when the inbox can't be read,
 # the list is kept as it is)
 if [ -s "$run/woke" ]; then
-  inbox=$("$cli" "$@" list 2>/dev/null); lrc=$?
+  # (in the background, so a stop can end it too)
+  "$cli" "$@" list > "$run/list" 2>/dev/null & child=$!; wait "$child"; lrc=$?; child=""; inbox=$(cat "$run/list")
   if [ $lrc = 0 ] || [ $lrc = 3 ]; then
     inbox=$(printf '%s\n' "$inbox" | sed 's#.*/##')
     while IFS= read -r f; do
@@ -176,15 +203,6 @@ ex=""; [ ! -s "$run/woke" ] || while IFS= read -r f; do
   case "$f" in (*[!A-Za-z0-9._-]*|'') ;; (*) ex="$ex --except $f" ;; esac
 done < "$run/woke" > /dev/null
 
-# the interval (1 s to an hour) and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by
-# an interval and a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear
-# nothing
-iv=${AGENT_MAILBOX_REWAKE_INTERVAL:-120} max=${AGENT_MAILBOX_REWAKE_MAX:-86100}
-iv=${iv#"${iv%%[!0]*}"} max=${max#"${max%%[!0]*}"}
-case "$iv" in (''|*[!0-9]*) iv=120 ;; esac; { [ "${#iv}" -le 4 ] && [ "$iv" -ge 1 ] && [ "$iv" -le 3600 ]; } || iv=120
-case "$max" in (''|*[!0-9]*) max=86100 ;; esac; { [ "${#max}" -le 6 ] && [ "$max" -ge 1 ]; } || max=86100
-[ "$max" -le $((86340 - iv)) ] || max=$((86340 - iv))
-start=$(date +%s)
 while :; do
   # what's left of the day's limit
   left=$(( max - ($(date +%s) - start) ))

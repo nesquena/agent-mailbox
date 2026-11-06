@@ -56,9 +56,12 @@ mail, the hook exits 2, which wakes the session with the listing. It also:
 - keeps a list of the mail it already woke the session for, passing it as `--except`;
 - reports an error once, then retries quietly;
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
-- runs only one instance per session.
+- runs only one instance per session;
+- acts only where it can tell that Claude Code runs it in the background (a session in a terminal, or one with
+  streaming input); a harness that would wait for the hook instead would hang at every turn end.
 
-It's written in POSIX sh, so the same design fits any harness with a similar hook.
+It's written in POSIX sh, so the same design fits any harness with a similar hook. If yours runs such a hook
+synchronously, don't start a long watch from it: use a quick `list` (approach 2) instead.
 
 ### 2. A hook at the end of each turn
 For a harness that runs a command when the agent finishes a turn, but can't be woken from outside.
