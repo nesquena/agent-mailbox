@@ -50,8 +50,10 @@ MSG_RE='^[A-Za-z0-9._-]+\.md$'
 SENT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 # a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
 KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
-# the first line of a private key's text block: PEM (RSA, EC, PKCS#8, encrypted), OpenSSH, PGP, SSH2 and PuTTY alike
-PRIVKEY_RE='-{4,5} ?BEGIN ([A-Z0-9]+ )*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:'
+# a line that only a private key's text block has: its first or last line (PEM: RSA, EC, PKCS#8, encrypted; OpenSSH,
+# PGP, SSH2), or PuTTY's header and trailer lines. Either end counts, so a body whose first line was read off (a file
+# partly read before `send -`) is still refused
+PRIVKEY_RE='-{4,5} ?(BEGIN|END) ([A-Z0-9]+ )*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:|^Private-(Lines|MAC): '
 
 # printf, not echo, so a value quoted in a message is shown as is
 die() { printf 'agent-mailbox: %s\n' "$*" >&2; exit 1; }
@@ -484,6 +486,11 @@ send)
   [ -z "$ctx_set" ] || matches "$NAME_RE" "$context" || die "context must be lowercase a-z, 0-9, '.' or '-'"
   [ "$body" = - ] && body=/dev/stdin
   [ "$body" = /dev/stdin ] || [ -f "$body" ] || die "the body must be a file path, or - for stdin"
+  # a closed stdin is refused before anything reads it: $(cat) below would open its pipe as fd 0, and bash leaves that
+  # in cat, which then reads its own output and waits forever. Copying fd 0 elsewhere fails when it's closed (in dash
+  # and bash, `<&0` alone never does); it's on true, not :, since a failed redirection on : ends sh
+  [ "$body" != /dev/stdin ] || { true 9<&0; } 2>/dev/null ||
+    die "can't read the body from stdin: it's closed (pipe the body in, or pass a file path)"
   # never mail out an SSH key, this CLI's config, state or key, or any private key, whoever asked (ceiling: secret_file)
   if secret_file "$body"; then
     # the state folder also holds the git adapter's copy of the store, so a message received there is refused too
@@ -493,9 +500,12 @@ send)
     [ "$SF" != - ] || w="a path whose links can't be followed to the end"
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
   fi
-  text=$(cat -- "$body") || die "can't read $body"; [ -n "$text" ] || die "empty message body"
+  # stdin itself is read as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
+  if [ "$body" = /dev/stdin ]; then text=$(cat) || die "can't read stdin"
+  else text=$(cat -- "$body") || die "can't read $body"; fi
+  [ -n "$text" ] || die "empty message body"
   ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" ||
-    die "refusing to send: the body holds a private key's first line (never put secrets in mail; to discuss a key, describe it, or send its public half)"
+    die "refusing to send: the body holds a private key's text (a line of its block; never put secrets in mail; to discuss a key, describe it, or send its public half)"
   load_adapter; ad_sync; need_store
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me

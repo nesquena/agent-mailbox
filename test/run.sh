@@ -659,6 +659,46 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
 
+echo "== send - reads the body from stdin (dir)"
+T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
+for a in i1 i2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as i1 init >/dev/null; for a in i1 i2; do as $a register --kind t --about t --no-key >/dev/null; done
+# a closed stdin fails fast in every shell; bash used to wait forever on it, so timeout (where there is one) turns
+# that wait into a failure instead of a stuck suite
+if command -v timeout >/dev/null 2>&1; then bounded() { timeout 20 "$@"; }
+elif command -v perl >/dev/null 2>&1; then
+  # run it in its own process group and kill the whole group, so nothing it started keeps the output pipe open
+  bounded() { perl -e '$p = fork; defined $p or exit 127; if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", -$p }; alarm 20; waitpid $p, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$@"; }
+else bounded() { "$@"; }; fi
+expect "a closed stdin is refused, not waited on" 1 "can't read the body from stdin: it's closed" \
+  bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut - <&-"
+expect "and so is /dev/stdin by name" 1 "can't read the body from stdin: it's closed" \
+  bounded sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 shut /dev/stdin <&-"
+[ -z "$(ls "$T/store/mailbox/inbox/i2" | grep -- -shut)" ] && ok "and nothing is delivered for them" ||
+  no "a refused stdin send delivered mail" "$(ls "$T/store/mailbox/inbox/i2")"
+expect "an open, empty stdin is an empty body" 1 "empty message body" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 none - < /dev/null"
+expect "a file body sends with stdin closed" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 file '$T/b' <&-"
+expect "a redirected stdin sends the file" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 redir - < '$T/b'"
+expect "a heredoc sends" 0 "^sent" sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 here - <<EOF
+from a heredoc
+EOF"
+# stdin is read as it is, not reopened by name: one open only for writing isn't read from its file, and a socket
+# (as some harnesses give a command) works
+# (cat fails on it, or some cats read nothing: refused either way)
+expect "a stdin open only for writing is refused, not read from its file" 1 "can't read stdin|empty message body" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 wonly - 0>>'$T/b'"
+[ -z "$(ls "$T/store/mailbox/inbox/i2" | grep -- -wonly)" ] && ok "and nothing is delivered for it" ||
+  no "a write-only stdin send delivered mail" "$(ls "$T/store/mailbox/inbox/i2")"
+if command -v perl >/dev/null 2>&1; then
+  expect "a socket on stdin sends" 0 "^sent" perl -MSocket -e 'socketpair(my $p, my $c, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or exit 127;
+    if (my $k = fork) { close $c; print $p "from a socket\n"; close $p; waitpid $k, 0; exit($? >> 8) }
+    close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
+  expect "and its text is the body" 0 "^from a socket$" block i2 sock
+else sk "a socket on stdin sends (no perl)"; fi
+expect "the redirected file is the body" 0 "^from a file$" block i2 redir
+expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
+
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
 for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -1316,6 +1356,12 @@ pk='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPEN
 expect "send refuses a private key on stdin" 1 "holds a private key" sh -c "printf -- '$pk' | HOME='$H' '$SH' '$CLI' send sec2 sec-stdin -"
 printf 'here it is:\n\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\n' > "$T/rsa.md"
 refused "or in a body file" "$T/rsa.md"
+# a key whose first line was read off before send (a partly read file on stdin, or a pipe) is still refused
+printf -- "$pk" > "$T/k.pem"
+n=$((n+1)); expect "or a key file on stdin whose first line was already read" 1 "holds a private key" \
+  sh -c "{ IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; } < '$T/k.pem'"
+n=$((n+1)); expect "or a piped key whose first line was read off" 1 "holds a private key" \
+  sh -c "printf -- '$pk' | { IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; }"
 refused "or a PuTTY key" "$T/key.ppk"
 expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
 mkdir -p "$T/nl
