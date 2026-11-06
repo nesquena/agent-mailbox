@@ -391,7 +391,7 @@ register|update)
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
-  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION"; fi
+  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION" "$STATE/sessions/$SESSION.config"; fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
@@ -638,9 +638,13 @@ watch)
   load_adapter; ad_sync; need_store
   need_active_me
   # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
-  # that this watcher is alive (hooks/claude-watch-guard.sh)
+  # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made absolute, goes in a file of its
+  # own beside the marker, so that hook's re-arm command uses this config, and an older reader still finds the name
   mkdir -p "$STATE/run" "$STATE/sessions"
-  [ -z "$SESSION" ] || echo "$ME" > "$STATE/sessions/$SESSION"
+  if [ -n "$SESSION" ]; then
+    case "$CONFIG" in (/*) printf '%s\n' "$CONFIG" ;; (*) printf '%s/%s\n' "$(pwd)" "$CONFIG" ;; esac > "$STATE/sessions/$SESSION.config"
+    echo "$ME" > "$STATE/sessions/$SESSION"
+  fi
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
   trap 'rm -f "$STATE/run/$ME.pid"' EXIT
   trap 'exit 130' INT TERM

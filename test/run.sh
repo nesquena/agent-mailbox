@@ -411,6 +411,52 @@ if [ -n "$SSH" ]; then
   expect "and verify" 0 "signed-own.md \\[verified\\]" as w1 read
 fi
 
+echo "== the Claude Code Stop hook (dir)"
+if command -v jq >/dev/null 2>&1; then
+  T="$W/hook"; P="$T/plug 'in'"; mkdir -p "$T/cfg dir" "$T/run" "$P/hooks"
+  # the plugin in a folder whose name needs quoting; its bin is this checkout's
+  cp "$ROOTDIR/hooks/claude-watch-guard.sh" "$P/hooks/"; ln -s "$ROOTDIR/bin" "$P/bin"
+  # hook <agent> <session id> [VAR=value...]: the reason the Stop hook gives that agent's session, run as Claude Code
+  # runs it, in the agent's home
+  hook() { a=$1 s=$2; shift 2; printf '{"session_id":"%s"}' "$s" | env HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= \
+    AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$@" \
+    "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason; }
+  # rerun <reason> <n>: run the reason's nth command (1: read, 2: watch) as printed, from another folder, in hk's home
+  rerun() { c=$(printf '%s\n' "$1" | awk -F'`' -v n="$2" '{ print $(2 * n) }'); (cd / && HOME="$W/home-hk" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" -c "$c"); }
+  # noflag <description> <reason>: the reason gives both commands, and neither has --config
+  noflag() { case "$2" in (*--config*) no "$1" "$2" ;; (*"read\`"*"watch 120 0\`"*) ok "$1" ;; (*) no "$1" "$2" ;; esac; }
+  # hk keeps its own config, at a path with a space, a quote and a $; its default config is another agent's, on
+  # another store
+  C="$T/cfg dir/hk's \$x.cfg"
+  as hk --config "$C" setup --store "$T/store" --adapter dir --name hk >/dev/null
+  as hk --config "$C" init >/dev/null; as hk --config "$C" register --kind t --about t --no-key >/dev/null
+  as hd setup --store "$T/other" --adapter dir --name hd >/dev/null; as hd init >/dev/null
+  as hd register --kind t --about t --no-key >/dev/null
+  mkdir -p "$W/home-hk/.config/agent-mailbox"; cp "$W/home-hd/.config/agent-mailbox/config" "$W/home-hk/.config/agent-mailbox/"
+  echo hi | as hk --config "$C" send hk hook-1 - >/dev/null
+  HOME="$W/home-hk" AGENT_MAILBOX_SESSION=h1 "$SH" "$CLI" --config "$C" watch 1 1 >/dev/null 2>&1
+  r=$(hook hk h1)
+  expect "the Stop hook's read command uses the config the watcher ran with" 0 "hook-1\.md" rerun "$r" 1
+  expect "and so does its watch command" 0 "^mail for hk:" rerun "$r" 2
+  # AGENT_MAILBOX_CONFIG set only for the watcher, to a path relative to the folder it ran in
+  cp "$C" "$T/run/hk.cfg"
+  in_dir "$T/run" env HOME="$W/home-hk" AGENT_MAILBOX_CONFIG=hk.cfg AGENT_MAILBOX_SESSION=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
+  r=$(hook hk h2)
+  expect "a config from the environment, relative to the watcher's folder, is carried too" 0 "hook-1\.md" rerun "$r" 1
+  # no --config where the commands pick that config anyway, by the CLI's own rule
+  noflag "the same AGENT_MAILBOX_CONFIG in the hook's environment needs no --config" "$(hook hk h2 AGENT_MAILBOX_CONFIG="$T/run/hk.cfg")"
+  HOME="$W/home-hd" AGENT_MAILBOX_SESSION=h3 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
+  noflag "a watcher on the default config gets the commands without --config" "$(hook hd h3)"
+  # a record from before the config was kept (only the name) still gets both commands, without --config
+  echo hk > "$W/home-hk/.local/state/agent-mailbox/sessions/h4"
+  r=$(hook hk h4)
+  case "$r" in (*" for hk is not running"*) noflag "an older record, with only the name, still gets the commands" "$r" ;;
+    (*) no "an older record, with only the name, still gets the commands" "$r" ;; esac
+else
+  sk "the Claude Code Stop hook (no jq)"
+fi
+
 echo "== received headers (dir)"
 T="$W/hdr"; mkdir -p "$T/store"
 for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -457,9 +503,11 @@ expect "an explicit empty --context is refused" 1 "context must be" sh -c "echo 
 # retiring clears this session's watch marker, and a retired agent is told how to come back
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
 [ -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "watch leaves a session marker" || no "watch left no session marker"
+[ -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr.config" ] && ok "and the config it ran with" || no "watch left no config record"
 for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
+[ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr.config" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
 
 echo "== send and consume change the store in a safe order (dir)"
