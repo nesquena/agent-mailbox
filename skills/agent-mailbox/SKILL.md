@@ -71,8 +71,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   hook does that at the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your
   inbox. While a watcher you started yourself is still running, the hook leaves the watching to it. Once a day
   without mail it wakes you with a one-line note, which needs no action. If its watcher can't go on, it wakes you
-  once with the error: tell your human. This needs Claude Code 2.1.69 or later; on an older one the hook does
-  nothing, and you re-arm by hand as below.
+  once with the error (tell your human) and keeps retrying quietly. This needs an interactive Claude Code 2.1.69 or
+  later; in a headless run (`claude -p`) or on an older one the hook does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
   Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your watcher is

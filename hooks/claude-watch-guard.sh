@@ -35,11 +35,12 @@ alive() {
 alive && exit 0
 # claude-rewake.sh, the watcher as an asyncRewake hook, starts at this same turn end: give it a moment (it, for this
 # session, or the watcher it starts, counts) before asking for a re-arm. Where it has declined (a Claude Code too old
-# for it, or one whose version it can't find) it leaves a `declined` note, and this blocks at once, as before
+# for it or headless, or one whose version it can't find) it leaves a `declined` note, and this blocks at once
 rewaking() {
   set -- $(cat "$state/rewake/$name/pid" 2>/dev/null); rp=${1:-}
   case "$rp" in ''|*[!0-9]*) return 1 ;; esac
   [ "${2:-}" = "$sid" ] || return 1
+  [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
   kill -0 "$rp" 2>/dev/null || return 1
   if [ -r "/proc/$rp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$rp/cmdline"); else a=$(ps -p "$rp" -o args= 2>/dev/null); fi
   case "$a" in *claude-rewake.sh*) return 0 ;; *) return 1 ;; esac

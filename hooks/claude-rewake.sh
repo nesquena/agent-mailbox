@@ -4,14 +4,15 @@
 # wakes the session, even an idle one, with what it printed on stderr. So nothing has to be re-armed by hand:
 # - new mail: it exits 2 with the listing;
 # - a watcher that can't go on (the store unreachable, the name retired): it exits 2 with the error, once per
-#   distinct error, so the session hears without a wake at every turn end;
+#   distinct error, then keeps retrying quietly, so the session hears once and still wakes when mail comes;
 # - just before the hook's timeout (a day) it exits 2 with a one-line note, so a session that saw no turn all day
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
-# It needs Claude Code 2.1.69 or later (see the version check below); on anything older it exits 0 at once.
-# One instance per agent name: a pid file that counts only while that pid is still this script (a pid reused after a
-# container restart doesn't). Mail it already woke the session for is passed to `watch` as --except at its next
-# start, so mail you read but haven't consumed doesn't wake the session at every turn end; only new mail does.
+# It needs an interactive Claude Code 2.1.69 or later (see the checks below); anywhere else it exits 0 at once.
+# One instance per session: a pid file that counts only while that pid is still this script and the Claude Code it
+# ran under is still alive (so neither a pid reused after a restart nor a hook left behind by a crash counts). Mail
+# it already woke the session for is passed to `watch` as --except at its next start, so mail you read but haven't
+# consumed doesn't wake the session at every turn end; only new mail does.
 #
 # It acts only in a session that has run `agent-mailbox watch`, which records the session's name (and config) under
 # the CLI's state folder; any other session exits 0 at once. It finds those records through the same state path the
@@ -29,24 +30,28 @@ conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
 run="$state/rewake/$name"; mkdir -p "$run" 2>/dev/null || exit 0
-# mine: the pid file names a live claude-rewake.sh for this session (its fields: pid, session id)
+# args <pid>: that process's command line, its arguments joined by spaces
+args() { if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o args= 2>/dev/null; fi; }
+# mine: the pid file (pid, session id, Claude Code's pid) names a live claude-rewake.sh, not this one, for this
+# session, whose Claude Code is still alive
 mine() {
   set -- $(cat "$run/pid" 2>/dev/null)
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
-  [ "${2:-}" = "$sid" ] || return 1
-  kill -0 "$1" 2>/dev/null || return 1
-  if [ -r "/proc/$1/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$1/cmdline"); else a=$(ps -p "$1" -o args= 2>/dev/null); fi
-  case "$a" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
+  [ "$1" != $$ ] && [ "${2:-}" = "$sid" ] && kill -0 "$1" 2>/dev/null || return 1
+  [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
+  case "$(args "$1")" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
 }
 mine && exit 0
-# Claude Code runs asyncRewake hooks in the background from 2.1.69. An older one drops the key and would run this as an
-# ordinary Stop hook, holding every turn end until mail came. So the running version comes first: from AI_AGENT
-# (claude-code_2-1-318_..., which newer versions give hooks), else from the Claude Code process that started this hook
-# (a parent within three steps: a native `claude`, or node running Claude Code's cli.js), asked for --version by its
-# absolute path. Below 2.1.69, or when it can't tell, this exits 0 at once, leaving a `declined` note so that
-# claude-watch-guard.sh asks for a re-arm at once, as before. ccver prints the version and Claude Code's pid (if known).
+
+# Claude Code runs asyncRewake hooks in the background from 2.1.69, and (in newer versions) only in an interactive
+# session: an older one drops the key, and a headless one (`claude -p`, or output to a file or pipe) runs the hook as
+# an ordinary Stop hook, so the run would wait at every turn end until mail came. So both come first.
+# The version: from AI_AGENT when Claude Code set it for its hooks (claude-code_2-1-318_harness; another suffix is a
+# value passed down from an outer Claude Code), else from the Claude Code process that started this hook (a parent
+# within three steps: a native `claude`, or node running Claude Code's cli.js), asked for --version by its absolute
+# path. ccver prints the version and Claude Code's pid (if known).
 ccver() {
-  v=$(printf '%s\n' "${AI_AGENT:-}" | sed -n 's/^claude-code_\([0-9][0-9]*\)-\([0-9][0-9]*\)-\([0-9][0-9]*\)_.*/\1.\2.\3/p')
+  v=$(printf '%s\n' "${AI_AGENT:-}" | sed -n 's/^claude-code_\([0-9][0-9]*\)-\([0-9][0-9]*\)-\([0-9][0-9]*\)_harness$/\1.\2.\3/p')
   [ -z "$v" ] || { echo "$v ${CLAUDE_PID:-}"; return 0; }
   p=$PPID n=0
   while [ $n -lt 3 ]; do
@@ -69,21 +74,31 @@ ccver() {
   done
   return 1
 }
+# Headless: Claude Code names an SDK or GitHub Action run in CLAUDE_CODE_ENTRYPOINT (sdk-cli for -p, or output that
+# isn't a terminal), and a -p run under a host that set its own entrypoint still has -p or --print in its arguments.
+# ceiling: a run without -p whose output isn't a terminal, under a host's entrypoint (remote, a desktop app), isn't
+# seen as headless; upgrade path: a hook field from Claude Code saying the hook runs in the background.
+headless() {
+  case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 0 ;; esac
+  [ -n "$ccpid" ] || return 1
+  case " $(args "$ccpid") " in (*" -p "*|*" --print "*|*" --print="*) return 0 ;; esac
+  return 1
+}
 cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
-printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' ||
-  { echo "${ccv:-unknown}" > "$run/declined"; exit 0; }
+case "$ccpid" in (*[!0-9]*) ccpid="" ;; esac
+if ! printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || headless; then
+  # a note for claude-watch-guard.sh, which then asks for a re-arm at once instead of waiting for this hook
+  echo "${ccv:-unknown}" > "$run/declined"; exit 0
+fi
 rm -f "$run/declined"
 # a watcher already running for this name (one the agent started by hand) wakes the session itself; this hook starts
 # at the turn end after it exits. A stopped hook's own watcher, still finishing its last poll, isn't one: `child` names it
 wp=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
 case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
-  if kill -0 "$wp" 2>/dev/null; then
-    if [ -r "/proc/$wp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$wp/cmdline"); else a=$(ps -p "$wp" -o args= 2>/dev/null); fi
-    case "$a" in (*agent-mailbox*watch*) exit 0 ;; esac
-  fi ;;
+  if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac
 # the lock, taken with noclobber, so two hooks starting together can't both hold it; a stale one is replaced once
-claim() { ( set -C; printf '%s %s\n' $$ "$sid" > "$run/pid" ) 2>/dev/null; }
+claim() { ( set -C; printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid" ) 2>/dev/null; }
 if ! claim; then mine && exit 0; rm -f "$run/pid"; claim || exit 0; fi
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
@@ -93,12 +108,12 @@ cleanup() { [ -z "$child" ] || kill "$child" 2>/dev/null; [ -z "$dog" ] || kill 
   [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; }
 trap 'cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
-# Claude Code may stop this hook by killing only the shell it started it through, or end the session without stopping
+# Claude Code may stop this hook by killing only the shell it started it through, or end (or crash) without stopping
 # it: a hook left running would hold the lock, and its wake would reach no session. So it stops itself once that shell
-# or Claude Code (when its pid is known) is gone.
+# or Claude Code (when its pid is known) is gone, and it doesn't record mail it would wake no one for.
 top=$PPID
-( while kill -0 "$top" 2>/dev/null && { [ -z "$ccpid" ] || kill -0 "$ccpid" 2>/dev/null; }; do sleep 15; done
-  kill -TERM $$ 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
+here() { kill -0 "$top" 2>/dev/null && { [ -z "$ccpid" ] || kill -0 "$ccpid" 2>/dev/null; }; }
+( while here; do sleep 15; done; kill -TERM $$ 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!
 
 # the mail it already woke the session for, kept only while it's still in the inbox (when the inbox can't be read,
@@ -118,28 +133,38 @@ ex=""; [ ! -s "$run/woke" ] || while IFS= read -r f; do
   case "$f" in (*[!A-Za-z0-9._-]*|'') ;; (*) ex="$ex --except $f" ;; esac
 done < "$run/woke" > /dev/null
 
-# the watcher in the background, so a stop (TERM) can end it too
-# shellcheck disable=SC2086
-"$cli" "$@" watch "${AGENT_MAILBOX_REWAKE_INTERVAL:-120}" "${AGENT_MAILBOX_REWAKE_MAX:-86100}" $ex > "$run/out" 2>&1 &
-child=$!; echo "$child" > "$run/child"
-wait "$child"; rc=$?; child=""
-case $rc in
-  0)
-    rm -f "$run/error"
-    sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
-    c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
-    { echo "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
-    exit 2 ;;
-  2)
-    echo "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
-    exit 2 ;;
-  *)
-    # a signal ended it (a stop, a time limit, the system): nothing to report
-    [ "$rc" -le 128 ] || exit 0
-    # the same error again at the next turn end doesn't wake the session again
-    err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ')"
-    [ "$err" = "$(cat "$run/error" 2>/dev/null)" ] && exit 0
+iv=${AGENT_MAILBOX_REWAKE_INTERVAL:-120} max=${AGENT_MAILBOX_REWAKE_MAX:-86100} start=$(date +%s)
+while :; do
+  left=$(( max - ($(date +%s) - start) )); [ "$left" -ge 1 ] || left=1
+  # the watcher in the background, so a stop (TERM) can end it too
+  # shellcheck disable=SC2086
+  "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
+  child=$!; echo "$child" > "$run/child"
+  wait "$child"; rc=$?; child=""
+  case $rc in
+    0)
+      here || exit 0
+      rm -f "$run/error"
+      sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
+      c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
+      { echo "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
+      exit 2 ;;
+    2)
+      rm -f "$run/error"
+      echo "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
+      exit 2 ;;
+  esac
+  # a signal ended it (a stop, a time limit, the system): nothing to report
+  [ "$rc" -le 128 ] || exit 0
+  # it can't go on: say so once per distinct error, then retry quietly every interval until the day's limit
+  err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ')"
+  if [ "$err" != "$(cat "$run/error" 2>/dev/null)" ]; then
     printf '%s' "$err" > "$run/error"
-    echo "agent-mailbox: the watcher for $name can't go on ($err). It stays off until this changes; tell your human." >&2
-    exit 2 ;;
-esac
+    echo "agent-mailbox: the watcher for $name can't go on ($err). It keeps retrying quietly; tell your human." >&2
+    exit 2
+  fi
+  [ $(( $(date +%s) - start )) -lt "$max" ] || {
+    echo "agent-mailbox: the watcher for $name reached its daily limit, still failing ($err); it starts again at this turn's end." >&2
+    exit 2; }
+  sleep "$iv" & child=$!; wait "$child"; child=""
+done
