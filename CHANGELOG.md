@@ -46,6 +46,9 @@ First version.
 - **Fix:** every value the CLI validates goes through `printf`, not `echo`, and no value with a line break or
   carriage return passes; under dash and macOS's `/bin/sh`, `echo` read backslash escapes, so a value could pass
   validation cut short.
+- **`sent [<to>]`** lists the mail you sent that's still in a recipient's inbox, oldest first, with its age, its
+  `needs`, and `stale` once it's unconsumed after 24 hours, so a sender can raise stale mail as `PROTOCOL.md` asks.
+  A message counts when its file name and its `from:` header both name you; signatures aren't checked (#30).
 - **Retiring** clears this session's watch marker, and acting as a retired agent says how to come back.
 - **Fix:** `doctor` runs every check when a path contains `'`, and flags a malformed adapter name; error messages
   print values as given; a message body file, or an `--except`/`--consume`/`--in-reply-to` value, may start with `-`;
@@ -97,6 +100,19 @@ First version.
   says how to restore the record, instead of republishing it under your signature; `update` never
   pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
   as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
+- **Fix:** in a store that requires signatures, `send` also refuses before changing anything when your registry record
+  names no key, or a different key from yours. Before, it sent the message unsigned or with a signature that didn't
+  verify, and removed the mail it consumed. In a store that doesn't require signatures, such a send now goes unsigned,
+  with a warning, instead of carrying a signature that doesn't verify. A key with a passphrase needs its `.pub` beside
+  it for that check: without one, a strict store refuses and says how to restore it, and an open store sends unsigned.
+  A signed message's signature, and a newly registered record's, is in place before the file appears, so no reader
+  sees it unsigned; a signing that fails leaves no message behind, and an update that fails keeps the record with the
+  signature it had. A signature that doesn't verify against your registry record's key is never published, and
+  `register --key` refuses a `.pub` that isn't the public half of the private key beside it. Writes don't follow a
+  link left at a temporary file's name, and never publish one; `send` refuses a recipient's `.keep` that's a link. A
+  record or `.sig` path that's a folder is refused instead of having the file moved into it. `consume` and `send
+  --consume` refuse an inbox reached through a symlink. Signing now reads the message on stdin: with no terminal, a
+  key with a passphrase needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (#40).
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
