@@ -37,7 +37,7 @@ alive && exit 0
 # session, or the watcher it starts, counts) before asking for a re-arm. Where it has declined (a Claude Code too old
 # for it or headless, or one whose version it can't find) it leaves a `declined` note, and this blocks at once
 rewaking() {
-  set -- $(cat "$state/rewake/$name/pid" 2>/dev/null); rp=${1:-}
+  set -- $(cat "$state/rewake/$name/$sid/pid" 2>/dev/null); rp=${1:-}
   case "$rp" in ''|*[!0-9]*) return 1 ;; esac
   [ "${2:-}" = "$sid" ] || return 1
   [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
@@ -45,7 +45,7 @@ rewaking() {
   if [ -r "/proc/$rp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$rp/cmdline"); else a=$(ps -p "$rp" -o args= 2>/dev/null); fi
   case "$a" in *claude-rewake.sh*) return 0 ;; *) return 1 ;; esac
 }
-n=0; [ ! -f "$state/rewake/$name/declined" ] || n=3
+n=0; [ ! -f "$state/rewake/$name/$sid/declined" ] || n=3
 while [ $n -lt 3 ]; do rewaking && exit 0; sleep 1; alive && exit 0; n=$((n+1)); done
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
