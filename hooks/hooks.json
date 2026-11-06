@@ -3,6 +3,7 @@
     "Stop": [
       {
         "hooks": [
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-rewake.sh\"", "asyncRewake": true, "timeout": 86400 },
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-watch-guard.sh\"" }
         ]
       }

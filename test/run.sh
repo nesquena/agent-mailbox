@@ -9,7 +9,8 @@ CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
-  AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID
+  AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
+  AI_AGENT
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
@@ -470,6 +471,86 @@ if PATH=$NOPATH command -v jq >/dev/null 2>&1; then
 else
   sk "the Claude Code Stop hook (no jq)"
 fi
+
+echo "== the Claude Code asyncRewake hook (dir)"
+T="$W/rewake"; P="$T/plug 'in'"; mkdir -p "$P/hooks"
+cp "$ROOTDIR/hooks/claude-rewake.sh" "$ROOTDIR/hooks/claude-watch-guard.sh" "$P/hooks/"; ln -s "$ROOTDIR/bin" "$P/bin"
+for a in rw rx; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as rw init >/dev/null; for a in rw rx; do as $a register --kind t --about t --no-key >/dev/null; done
+RS="$W/home-rw/.local/state/agent-mailbox"
+# rewake <session id> [VAR=value...]: what the hook prints on stderr (its exit code kept), run as Claude Code 2.1.318
+# runs it (AI_AGENT names the version), in rw's home, with a 1 s interval and a 2 s limit
+rewake() { s=$1; shift; printf '{"session_id":"%s"}' "$s" | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= \
+  AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+  AI_AGENT=claude-code_2-1-318_harness AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=2 "$@" \
+  "$SH" "$P/hooks/claude-rewake.sh" 2>&1 >/dev/null; }
+# up <pid file>: wait up to 5 s for <pid file> to name a live process
+up() { n=0; while [ $n -lt 5 ]; do p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && return 0
+  sleep 1; n=$((n+1)); done; return 1; }
+expect "it does nothing in a session that never ran watch" 0 '^$' rewake r1
+HOME="$W/home-rw" AGENT_MAILBOX_SESSION=r1 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
+mkdir -p "$RS/sessions/sub"; cp "$RS/sessions/r1" "$RS/sessions/sub/r1"
+expect "or for a session id holding a /" 0 '^$' rewake sub/r1
+expect "or for a session id of .." 0 '^$' rewake ..
+expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1
+echo hi | as rx send rw rw-1 - >/dev/null 2>&1
+# a Claude Code older than 2.1.69 would run the hook as an ordinary Stop hook, so it exits at once there, mail or not
+rm -f "$RS/run/rw.pid"
+expect "on Claude Code 2.1.68 it exits at once, silently" 0 '^$' rewake r1 AI_AGENT=claude-code_2-1-68_harness
+expect "without starting a watcher" 1 - test -e "$RS/run/rw.pid"
+expect "as it does when it can't tell the version" 0 '^$' rewake r1 AI_AGENT=
+if command -v node >/dev/null 2>&1; then
+  # an older Claude Code ran under node; this stand-in answers --version like its cli.js, and otherwise runs a script
+  mkdir -p "$T/cc"; printf '%s\n' "if (process.argv.includes('--version')) { console.log(process.env.CCV + ' (Claude Code)'); process.exit(0) }" \
+    "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$T/cc/cli.js"
+  printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' > "$T/cc/stop.sh"
+  N=$(command -v node); case "$N" in (/*) ;; (*) N="$(pwd -P)/$N" ;; esac
+  # ccstop <version>: the Stop hook as that Claude Code under node starts it, without AI_AGENT
+  ccstop() { env CCV="$1" RH="$W/home-rw" RSH="$SH" RHOOK="$P/hooks/claude-rewake.sh" AI_AGENT= XDG_CONFIG_HOME= XDG_STATE_HOME= \
+    AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=2 "$N" "$T/cc/cli.js" "$T/cc/stop.sh"; }
+  expect "a Claude Code under node below 2.1.69 is told by asking it" 0 '^$' ccstop 2.1.68
+  expect "and at 2.1.69 it watches" 2 "new mail for rw" ccstop 2.1.69
+  rm -f "$RS/rewake/rw/woke"
+else sk "a Claude Code under node is told by asking it (no node)"; fi
+r=$(rewake r1); rc=$?
+case "$rc $r" in ("2 agent-mailbox: new mail for rw. Read it: "*"--as rw read"*rw-1.md*) ok "new mail wakes the session with the listing" ;;
+  (*) no "new mail wakes the session with the listing" "$rc $r" ;; esac
+c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
+expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd / && HOME='$W/home-rw' $c"
+expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
+echo hi | as rx send rw rw-2 - >/dev/null 2>&1
+r=$(rewake r1); rc=$?
+case "$rc $r" in (*rw-1.md*) no "new mail beside old wakes it with only the new" "$rc $r" ;;
+  ("2 "*rw-2.md*) ok "new mail beside old wakes it with only the new" ;; (*) no "new mail beside old wakes it with only the new" "$rc $r" ;; esac
+as rw consume "$(as rw list | grep rw-1)" >/dev/null
+rewake r1 >/dev/null
+expect "consumed mail drops off its list" 1 - grep -q rw-1 "$RS/rewake/rw/woke"
+expect "mail still in the inbox stays on it" 0 - grep -q rw-2 "$RS/rewake/rw/woke"
+# a stale pid file naming a live process that isn't the hook (a pid reused after a restart) doesn't stop it
+sleep 30 & sp=$!; echo "$sp" > "$RS/rewake/rw/pid"
+expect "a pid file naming another process doesn't count" 2 "daily limit" rewake r1
+kill "$sp" 2>/dev/null
+# the real turn end: both hooks start together, and the guard waits for the rewake hook instead of asking for a re-arm
+rm -f "$RS/run/rw.pid"
+rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 > "$T/bg.out" & bg=$!
+if command -v jq >/dev/null 2>&1; then
+  g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= "$SH" "$P/hooks/claude-watch-guard.sh")
+  [ -z "$g" ] && ok "the Stop guard lets the stop through while the rewake hook starts" || no "the Stop guard lets the stop through while the rewake hook starts" "$g"
+else sk "the Stop guard lets the stop through while the rewake hook starts (no jq)"; fi
+if up "$RS/rewake/rw/pid"; then
+  expect "a second hook for the same name exits at once" 0 '^$' rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
+  kill -TERM "$(cat "$RS/rewake/rw/pid")"; wait "$bg"; rc=$?
+  [ "$rc" = 0 ] && [ ! -s "$T/bg.out" ] && ok "a stopped hook exits 0, silently" || no "a stopped hook exits 0, silently" "exit $rc: $(cat "$T/bg.out")"
+  expect "and removes its pid file" 1 - test -e "$RS/rewake/rw/pid"
+else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
+# a watcher that can't go on (here its config is gone) says so once, then stays quiet until the error changes
+cp "$RS/session-configs/r1" "$T/conf.rec"; echo "$T/no such.cfg" > "$RS/session-configs/r1"
+expect "a watcher that can't go on wakes the session with the error" 2 "can't go on \(exit 1: .*tell your human" rewake r1
+expect "the same error again doesn't" 0 '^$' rewake r1
+cp "$T/conf.rec" "$RS/session-configs/r1"; echo hi | as rx send rw rw-3 - >/dev/null 2>&1
+expect "once it can go on, new mail wakes it again" 2 "rw-3\.md" rewake r1
+expect "and the error is forgotten" 1 - test -e "$RS/rewake/rw/error"
 
 echo "== received headers (dir)"
 T="$W/hdr"; mkdir -p "$T/store"

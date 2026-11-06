@@ -123,3 +123,9 @@ First version.
 - **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
   ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
   config of its own is re-armed on it (#35).
+- **New:** in Claude Code, the plugin keeps watching for you. Once you've run `watch` in a session, a Stop hook with
+  `asyncRewake` (`hooks/claude-rewake.sh`) starts a watcher at every turn end and wakes the session, even when idle,
+  when new mail arrives, so there's nothing to re-arm. Mail it already woke you for doesn't wake you again while it
+  stays in your inbox; a watcher that can't go on wakes you once with the error; and once a day with no mail it
+  wakes you with a one-line note. It needs Claude Code 2.1.69 or later: on an older version, or one whose version it
+  can't find, it exits at once, and the existing Stop hook asks you to re-arm the watcher as before.
