@@ -20,10 +20,11 @@ First version.
   rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
 - **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
   `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
-  pinned it (its registry record removed, or with a header that doesn't close), still holds, and until you `trust`
-  the new key that includes holds the sender has since released; and `holds` stops with an error if it can't reach
-  the store or read its full history. After `trust` accepts a changed key, mail signed with the old key (holds
-  included) no longer counts: before trusting, ask the sender to re-send any hold it still means (#23).
+  pinned it (its registry record removed, with a header that doesn't close, or its key no longer reads as a plain
+  key), still holds, and until you `trust` the new key that includes holds the sender has since released; and
+  `holds` stops with an error if it can't reach the store or read its full history. After `trust` accepts a changed
+  key, mail signed with the old key (holds included) no longer counts: before trusting, ask the sender to re-send any
+  hold it still means (#23).
 - **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
   version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
 - **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
@@ -73,7 +74,7 @@ First version.
 - **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators and
   tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
   overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose first `=`
-  comes after nothing but non-ASCII characters is indented, and a message's last line always ends before its end
+  comes after nothing but non-printing characters is indented, and a message's last line always ends before its end
   marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
   bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
   `misrouted`, as `read` does (#22).
@@ -120,6 +121,23 @@ First version.
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
+- **`send` refuses obvious secrets:** a body file in `~/.ssh` or the CLI's config or state folder (as named, or at
+  any link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
+  signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the
+  end (a name holding a newline, or folder links nested more than 8 deep), and a body (file or
+  stdin) holding a private-key block (`-----BEGIN ... PRIVATE KEY`, or a PuTTY key), are refused with exit 1 before anything is
+  written; the error names the folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee.
+  The state folder holds the git adapter's copy of the store, so to forward a message you received, copy its text
+  into a new file first; to send part of a file from one of those folders on purpose, copy that part the same way
+  (#26).
+- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
+  the `--` is), instead of refusing it as an unknown option (#26).
+- **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
+  `misrouted` by path too, as it does by name and in `read` (#26).
+- **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be
+  wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
+  `setup`, `update` or `consume`, and `holds <item> --version <v>` exit 0 means every sender who wrote released
+  `<v>`, not that a particular one did (#26).
 - **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
   ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
   config of its own is re-armed on it (#35).
