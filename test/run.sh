@@ -604,10 +604,6 @@ exec "%s" "$@"
   dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp 1" > "$LK/$id/owner"
   expect "a lock left by a process that exited is taken over" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the stale lock is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
-  # and one with no owner record, over a minute old (its command cut off before it wrote one)
-  mkdir -p "$LK/$id"; touch -t 202001010000 "$LK/$id"
-  expect "an ownerless lock over a minute old is taken over" 0 "sa2-c-1" sa sa1 list
-  [ ! -e "$LK/$id" ] && ok "and released after" || no "the old ownerless lock is still there" "$(ls -A "$LK/$id" 2>/dev/null)"
   sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp 1" > "$LK/$id/owner"
   expect "so is one whose pid now names another process" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the lock of a reused pid is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
@@ -630,17 +626,23 @@ exec "%s" "$@"
   [ $r = 0 ] && [ "$(cat "$T/order" | tr '\n' ' ')" = "first second " ] &&
     ok "a command waits while another holds the lock, then goes ahead" ||
     no "a command didn't wait for the lock (exit $r; finished: $(cat "$T/order" | tr '\n' ' '))" "$(cat "$T/w.err")"
+  # a waiter stopped by a signal exits at once, and leaves the holder's lock alone
+  rm -f "$T/slow"; ( PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow"; export PATH SLOWFETCH; sa sa1 list >/dev/null 2>&1 ) & hp=$!
+  up "$T/slow"; sa sa2 list >/dev/null 2>&1 & qp=$!; sleep 0.6; kill -TERM "$qp"; t0=$(date +%s); wait "$qp"; r=$?; t1=$(date +%s)
+  [ $r = 143 ] && [ $((t1 - t0)) -le 2 ] && [ -f "$LK/$id/owner" ] && ok "a waiter stopped by a signal exits at once, leaving the lock" ||
+    no "a stopped waiter (exit $r, $((t1 - t0)) s) or the holder's lock went wrong" "$(ls -A "$LK" 2>&1)"
+  wait "$hp"
   # signalled while holding it, a command still releases it
   rm -f "$T/slow"; PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list >/dev/null 2>&1 &
   lp=$!; up "$T/slow"; kill -TERM "$lp"; wait "$lp"; r=$?
   [ $r = 143 ] && [ ! -e "$LK/$id" ] && ok "a command stopped by a signal releases the lock" ||
     no "a stopped command (exit $r) left its lock" "$(cat "$LK/$id/owner" 2>/dev/null)"
-  # a fresh lock with no owner record (one being made) isn't taken over: the waiter gives up, naming it (a date on
-  # PATH makes time fly)
+  # a lock with no owner record, however old (it may be one being made), isn't taken over: the waiter gives up,
+  # naming it (a date on PATH makes time fly)
   mkdir -p "$W/fastdate"; printf '%s\n' '#!/bin/sh' \
     '[ "$1" = +%s ] || exec '"'$(command -v date)'"' "$@"' 'n=$(cat "$DATEN" 2>/dev/null || echo 0); echo $((n + 1)) > "$DATEN"' \
     "echo \$(( \$('$(command -v date)' +%s) + n * 100 ))" > "$W/fastdate/date"; chmod +x "$W/fastdate/date"
-  mkdir -p "$LK/$id"; rm -f "$T/daten"
+  mkdir -p "$LK/$id"; touch -t 202001010000 "$LK/$id"; rm -f "$T/daten"
   expect "a lock held too long makes a waiter give up, naming the lock" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*left no record" \
     env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list
   rmdir "$LK/$id"

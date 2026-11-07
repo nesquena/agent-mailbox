@@ -66,9 +66,10 @@ ad_attrs() {
 # start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
 # AD_LOCK_WAIT seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break folder
 # (below) can land in it as it goes.
-# A lock with no owner record (its command cut off between mkdir and writing the record) counts as gone once it is a
-# minute old; a younger one may be one being made.
-# ceiling: three or more commands taking over two dead owners' locks in a row could, in a window of a few system calls,
+# Signals wait while a command takes the lock and writes its record, so a stopped command never leaves a lock with no
+# record.
+# ceiling: a lock with no record (its command killed outright between mkdir and writing it) is never taken over, since
+# it can't be told from one being made; waiters give up, and the error says to remove it. And three or more commands taking over two dead owners' locks in a row could, in a window of a few system calls,
 # let one remove a live lock; owners only die that way when killed outright
 AD_LOCK_WAIT=120
 # ad_born <pid>: when that process started (a token), or nothing when there's no such process or it's a zombie
@@ -97,8 +98,10 @@ ad_lock() {
   [ -z "${AD_LOCK:-}" ] || return 0
   l="$STATE/locks/$STORE_ID" t0=$(date +%s)
   mkdir -p "$STATE/locks" || die "can't create $STATE/locks"
-  b=$(ad_born $$); AD_ME="$$ ${b:--}"
+  b=$(ad_born $$); AD_ME="$$ ${b:--}" AD_SIG=
+  trap 'AD_SIG=129' HUP; trap 'AD_SIG=130' INT; trap 'AD_SIG=143' TERM
   until mkdir "$l" 2>/dev/null; do
+    [ -z "$AD_SIG" ] || exit "$AD_SIG"
     if [ ! -d "$l" ]; then
       # (gone again already: try once more; still not there means it can't be made)
       mkdir "$l" 2>/dev/null && break
@@ -108,24 +111,30 @@ ad_lock() {
     [ $(( $(date +%s) - t0 )) -lt "$AD_LOCK_WAIT" ] ||
       die "gave up after ${AD_LOCK_WAIT}s waiting for $l (held by ${o:+process ${o%% *}}${o:-a command that left no record}): if no agent-mailbox command is still running, remove that folder, then run this again"
     # a record naming this process, which doesn't hold the lock, was left by a part of it that was cut off
-    if [ -n "$o" ] && { [ "$o" = "$AD_ME" ] || ! ad_held "$o"; }; then ad_break "$l" "$o"
-    elif [ -z "$o" ] && [ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ]; then ad_break "$l" ""; fi
+    if [ -n "$o" ] && { [ "$o" = "$AD_ME" ] || ! ad_held "$o"; }; then ad_break "$l" "$o"; fi
     sleep 0.2
   done
   AD_LOCK=$l
   { printf '%s\n' "$AD_ME" > "$l/owner.$$" && mv -f "$l/owner.$$" "$l/owner"; } || die "can't write $l/owner"
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+  [ -z "$AD_SIG" ] || exit "$AD_SIG"
 }
-# ad_unlock [<exit status>]: release the lock; after a command that failed once its sync was done, first drop what it
-# wrote and didn't commit (its commits, and a rebase it was cut off in, are kept for the next command to publish). The
-# statuses that only report (no mail, not released, not verified, a watch's time limit) wrote nothing
+# ad_unlock [<exit status>]: release the lock; after a command that failed and left the clone changed (files it wrote
+# and didn't commit, or a rebase it was cut off in), first put the clone back to its last commit: its commits are kept
+# for the next command to publish
 ad_unlock() {
   [ -n "${AD_LOCK:-}" ] || return 0
-  case ${1:-0} in (0|2|3|5|6) ;; (*) [ -z "${AD_SYNCED:-}" ] || { ad_git rebase --abort >/dev/null 2>&1; ad_restore "$(ad_head)"; } ;; esac
+  [ "${1:-0}" = 0 ] || [ -z "${AD_DIR:-}" ] || [ ! -d "$AD_DIR/.git" ] || ! ad_changed || ad_tidy
   o=$(cat "$AD_LOCK/owner" 2>/dev/null) || o=
   { [ -n "$o" ] && [ "$o" != "$AD_ME" ]; } || ad_drop "$AD_LOCK"
-  AD_LOCK= AD_SYNCED=
+  AD_LOCK=
 }
 ad_head() { ad_git rev-parse -q --verify HEAD || echo -; }
+# ad_changed: the clone holds something besides its last commit (files, or a rebase in progress)
+ad_changed() { [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ] ||
+  [ -n "$(ad_git status --porcelain --ignored 2>/dev/null)" ]; }
+# ad_tidy: the clone as of its last commit, nothing else (a rebase in progress aborted first)
+ad_tidy() { ad_git rebase --abort >/dev/null 2>&1; ad_restore "$(ad_head)"; }
 # ad_restore <commit, or - for none>: the branch, index and files exactly as of that commit, and nothing else in the tree
 ad_restore() {
   if [ "$1" = - ]; then ad_git update-ref -d HEAD; ad_git read-tree --empty
@@ -215,14 +224,13 @@ ad_push() {
 }
 
 ad_sync() {
-  ad_restore "$(ad_head)"
+  ad_tidy
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
     ad_push || { warn "written locally, not published ($AD_ERR); re-run any command to publish it, don't resend"; exit 4; }
   fi
-  AD_SYNCED=1
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else

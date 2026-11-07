@@ -236,7 +236,7 @@ load_adapter() {
   . "$LIB_DIR/$ADAPTER.sh"
   # the lock is released, and a failed command's writes undone, on every exit; a signal exits so that this runs
   # (the lock state starts empty, whatever the environment holds; a signal during the release can't cut it short)
-  AD_LOCK= AD_SYNCED=
+  AD_LOCK= AD_DIR=
   trap 'rc=$?; trap "" HUP INT TERM; ad_unlock "$rc"' EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
   ad_lock
   ad_open
