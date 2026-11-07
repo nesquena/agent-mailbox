@@ -6,7 +6,13 @@
 # - Never `git pull`: it reads FETCH_HEAD, which a watcher fetching in the same clone can rewrite mid-pull. Fetch
 #   into origin/<branch> explicitly, then rebase onto that ref.
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
-# - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
+# - Every command using one state folder (names sharing a HOME, a watcher and a send) works in the same clone, so each
+#   holds a lock on it from before it opens the clone until it exits (ad_lock). watch holds it only while it looks.
+# - A command that fails after its sync (a push the store still refuses after the retries, or any error once it has
+#   written files) puts the clone back as its sync left it, so no later command shows or publishes what it wrote. Each
+#   sync also starts from the clone's last commit, dropping files a command cut off part-way left behind.
+# - A commit left unpublished (by a command cut off between commit and push, or an older version) is published by the
+#   next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
 # - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
 #   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
@@ -51,6 +57,64 @@ ad_attrs() {
   [ ! -f "$af" ] || IFS= read -r al < "$af"
   [ "$al" = "$AD_ATTRS" ] && return 1
   ad_attrs_put "${1:-}" || die "can't write $af"
+}
+
+# The lock is a folder (mkdir is atomic everywhere; macOS has no flock) holding its owner's record: "<pid> <start>", the
+# start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
+# AD_LOCK_WAIT seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break folder
+# (below) can land in it as it goes.
+# ceiling: a lock with no owner record (its command killed between mkdir and writing the record) is never taken over,
+# since a waiter can't tell it from one being made; the waiter's error says to remove it. And three or more commands
+# taking over two dead owners' locks in a row could, in a window of a few system calls, let one remove a live lock;
+# owners only die that way when killed outright
+AD_LOCK_WAIT=120
+# ad_born <pid>: when that process started (a token), or nothing when there's no such process or it's a zombie
+ad_born() {
+  if [ -r "/proc/$1/stat" ]; then sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '$1 != "Z" { print $20 }'
+  else ps -o stat= -o lstart= -p "$1" 2>/dev/null | awk '$1 !~ /^Z/ { $1 = ""; sub(/^ +/, ""); print }'; fi; }
+# ad_held <owner record>: its owner still runs (with no start recorded, as where neither /proc nor ps can tell, a live
+# pid counts)
+ad_held() { op=${1%% *} os=${1#* }
+  case $op in (''|*[!0-9]*) return 1 ;; esac
+  if [ "$os" = - ]; then kill -0 "$op" 2>/dev/null; else [ "$(ad_born "$op")" = "$os" ]; fi; }
+ad_drop() { g="$1.gone.$$"; rm -rf "$g"; mv "$1" "$g" 2>/dev/null && rm -rf "$g"; }
+# ad_break <lock> <owner record>: remove a lock whose owner is gone, if the record still names it; the break folder
+# keeps two waiters from doing it at once
+ad_break() { mkdir "$1/break" 2>/dev/null || return
+  if [ "$(cat "$1/owner" 2>/dev/null)" = "$2" ]; then ad_drop "$1"; else rmdir "$1/break" 2>/dev/null; fi; }
+ad_lock() {
+  [ -z "${AD_LOCK:-}" ] || return 0
+  l="$STATE/locks/$STORE_ID" t0=$(date +%s)
+  mkdir -p "$STATE/locks" || die "can't create $STATE/locks"
+  b=$(ad_born $$); AD_ME="$$ ${b:--}"
+  until mkdir "$l" 2>/dev/null; do
+    o=$(cat "$l/owner" 2>/dev/null) || o=
+    # a record naming this process, which doesn't hold the lock, was left by a part of it that was cut off
+    if [ -n "$o" ] && { [ "$o" = "$AD_ME" ] || ! ad_held "$o"; }; then ad_break "$l" "$o"
+    elif [ $(( $(date +%s) - t0 )) -ge "$AD_LOCK_WAIT" ]; then
+      [ -d "$l" ] || die "can't create $l"
+      die "gave up after ${AD_LOCK_WAIT}s waiting for $l (held by ${o:+process ${o%% *}}${o:-a command that left no record}): if no agent-mailbox command is still running, remove that folder, then run this again"
+    fi
+    sleep 0.2
+  done
+  AD_LOCK=$l
+  { printf '%s\n' "$AD_ME" > "$l/owner.$$" && mv -f "$l/owner.$$" "$l/owner"; } || die "can't write $l/owner"
+}
+# ad_unlock [<exit status>]: release the lock; after a command that failed (a non-zero status) once its sync was done,
+# first put the clone back as that sync left it
+ad_unlock() {
+  [ -n "${AD_LOCK:-}" ] || return 0
+  [ "${1:-0}" = 0 ] || [ -z "${AD_BASE:-}" ] || ad_restore "$AD_BASE"
+  o=$(cat "$AD_LOCK/owner" 2>/dev/null) || o=
+  { [ -n "$o" ] && [ "$o" != "$AD_ME" ]; } || ad_drop "$AD_LOCK"
+  AD_LOCK= AD_BASE=
+}
+ad_head() { ad_git rev-parse -q --verify HEAD || echo -; }
+# ad_restore <commit, or - for none>: the branch, index and files exactly as of that commit, and nothing else in the tree
+ad_restore() {
+  if [ "$1" = - ]; then ad_git update-ref -d HEAD; ad_git read-tree --empty
+  else ad_git reset -q --hard "$1"; fi 2>/dev/null
+  ad_git clean -fdqx 2>/dev/null
 }
 
 ad_open() {
@@ -123,23 +187,26 @@ ad_pull() {
   fi
 }
 
+# ad_push: publish HEAD; on failure, AD_ERR says why
 ad_push() {
   n=0
   until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
     n=$((n+1))
-    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run any command to publish it, don't resend"; exit 4; }
+    [ $n -lt 10 ] || { AD_ERR="push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)"; return 1; }
     ad_jitter
-    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run any command, don't resend"; exit 4; }
+    rerr=$(ad_pull) || { AD_ERR=$(printf '%s\n' "$rerr" | ad_gist); return 1; }
   done
 }
 
 ad_sync() {
+  ad_restore "$(ad_head)"
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
-    ad_push
+    ad_push || { warn "written locally, not published ($AD_ERR); re-run any command to publish it, don't resend"; exit 4; }
   fi
+  AD_BASE=$(ad_head)
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
@@ -153,7 +220,7 @@ ad_commit() {
   ad_git add -A -f -- $keep || die "git add failed"
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
-  ad_push
+  ad_push || die "not published ($AD_ERR); nothing was kept, so run the command again"
 }
 
 # a cheap token that changes whenever the store changes: the branch tip, from one small network round trip

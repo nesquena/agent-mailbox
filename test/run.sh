@@ -495,7 +495,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # two first commands setting up one clone at once: the one that loses (here another clone appears just before its
   # move) keeps the winner's checkout, which still holds what was sent through it, and leaves no copy of its own
   mkdir -p "$T/racemv"; printf '#!/bin/sh
-for a; do d=$a; done; case $1 in (*/checkouts/.*) [ ! -d "$1/.git" ] || { [ -e "$d" ] || cp -R "$1" "$d"; echo kept > "$d/winner"; } ;; esac
+for a; do d=$a; done; case $1 in (*/checkouts/.*) [ ! -d "$1/.git" ] || { [ -e "$d" ] || cp -R "$1" "$d"; echo kept > "$d/.git/winner"; } ;; esac
 exec "%s" "$@"
 ' \
     "$(command -v mv)" > "$T/racemv/mv"; chmod +x "$T/racemv/mv"
@@ -503,7 +503,7 @@ exec "%s" "$@"
   env PATH="$T/racemv:$PATH" HOME="$W/home-p7" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
   for C in "$W/home-p7/.local/state/agent-mailbox/checkouts/"*; do :; done
   CK="$W/home-p7/.local/state/agent-mailbox/checkouts"
-  [ -f "$C/winner" ] && [ -z "$(ls -A "$C" | grep '^\.[0-9a-f]*\.[0-9]*$')" ] && [ -z "$(ls -A "$CK" | grep '^\.')" ] &&
+  [ -f "$C/.git/winner" ] && [ -z "$(ls -A "$C" | grep '^\.[0-9a-f]*\.[0-9]*$')" ] && [ -z "$(ls -A "$CK" | grep '^\.')" ] &&
     ok "a setup that loses a race keeps the other's checkout and leaves no copy" ||
     no "a lost setup race removed the other's checkout or left a copy" "$(ls -A "$C" "$CK")"
 
@@ -573,7 +573,103 @@ exec "%s" "$@"
       ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-g3/.config/agent-mailbox/keys/g3" "$f" &&
       git add -A && git commit -qm inject && git push -q origin HEAD:main)
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
-  fi ;;
+  fi
+
+  echo "== git: names sharing one state folder (one HOME, a config each)"
+  T="$W/shared"; mkdir -p "$T"; S="$T/store.git"; git init -q --bare "$S"; SH_H="$W/home-shared"; echo body > "$T/body"
+  # sa <name> <args...>: the CLI as <name>, with its own config file, in a HOME the other names use too
+  sa() { n=$1; shift; HOME="$SH_H" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/$n.cfg" "$@"; }
+  for a in sa1 sa2; do sa $a setup --store "$S" --name $a >/dev/null; done
+  sa sa1 init >/dev/null; k=--no-key; [ -z "$SSH" ] || k=
+  for a in sa1 sa2; do sa $a register --kind t --about t $k >/dev/null 2>&1; done
+  CK="$SH_H/.local/state/agent-mailbox/checkouts" LK="$SH_H/.local/state/agent-mailbox/locks"
+  id=$(ls "$CK"); C="$CK/$id"
+  # tidy: the shared clone holds nothing but the store's files, and its HEAD is on the store
+  tidy() { [ -z "$(git -C "$C" status --porcelain --ignored)" ] &&
+    git --git-dir="$S" merge-base --is-ancestor "$(git -C "$C" rev-parse HEAD)" main; }
+  for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
+    for i in 1 2 3 4; do ( echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
+  wait
+  got=$(git --git-dir="$S" ls-tree -r --name-only main | sed -n 's/.*Z-\(sa[12]-c-[1-4]\)\.md$/\1/p' | sort)
+  [ ! -s "$T/c.fail" ] && [ "$(printf '%s\n' "$got" | uniq | wc -l | tr -d ' ')" = 8 ] && [ -z "$(printf '%s\n' "$got" | uniq -d)" ] &&
+    ok "2 names x 4 concurrent sends in one state folder: all sent, each delivered once" ||
+    no "concurrent sends in one state folder: $(wc -l < "$T/c.fail" 2>/dev/null || echo 0) failed" "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null)"
+  tidy && ok "and the shared clone is left tidy" || no "concurrent sends left the shared clone untidy" "$(git -C "$C" status --porcelain --ignored)"
+  [ "$(sa sa1 list | grep -c 'sa2-c-')" = 4 ] && [ "$(sa sa2 list | grep -c 'sa1-c-')" = 4 ] &&
+    ok "and each name lists exactly its four" || no "a name lists other than its four" "$(sa sa1 list; sa sa2 list)"
+  [ ! -e "$LK/$id" ] && ok "and no lock is left" || no "a lock was left behind" "$(ls -A "$LK")"
+
+  # a lock whose owner is gone is taken over: an exited process, or a pid now running something else
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp 1" > "$LK/$id/owner"
+  expect "a lock left by a process that exited is taken over" 0 "sa2-c-1" sa sa1 list
+  [ ! -e "$LK/$id" ] && ok "and released after" || no "the stale lock is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
+  sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp 1" > "$LK/$id/owner"
+  expect "so is one whose pid now names another process" 0 "sa2-c-1" sa sa1 list
+  [ ! -e "$LK/$id" ] && ok "and released after" || no "the lock of a reused pid is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+
+  # a git on PATH whose fetch, with SLOWFETCH set, first says so and pauses; whose commit, with FAILCOMMIT set, fails
+  real_git=$(command -v git); mkdir -p "$W/slowgit"; printf '%s\n' '#!/bin/sh' \
+    'case " $* " in (*" fetch "*) [ -z "${SLOWFETCH:-}" ] || { : > "$SLOWFETCH"; sleep 3; } ;; esac' \
+    'case " $* " in (*" commit "*) [ -z "${FAILCOMMIT:-}" ] || exit 1 ;; esac' "exec '$real_git' \"\$@\"" > "$W/slowgit/git"
+  chmod +x "$W/slowgit/git"
+  # up <file>: wait up to 10 s for it to exist
+  up() { n=0; while [ ! -e "$1" ] && [ $n -lt 50 ]; do sleep 0.2; n=$((n+1)); done; [ -e "$1" ]; }
+  rm -f "$T/order" "$T/slow"
+  ( PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow"; export PATH SLOWFETCH; sa sa1 list >/dev/null 2>&1; echo first >> "$T/order" ) &
+  up "$T/slow"; echo w | sa sa2 send sa1 waited - >/dev/null 2>"$T/w.err"; r=$?; echo second >> "$T/order"; wait
+  [ $r = 0 ] && [ "$(cat "$T/order" | tr '\n' ' ')" = "first second " ] &&
+    ok "a command waits while another holds the lock, then goes ahead" ||
+    no "a command didn't wait for the lock (exit $r; finished: $(cat "$T/order" | tr '\n' ' '))" "$(cat "$T/w.err")"
+  # signalled while holding it, a command still releases it
+  rm -f "$T/slow"; PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list >/dev/null 2>&1 &
+  lp=$!; up "$T/slow"; kill -TERM "$lp"; wait "$lp"; r=$?
+  [ $r = 143 ] && [ ! -e "$LK/$id" ] && ok "a command stopped by a signal releases the lock" ||
+    no "a stopped command (exit $r) left its lock" "$(cat "$LK/$id/owner" 2>/dev/null)"
+  # a lock with no owner record is never taken over: the waiter gives up, naming it (a date on PATH makes time fly)
+  mkdir -p "$W/fastdate"; printf '%s\n' '#!/bin/sh' \
+    '[ "$1" = +%s ] || exec '"'$(command -v date)'"' "$@"' 'n=$(cat "$DATEN" 2>/dev/null || echo 0); echo $((n + 1)) > "$DATEN"' \
+    "echo \$(( \$('$(command -v date)' +%s) + n * 100 ))" > "$W/fastdate/date"; chmod +x "$W/fastdate/date"
+  mkdir -p "$LK/$id"; rm -f "$T/daten"
+  expect "a lock held too long makes a waiter give up, naming the lock" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*left no record" \
+    env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list
+  rmdir "$LK/$id"
+
+  # watch takes the lock only to look, so others can use the clone while it waits
+  for m in $(sa sa1 list | grep '\.md$'); do sa sa1 consume "$(basename "$m")" >/dev/null; done; rm -f "$T/watch.out"; sa sa1 watch 1 30 > "$T/watch.out" 2>&1 & wp=$!
+  up "$SH_H/.local/state/agent-mailbox/run/sa1.pid"; t0=$(date +%s)
+  echo hi | sa sa2 send sa1 during-watch - >/dev/null 2>&1; r=$?; t1=$(date +%s); wait "$wp"
+  [ $r = 0 ] && [ $((t1 - t0)) -lt 10 ] && grep -q 'sa2-during-watch\.md' "$T/watch.out" &&
+    ok "a send goes ahead while a watcher in the same state folder waits, and wakes it" ||
+    no "a send waited for a watcher (exit $r, $((t1 - t0)) s)" "$(cat "$T/watch.out")"
+
+  # a write that fails leaves the clone as it was: nothing it wrote shows, nothing it removed is gone
+  q=$(sa sa1 list | grep 'sa2-during-watch'); qb=$(basename "$q")
+  ( FAILCOMMIT=1 PATH="$W/slowgit:$PATH"; export FAILCOMMIT PATH; echo x | sa sa1 send sa2 nocommit - >/dev/null 2>&1 )
+  tidy && ! sa sa2 list 2>/dev/null | grep -q nocommit && ok "a send that fails before its commit leaves nothing behind" ||
+    no "a failed send left files in the clone" "$(git -C "$C" status --porcelain --ignored)"
+  printf '#!/bin/sh\n[ ! -f "%s" ] || exit 1\n' "$T/refuse" > "$S/hooks/pre-receive"; chmod +x "$S/hooks/pre-receive"
+  : > "$T/refuse"; tip=$(git --git-dir="$S" rev-parse main)
+  expect "a send the store refuses fails, keeping nothing" 1 "not published .*nothing was kept" \
+    sa sa1 send sa2 refused "$T/body" --consume "$qb"
+  [ "$(git --git-dir="$S" rev-parse main)" = "$tip" ] && tidy && [ "$(git -C "$C" rev-parse HEAD)" = "$tip" ] &&
+    ok "and leaves no message, signature or commit in the clone" || no "a refused send left something" "$(git -C "$C" status --porcelain --ignored; git -C "$C" log --oneline -2)"
+  sa sa1 list | grep -q "$qb" && ! sa sa2 list 2>/dev/null | grep -q refused &&
+    ok "and the mail it answered is still there" || no "a refused send's writes show" "$(sa sa1 list; sa sa2 list)"
+  expect "an update the store refuses fails, keeping nothing" 1 "not published" sa sa1 update --about changed
+  tidy && [ "$(git -C "$C" rev-parse HEAD)" = "$tip" ] && grep -qx 'about: t' "$C/mailbox/agents/sa1.md" &&
+    ok "and the record is as it was" || no "a refused update changed the clone" "$(git -C "$C" status --porcelain; cat "$C/mailbox/agents/sa1.md")"
+  rm -f "$T/refuse"
+  expect "once the store takes pushes again, the send goes through" 0 "^sent " sa sa1 send sa2 refused "$T/body" --consume "$qb"
+  [ "$(sa sa2 list | grep -c 'sa1-refused\.md')" = 1 ] && ! sa sa1 list | grep -q "$qb" &&
+    ok "delivered once, the answered mail consumed" || no "the resend wasn't delivered once" "$(sa sa1 list; sa sa2 list)"
+  # files an older version or a command cut off part-way left in the clone don't show as mail
+  printf -- '---\nprotocol: 1\nfrom: sa2\nto: sa1\ntopic: ghost\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nboo\n' \
+    > "$C/mailbox/inbox/sa1/20260101T000000Z-sa2-ghost.md"
+  ! sa sa1 list | grep -q ghost && [ ! -e "$C/mailbox/inbox/sa1/20260101T000000Z-sa2-ghost.md" ] &&
+    ok "a file left in the clone that isn't on the store is dropped, not listed" || no "a leftover file in the clone was listed" "$(sa sa1 list)"
+  ;;
 esac
 
 echo "== watcher lifecycle and keys (dir)"
