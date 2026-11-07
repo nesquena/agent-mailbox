@@ -569,7 +569,8 @@ exec "%s" "$@"
   sh_home() { HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" setup \
       --store "$T/s.git" >/dev/null 2>&1; HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" \
       --config "$T/none.cfg" agents >/dev/null 2>&1
-    OC=$(ls -d "$1/.local/state/agent-mailbox/checkouts"/* | head -n 1)
+    # (the clone every command shared before is checkouts/<store id>: a nameless one's, moved there)
+    OC=$(ls -d "$1/.local/state/agent-mailbox/checkouts"/*.none | head -n 1); mv "$OC" "${OC%.none}"; OC=${OC%.none}
     mkdir -p "$OC/mailbox/inbox/pn3"; echo "$2" > "$OC/mailbox/inbox/pn3/$2.md"
     (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m "$2")
     echo x | pn pn2 send pn1 "moved-$2" - >/dev/null 2>&1; }   # the store moves on meanwhile
@@ -598,6 +599,15 @@ exec "%s" "$@"
   mv "$W/home-pername-r1/.local/state/agent-mailbox/checkouts/$id-pn2" "$W/pn2-aside"
   pb "$W/home-pername-r1" pn2 >/dev/null 2>&1; once left4 && ok "and moving it aside publishes it" ||
     no "moving the name's clone aside didn't publish the shared clone's commit" "$(git --git-dir="$T/s.git" log --oneline -3 main)"
+  # commands with no name keep a clone of their own, which a name's first command leaves alone
+  NC="$W/home-pername-r2/.local/state/agent-mailbox/checkouts"; was=$(ls -A "$NC" | tr '\n' ' ')
+  HOME="$W/home-pername-r2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
+    agents >/dev/null 2>&1
+  sed 's/^name = pn4$/name = pn5/' "$T/pn4.cfg" > "$T/pn5.cfg"
+  pb "$W/home-pername-r2" pn5 >/dev/null 2>&1
+  [ -d "$NC/$id.none/.git" ] && [ -d "$NC/$id-pn5/.git" ] && [ ! -e "$NC/$id" ] &&
+    ok "commands with no name keep a clone of their own, which a new name leaves alone" ||
+    no "a new name took the nameless clone, or none was made" "before: $was after: $(ls -A "$NC" | tr '\n' ' ')"
   # a checkouts/<store id> that isn't a clone is left alone: git doesn't reach a repository around it
   PH3="$W/home-pername3"; mkdir -p "$PH3"; git init -q --bare "$T/dot.git"
   (cd "$PH3" && git init -q -b main && git -c user.email=e@e -c user.name=e commit -q --allow-empty -m base &&
