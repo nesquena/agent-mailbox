@@ -235,7 +235,9 @@ load_adapter() {
   # shellcheck source=/dev/null
   . "$LIB_DIR/$ADAPTER.sh"
   # the lock is released, and a failed command's writes undone, on every exit; a signal exits so that this runs
-  trap 'ad_unlock $?' EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+  # (the lock state starts empty, whatever the environment holds; a signal during the release can't cut it short)
+  AD_LOCK= AD_SYNCED=
+  trap 'rc=$?; trap "" HUP INT TERM; ad_unlock "$rc"' EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
   ad_lock
   ad_open
   M="$AD_DIR/$ROOT"
@@ -733,7 +735,7 @@ watch)
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
   # (removed only while it still names this watcher: another watcher for the name may have started since)
   unmark() { [ "$(cut -d' ' -f1 "$STATE/run/$ME.pid" 2>/dev/null)" != $$ ] || rm -f "$STATE/run/$ME.pid"; }
-  trap 'rc=$?; unmark; ad_unlock "$rc"' EXIT
+  trap 'rc=$?; trap "" HUP INT TERM; unmark; ad_unlock "$rc"' EXIT
   trap 'exit 130' INT TERM
   # the wait leaves the store's local copy to other commands: only each look at the store takes the lock
   ad_unlock

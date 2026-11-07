@@ -74,14 +74,20 @@ AD_LOCK_WAIT=120
 # ad_born <pid>: when that process started (a token), or nothing when there's no such process or it's a zombie
 ad_born() {
   if [ -r "/proc/$1/stat" ]; then sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '$1 != "Z" { print $20 }'
-  else ps -o stat= -o lstart= -p "$1" 2>/dev/null | awk '$1 !~ /^Z/ { $1 = ""; sub(/^ +/, ""); print }'; fi; }
+  # (ps prints the start in the reader's own time zone and locale: fixed here, so every command reads it alike)
+  else LC_ALL=C TZ=UTC0 ps -o stat= -o lstart= -p "$1" 2>/dev/null | awk '$1 !~ /^Z/ { $1 = ""; sub(/^ +/, ""); print }'; fi; }
 # ad_held <owner record>: its owner still runs (with no start recorded, as where neither /proc nor ps can tell, a live
 # pid counts)
 ad_held() { op=${1%% *} os=${1#* }
   # (a record not of that shape, such as one cut short, is taken as held: never broken, only waited out)
   case $1 in (*' '*) ;; (*) return 0 ;; esac
   case $op in (''|*[!0-9]*) return 0 ;; esac
-  if [ "$os" = - ]; then kill -0 "$op" 2>/dev/null; else [ "$(ad_born "$op")" = "$os" ]; fi; }
+  [ "$os" != - ] || { kill -0 "$op" 2>/dev/null; return; }
+  b=$(ad_born "$op"); [ -z "$b" ] || { [ "$b" = "$os" ]; return; }
+  # no start time to compare (none could be read): gone only if the process is gone or a zombie, else held
+  kill -0 "$op" 2>/dev/null || return 1
+  st=$({ sed 's/.*) //' "/proc/$op/stat" 2>/dev/null || ps -o stat= -p "$op" 2>/dev/null; } | cut -c1)
+  [ "$st" != Z ]; }
 ad_drop() { g="$1.gone.$$"; rm -rf "$g"; mv "$1" "$g" 2>/dev/null && rm -rf "$g"; }
 # ad_break <lock> <owner record>: remove a lock whose owner is gone, if the record still names it; the break folder
 # keeps two waiters from doing it at once

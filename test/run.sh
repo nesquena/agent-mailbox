@@ -622,9 +622,11 @@ exec "%s" "$@"
   chmod +x "$W/slowgit/git"
   # up <file>: wait up to 10 s for it to exist
   up() { n=0; while [ ! -e "$1" ] && [ $n -lt 50 ]; do sleep 0.2; n=$((n+1)); done; [ -e "$1" ]; }
+  # (in different time zones and locales: a start time read through ps, where there's no /proc, reads alike for both)
   rm -f "$T/order" "$T/slow"
-  ( PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow"; export PATH SLOWFETCH; sa sa1 list >/dev/null 2>&1; echo first >> "$T/order" ) &
-  up "$T/slow"; echo w | sa sa2 send sa1 waited - >/dev/null 2>"$T/w.err"; r=$?; echo second >> "$T/order"; wait
+  ( PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow" TZ=UTC0 LC_ALL=C; export PATH SLOWFETCH TZ LC_ALL; sa sa1 list >/dev/null 2>&1
+    echo first >> "$T/order" ) &
+  up "$T/slow"; ( TZ=Asia/Tokyo; export TZ; echo w | sa sa2 send sa1 waited - >/dev/null 2>"$T/w.err" ); r=$?; echo second >> "$T/order"; wait
   [ $r = 0 ] && [ "$(cat "$T/order" | tr '\n' ' ')" = "first second " ] &&
     ok "a command waits while another holds the lock, then goes ahead" ||
     no "a command didn't wait for the lock (exit $r; finished: $(cat "$T/order" | tr '\n' ' '))" "$(cat "$T/w.err")"
@@ -674,6 +676,14 @@ exec "%s" "$@"
   ( FAILCOMMIT=1 PATH="$W/slowgit:$PATH"; export FAILCOMMIT PATH; echo x | sa sa1 send sa2 nocommit - >/dev/null 2>&1 )
   tidy && ! sa sa2 list 2>/dev/null | grep -q nocommit && ok "a send that fails before its commit leaves nothing behind" ||
     no "a failed send left files in the clone" "$(git -C "$C" status --porcelain --ignored)"
+  ( FAILCOMMIT=1 PATH="$W/slowgit:$PATH"; export FAILCOMMIT PATH; sa sa1 consume "$qb" >/dev/null 2>&1 ); r=$?
+  [ $r = 1 ] && tidy && sa sa1 list | grep -q "$qb" && ok "a consume that fails before its commit puts the mail back" ||
+    no "a failed consume (exit $r) lost the mail or left files" "$(git -C "$C" status --porcelain --ignored; sa sa1 list)"
+  # an AD_LOCK in the environment is ignored: the command takes the real lock and removes nothing else
+  mkdir -p "$T/notalock/keep" && : > "$T/notalock/keep/f"
+  expect "an AD_LOCK in the environment doesn't skip the lock or remove that path" 0 "sa2-" env AD_LOCK="$T/notalock" \
+    HOME="$SH_H" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" --config "$T/sa1.cfg" list
+  [ -f "$T/notalock/keep/f" ] && ok "and the path it named is untouched" || no "the AD_LOCK path was removed" "$(ls -A "$T/notalock" 2>&1)"
   # a signal just after the commit keeps it: the next command publishes it, once
   tip=$(git --git-dir="$S" rev-parse main)
   ( TERMAFTERCOMMIT=1 PATH="$W/slowgit:$PATH"; export TERMAFTERCOMMIT PATH; echo x | sa sa1 send sa2 termed - >/dev/null 2>&1 ); r=$?
