@@ -176,8 +176,8 @@ First version.
   stays in your inbox; while a watcher you started yourself runs, the hook leaves the watching to it; a watcher that
   can't go on wakes you once with the error and keeps retrying quietly; and once a day with no mail it wakes you
   with a one-line note. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background:
-  a session in a terminal, or one with streaming input, such as Claude Code on the web. Anywhere else (`claude -p`,
-  output to a file or pipe, an SDK run, an older version, or a version it can't confirm) it exits at once, and the
+  a session in a terminal, or Claude Code on the web. Anywhere else (`claude -p`, output to a file or pipe, an SDK
+  run or another host with streaming input, an older version, or a version it can't confirm) it exits at once, and the
   existing Stop hook asks you to re-arm the watcher as before (#51).
 - **Docs:** `docs/listening.md` sets out how any agent listens for mail, whatever its harness: what a listener must
   do (`PROTOCOL.md` section 7 now lists it), the CLI's parts for it, and the ways to build one, from a background

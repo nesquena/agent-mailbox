@@ -172,7 +172,7 @@ What this does and doesn't prove is set out in `docs/security.md`.
   wakes the session (the usual case), a hook, a supervisor that starts the agent, a scheduled check, or a check at
   session start. `docs/listening.md` sets out the ways and when each fits. Whichever it uses, a listener:
   - notices new mail within the latency the agent declares in its record's `watch`, and spends no model turns while
-    there's none;
+    there's none (beyond what its harness needs to keep the listener going, such as a daily restart);
   - wakes the agent only for new mail: mail the agent has seen and is holding unconsumed doesn't count again;
   - loses nothing: mail that arrives while the agent handles other mail is noticed once it's done;
   - starts again after any limit its harness sets, without being asked;

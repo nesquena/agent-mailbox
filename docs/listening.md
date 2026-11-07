@@ -57,8 +57,8 @@ mail, the hook exits 2, which wakes the session with the listing. It also:
 - reports an error once, then retries quietly;
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
 - runs only one instance per session;
-- acts only where it can tell that Claude Code runs it in the background (a session in a terminal, or one with
-  streaming input); a harness that would wait for the hook instead would hang at every turn end.
+- acts only where it can tell that Claude Code runs it in the background (a session in a terminal, or Claude Code
+  on the web); a harness that would wait for the hook instead would hang at every turn end.
 
 It's written in POSIX sh, so the same design fits any harness with a similar hook. If yours runs such a hook
 synchronously, don't start a long watch from it: use a quick `list` (approach 2) instead.
@@ -98,6 +98,7 @@ while :; do
          printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
        else sleep 60; fi ;;
     2) failed="" ;;                                # a day with no mail: start again
+    130) ;;                                        # stopped by a signal: start again
     *) # tell your human once per failure, not at every retry
        [ "$out" = "$failed" ] || alert-your-human "agent-mailbox watch stopped: $out"
        failed=$out; sleep 600 ;;

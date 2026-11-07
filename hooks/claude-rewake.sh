@@ -9,7 +9,7 @@
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
 # It acts only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal,
-# or one with streaming input (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
+# or the cloud's launch (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
 # for a re-arm as before.
 # One instance per session: a pid file that counts only while that pid is still this script and the Claude Code it
 # ran under is still alive (so neither a pid reused after a restart nor a hook left behind by a crash counts). Mail
@@ -97,26 +97,31 @@ ccver() {
   done
   return 1
 }
-# background: Claude Code (ccpid) runs this hook in the background. The evidence: streaming input (realtime
-# `--input-format stream-json`, or the cloud's preloaded launch, `--preload`), or an interactive session: none of the
-# options that make it headless (-p alone or in a group of short options such as -pc, --print, --init-only,
-# --sdk-url), and its output a terminal. Each argument is read on its own where /proc has them, else from the command
-# line split at spaces.
+# background: Claude Code (ccpid) runs this hook in the background. Two cases are taken as evidence:
+# - an interactive session: none of the options that make it headless (-p alone or in a group of short options such
+#   as -pc, --print, --init-only, --sdk-url), and its output a terminal;
+# - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
+#   terminal.
+# Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
+# Code reads streaming input (a later flag or `-p` can undo it), and such a host may close the input and wait for
+# Claude Code to exit, which would wait for the hook. Each argument is read on its own where /proc has them, else from
+# the command line split at spaces.
 # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line reads as -p, and the hook
-# declines; upgrade path: a field in the hook's input saying whether it runs in the background
+# declines; and a cloud launch gets its real arguments only once a session claims it, which /proc doesn't show, so
+# one claimed for a headless run would be taken as streaming. Upgrade path: a field in the hook's input saying
+# whether it runs in the background
+term() { case "$1" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac; return 1; }
 background() {
   [ -n "$ccpid" ] || return 1
   case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 1 ;; esac
   # one argument per line, a line break inside an argument (a multi-line prompt) kept apart as \001; without /proc,
   # the command line split at spaces, where a prompt's words can't be told from options, so only a terminal counts
   if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline")
-    printf '%s\n' "$av" | awk 'p && $0 == "stream-json" { f = 1 } { p = ($0 == "--input-format") }
-      $0 == "--input-format=stream-json" || $0 == "--preload" { f = 1 } END { exit !f }' && return 0
+    [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ] && ! term "$(readlink "/proc/$ccpid/fd/0" 2>/dev/null)" && return 0
   else av=$(args "$ccpid" | tr ' ' '\n'); fi
   printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
   o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
-  case "$o" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac
-  return 1
+  term "$o"
 }
 # a stop that a Stop hook already kept going (stop_hook_active) at the prompt this hook already woke the session at
 # means Claude Code waited for it: run as an ordinary Stop hook after all, so it steps aside
