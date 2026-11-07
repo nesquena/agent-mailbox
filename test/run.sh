@@ -543,6 +543,23 @@ exec "%s" "$@"
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
 
+  echo "== git: names sharing one HOME (a config each)"
+  T="$W/pername"; mkdir -p "$T"; git init -q --bare "$T/s.git"; PH="$W/home-pername"
+  pn() { n=$1; shift; HOME="$PH" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/$n.cfg" "$@"; }
+  for a in pn1 pn2 pn3 pn4; do pn $a setup --store "$T/s.git" --name $a >/dev/null; done
+  pn pn1 init >/dev/null; for a in pn1 pn2 pn3 pn4; do pn $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  # four names send at once, three times over
+  rm -f "$T/fail" "$T/err"
+  for r in 1 2 3; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
+      ( echo x | pn $a send $o "r$r" - >/dev/null 2>>"$T/err" || echo x >> "$T/fail" ) & done; wait; done
+  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[123]\.md$')
+  [ ! -s "$T/fail" ] && [ "$n" = 12 ] && ok "names sharing one HOME send at once: all 12 delivered" ||
+    no "names sharing one HOME: $(wc -l < "$T/fail" 2>/dev/null || echo 0) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
+  [ "$(ls "$PH/.local/state/agent-mailbox/checkouts" | wc -l | tr -d ' ')" = 4 ] && ok "each name has a clone of its own" ||
+    no "names don't have a clone each" "$(ls "$PH/.local/state/agent-mailbox/checkouts")"
+  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && ok "and each lists its own mail" || no "a name's list is wrong" "$(pn pn1 list)"
+
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"

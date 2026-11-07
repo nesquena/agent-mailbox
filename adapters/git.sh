@@ -60,13 +60,15 @@ ad_open() {
   # but not GIT_CONFIG, which would send this clone's own config writes to another file
   # shellcheck disable=SC2046
   unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG_')
-  AD_DIR="$STATE/checkouts/$STORE_ID"
+  # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
+  AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
+  AD_DIR="$STATE/checkouts/$AD_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
-    d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
+    d=$AD_DIR AD_DIR="$STATE/checkouts/.$AD_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it. clone itself says which it
     # is (git's message), so nothing reads the store's name any other way than clone does; any other
     # failure is an error
