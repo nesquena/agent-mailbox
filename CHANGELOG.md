@@ -191,9 +191,9 @@ First version.
   config, or a `watch` running while you send) take turns with the store's local clone instead of failing at once
   ("index.lock: File exists", "cannot lock ref"). Each holds a lock (`locks/` in the state folder) while it uses the
   clone; `watch` holds it only while it looks at the store, not while it waits. A lock whose command is gone is taken
-  over; a command that waits 120 s for one gives up, naming it.
+  over; a command that waits 120 s for one gives up, naming it (#53).
 - **Fix:** with the git adapter, a command that fails after writing files but before committing them (a git error,
   or a signal) leaves nothing in the store's local clone: no message or `.sig`, and consumed mail back in place.
   Before, those files could show in `list` and `read`, and verify, without being in the store. Each command also
   drops files that a command cut off part-way left in the clone. A push the store still refuses after the retries
-  exits 4 as before, keeping the commit for the next command to publish.
+  exits 4 as before, keeping the commit for the next command to publish (#53).
