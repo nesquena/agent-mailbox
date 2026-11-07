@@ -60,17 +60,20 @@ ad_open() {
   # but not GIT_CONFIG, which would send this clone's own config writes to another file
   # shellcheck disable=SC2046
   unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG_')
-  # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
-  AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
+  # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone;
+  # commands with no name have one of their own too (no name gives <id>.none)
+  AD_ID=$STORE_ID.none; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
-  # names shared one clone (checkouts/<store id>) before they had one each: the first name to need its own takes that
-  # one over, with any commit a command left unpublished there, for its next sync to publish; other names clone anew
+  # every command shared one clone, checkouts/<store id>, before: the first to need a clone of its own takes that one
+  # over, with any commit a command left unpublished there, for its next sync to publish; the others clone anew
   o="$STATE/checkouts/$STORE_ID"
-  if [ "$AD_ID" != "$STORE_ID" ] && [ ! -L "$o" ] && [ -d "$o/.git" ]; then
+  if [ ! -L "$o" ] && [ -d "$o/.git" ]; then
     if [ ! -e "$AD_DIR" ]; then mv "$o" "$AD_DIR" 2>/dev/null || :
-    # (a name that has its own already, when an older version run since left a commit there, is told how to take it)
+      # (a clone that appeared meanwhile has it moved inside: move it back out, for a later command)
+      [ ! -d "$AD_DIR/$STORE_ID/.git" ] || mv "$AD_DIR/$STORE_ID" "$o" 2>/dev/null || :
+    # (one that has its own already, when an older version run since left a commit there, is told how to take it)
     elif [ -n "$(ad_g --git-dir="$o/.git" rev-list -n 1 "refs/remotes/origin/$BRANCH..refs/heads/$BRANCH" 2>/dev/null)" ]
-    then warn "$o, the clone names shared before, holds a commit a command couldn't publish; to publish it, move $AD_DIR aside (if nothing in it is unpublished) and run this again"
+    then warn "$o, the clone all commands shared before, holds a commit a command couldn't publish; to publish it, move $AD_DIR aside (if nothing in it is unpublished) and run this again"
     fi
   fi
   if [ ! -d "$AD_DIR/.git" ]; then
