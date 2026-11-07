@@ -574,6 +574,7 @@ exec "%s" "$@"
     [ -d "$OC/.git" ] || { no "no nameless clone to make the shared one from" "$(ls -A "$1/.local/state/agent-mailbox/checkouts")"; return 1; }
     [ "${OC%.none}" = "$OC" ] || { mv "$OC" "${OC%.none}"; OC=${OC%.none}; }
     [ -d "$OC/.git" ] || { no "the shared clone wasn't made" "$OC"; return 1; }
+    [ -n "$2" ] || return 0   # (with no name given, a shared clone holding nothing unpublished)
     mkdir -p "$OC/mailbox/inbox/pn3"; echo "$2" > "$OC/mailbox/inbox/pn3/$2.md"
     (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m "$2")
     echo x | pn pn2 send pn1 "moved-$2" - >/dev/null 2>&1; }   # the store moves on meanwhile
@@ -603,13 +604,19 @@ exec "%s" "$@"
   mv "$W/home-pername-r1/.local/state/agent-mailbox/checkouts/$id-pn2" "$W/pn2-aside"
   pb "$W/home-pername-r1" pn2 >/dev/null 2>&1; once left4 && ok "and moving it aside publishes it" ||
     no "moving the name's clone aside didn't publish the shared clone's commit" "$(git --git-dir="$T/s.git" log --oneline -3 main)"
-  # a command with no name doesn't take it over (it may never run again): the next name does, and publishes its commit
+  # a command with no name takes it over only to publish what's left there, since one may never run again
   sh_home "$W/home-pername-nl" left6; NL="$W/home-pername-nl/.local/state/agent-mailbox/checkouts"
-  HOME="$W/home-pername-nl" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
-    agents >/dev/null 2>&1; [ -d "$NL/$id/.git" ] && nl=kept || nl=taken
-  pb "$W/home-pername-nl" pn2 >/dev/null 2>&1
-  [ $nl = kept ] && once left6 && ok "a command with no name leaves it for the next name, which publishes its commit" ||
-    no "a nameless command took the shared clone over ($nl), or its commit wasn't published" "$(ls -A "$NL")"
+  expect "a command with no name publishes a commit left in the shared clone" 0 "publishing 1 commit" \
+    env HOME="$W/home-pername-nl" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" agents
+  once left6 && [ ! -e "$NL/$id" ] && ok "once, from the clone it took over" ||
+    no "a nameless command didn't publish the shared clone's commit" "$(ls -A "$NL")"
+  sh_home "$W/home-pername-nk" ""; NK="$W/home-pername-nk/.local/state/agent-mailbox/checkouts"
+  HOME="$W/home-pername-nk" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
+    agents >/dev/null 2>&1; [ -d "$NK/$id/.git" ] && nk=kept || nk=taken
+  pb "$W/home-pername-nk" pn2 >/dev/null 2>&1
+  [ $nk = kept ] && [ -d "$NK/$id-pn2/.git" ] && [ ! -e "$NK/$id" ] &&
+    ok "with nothing left there, it leaves the shared clone for the next name, which takes it over" ||
+    no "a nameless command took a shared clone with nothing left in it ($nk)" "$(ls -A "$NK")"
   # commands with no name keep a clone of their own, which a name's first command leaves alone
   NC="$W/home-pername-r2/.local/state/agent-mailbox/checkouts"; was=$(ls -A "$NC" | tr '\n' ' ')
   HOME="$W/home-pername-r2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
