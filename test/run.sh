@@ -698,7 +698,7 @@ if [ -n "$PTY" ]; then
 # onterm.sh <command...>: it, on a terminal; then the text it wrote to the file CCERR names, its exit code kept (with
 # CCOUT set, that text goes straight to the file CCOUT names instead, as it's written)
 printf '%s\n' 'e=${CCOUT:-}; [ -n "$e" ] || e=$(mktemp "${TMPDIR:-/tmp}/amterm.XXXXXX") || exit 1' \
-  'CCERR=$e python3 -c "import os, pty, sys' \
+  '[ -z "${CCOUT:-}" ] || : > "$e"; CCERR=$e python3 -c "import os, pty, sys' \
   'sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))" "$@" < /dev/null > /dev/null 2>&1; r=$?' \
   '[ -n "${CCOUT:-}" ] || { cat "$e"; rm -f "$e"; }; exit $r' > "$T/onterm.sh"
 rewakej() { j=$1; shift; ccenv "$@" "$SH" "$T/onterm.sh" "$SH" "$T/cc.sh" "$j"; }
@@ -739,7 +739,8 @@ else sk "and the guard then asks for a re-arm without waiting (no jq)"; fi
 # would wait for the hook, so the hook needs evidence: an interactive session, or the cloud's launch (below)
 expect "in an SDK session it exits at once" 0 '^$' rewake r1 CLAUDE_CODE_ENTRYPOINT=sdk-cli
 expect "and with its output to a file or pipe, under a host's entrypoint" 0 '^$' fakecc
-# the streaming flag alone isn't evidence: a later flag or -p can undo it, so Claude Code may wait for the hook
+# the streaming flag alone isn't evidence: a later --input-format, or input from a terminal, undoes it, so Claude Code
+# may wait for the hook
 expect "a streaming flag isn't taken as streaming input" 0 '^$' fakecc $STREAM
 expect "nor one a later --input-format undoes" 0 '^$' fakecc $STREAM --input-format text -p hi
 # (a process this one started, beside it, with the same terminal for its output)

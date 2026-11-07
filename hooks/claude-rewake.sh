@@ -98,9 +98,10 @@ ccver() {
   done
   return 1
 }
-# background: Claude Code (ccpid) runs this hook in the background. Two cases are taken as evidence:
-# - an interactive session: none of the options that make it headless (-p alone or in a group of short options such
-#   as -pc, --print, --init-only, --sdk-url), and its output a terminal;
+# background: Claude Code (ccpid) runs this hook in the background. With none of the options that make it headless
+# (-p alone or in a group of short options such as -pc, --print, --init-only, --sdk-url), two cases are taken as
+# evidence:
+# - an interactive session: its output a terminal;
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
 #   terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
