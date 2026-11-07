@@ -651,19 +651,19 @@ exec "%s" "$@"
     no "a failed send left files in the clone" "$(git -C "$C" status --porcelain --ignored)"
   printf '#!/bin/sh\n[ ! -f "%s" ] || exit 1\n' "$T/refuse" > "$S/hooks/pre-receive"; chmod +x "$S/hooks/pre-receive"
   : > "$T/refuse"; tip=$(git --git-dir="$S" rev-parse main)
-  expect "a send the store refuses fails, keeping nothing" 1 "not published .*nothing was kept" \
+  expect "a send the store refuses keeps its commit, saying not to resend" 4 "not published .*don't resend" \
     sa sa1 send sa2 refused "$T/body" --consume "$qb"
-  [ "$(git --git-dir="$S" rev-parse main)" = "$tip" ] && tidy && [ "$(git -C "$C" rev-parse HEAD)" = "$tip" ] &&
-    ok "and leaves no message, signature or commit in the clone" || no "a refused send left something" "$(git -C "$C" status --porcelain --ignored; git -C "$C" log --oneline -2)"
-  sa sa1 list | grep -q "$qb" && ! sa sa2 list 2>/dev/null | grep -q refused &&
-    ok "and the mail it answered is still there" || no "a refused send's writes show" "$(sa sa1 list; sa sa2 list)"
-  expect "an update the store refuses fails, keeping nothing" 1 "not published" sa sa1 update --about changed
-  tidy && [ "$(git -C "$C" rev-parse HEAD)" = "$tip" ] && grep -qx 'about: t' "$C/mailbox/agents/sa1.md" &&
-    ok "and the record is as it was" || no "a refused update changed the clone" "$(git -C "$C" status --porcelain; cat "$C/mailbox/agents/sa1.md")"
+  # (loose: anything in the clone outside its commits)
+  loose() { git -C "$C" status --porcelain --ignored; }
+  [ "$(git --git-dir="$S" rev-parse main)" = "$tip" ] && [ -z "$(loose)" ] && [ "$(git -C "$C" rev-parse HEAD^)" = "$tip" ] &&
+    ok "and the clone holds just that commit, nothing loose" || no "a refused send left the clone wrong" "$(git -C "$C" status --porcelain --ignored; git -C "$C" log --oneline -2)"
+  expect "a later command while the store still refuses keeps it too" 4 "not published" sa sa1 update --about changed
+  [ -z "$(loose)" ] && [ "$(git -C "$C" rev-parse HEAD^)" = "$tip" ] && grep -qx 'about: t' "$C/mailbox/agents/sa1.md" &&
+    ok "and changes nothing else" || no "a refused update changed the clone" "$(git -C "$C" status --porcelain; cat "$C/mailbox/agents/sa1.md")"
   rm -f "$T/refuse"
-  expect "once the store takes pushes again, the send goes through" 0 "^sent " sa sa1 send sa2 refused "$T/body" --consume "$qb"
+  expect "once the store takes pushes again, the next command publishes it" 3 "publishing 1 commit" sa sa1 list
   [ "$(sa sa2 list | grep -c 'sa1-refused\.md')" = 1 ] && ! sa sa1 list | grep -q "$qb" &&
-    ok "delivered once, the answered mail consumed" || no "the resend wasn't delivered once" "$(sa sa1 list; sa sa2 list)"
+    ok "delivered once, the answered mail consumed" || no "the kept send wasn't delivered once" "$(sa sa1 list; sa sa2 list)"
   # files an older version or a command cut off part-way left in the clone don't show as mail
   printf -- '---\nprotocol: 1\nfrom: sa2\nto: sa1\ntopic: ghost\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nboo\n' \
     > "$C/mailbox/inbox/sa1/20260101T000000Z-sa2-ghost.md"

@@ -54,10 +54,10 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 | Code | Meaning |
 |---|---|
 | 0 | done |
-| 1 | usage or store error (the message says what); a change the store didn't take is undone, so run it again |
+| 1 | usage or store error (the message says what) |
 | 2 | `watch` reached its time limit with no mail |
 | 3 | no mail |
-| 4 | an earlier command's change is written locally but not published: run any command to publish it, and **don't resend** |
+| 4 | written locally but not published: run any command to publish it, and **don't resend** |
 | 5 | `holds`: the item isn't released at that version |
 | 6 | `verify`: not verified (see the status) |
 | 130 | `watch` was stopped (a signal, such as a harness ending it) |

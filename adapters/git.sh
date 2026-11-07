@@ -8,11 +8,11 @@
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - Every command using one state folder (names sharing a HOME, a watcher and a send) works in the same clone, so each
 #   holds a lock on it from before it opens the clone until it exits (ad_lock). watch holds it only while it looks.
-# - A command that fails after its sync (a push the store still refuses after the retries, or any error once it has
-#   written files) puts the clone back as its sync left it, so no later command shows or publishes what it wrote. Each
-#   sync also starts from the clone's last commit, dropping files a command cut off part-way left behind.
-# - A commit left unpublished (by a command cut off between commit and push, or an older version) is published by the
-#   next command; nothing is resent.
+# - A command that fails after its sync but before it commits puts the clone back as its sync left it, so no later
+#   command shows or publishes what it wrote. Each sync also starts from the clone's last commit, dropping files a
+#   command cut off part-way left behind.
+# - A commit left unpublished (a push the store still refuses after the retries, or a command cut off between commit
+#   and push) is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
 # - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
 #   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
@@ -100,8 +100,8 @@ ad_lock() {
   AD_LOCK=$l
   { printf '%s\n' "$AD_ME" > "$l/owner.$$" && mv -f "$l/owner.$$" "$l/owner"; } || die "can't write $l/owner"
 }
-# ad_unlock [<exit status>]: release the lock; after a command that failed (a non-zero status) once its sync was done,
-# first put the clone back as that sync left it
+# ad_unlock [<exit status>]: release the lock; after a command that failed (a non-zero status) after its sync and
+# before its commit, first put the clone back as that sync left it
 ad_unlock() {
   [ -n "${AD_LOCK:-}" ] || return 0
   [ "${1:-0}" = 0 ] || [ -z "${AD_BASE:-}" ] || ad_restore "$AD_BASE"
@@ -220,7 +220,9 @@ ad_commit() {
   ad_git add -A -f -- $keep || die "git add failed"
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
-  ad_push || die "not published ($AD_ERR); nothing was kept, so run the command again"
+  # committed: from here a failure keeps the commit for the next command to publish
+  AD_BASE=
+  ad_push || { warn "written locally, not published ($AD_ERR); re-run any command to publish it, don't resend"; exit 4; }
 }
 
 # a cheap token that changes whenever the store changes: the branch tip, from one small network round trip

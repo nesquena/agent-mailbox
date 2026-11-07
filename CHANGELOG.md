@@ -192,10 +192,8 @@ First version.
   ("index.lock: File exists", "cannot lock ref"). Each holds a lock (`locks/` in the state folder) while it uses the
   clone; `watch` holds it only while it looks at the store, not while it waits. A lock whose command is gone is taken
   over; a command that waits 120 s for one gives up, naming it.
-- **Changed:** with the git adapter, a command whose change the store won't take (its push still refused after the
-  retries), or that fails after writing files, exits 1 and keeps nothing in the clone: no message or `.sig`, consumed
-  mail back in place, no local commit. Run it again. Before, a refused push exited 4 and kept the commit for the next
-  command to publish, so later commands failed too while the store kept refusing, and files a failed command left
-  could show in `list` and `read`, and verify, without being in the store. Exit 4 now means only that a commit an
-  earlier command left (cut off between commit and push, or made by an earlier version) still can't be published.
-  Each command also drops files a command cut off part-way left in the clone.
+- **Fix:** with the git adapter, a command that fails after writing files but before committing them (a git error,
+  or a signal) leaves nothing in the store's local clone: no message or `.sig`, and consumed mail back in place.
+  Before, those files could show in `list` and `read`, and verify, without being in the store. Each command also
+  drops files that a command cut off part-way left in the clone. A push the store still refuses after the retries
+  exits 4 as before, keeping the commit for the next command to publish.

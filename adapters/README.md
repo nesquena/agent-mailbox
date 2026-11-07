@@ -20,13 +20,13 @@ call the CLI's `die` and `warn`. It defines:
 |---|---|
 | `ad_open` | Set `AD_DIR` to a local directory whose `$ROOT/` subtree mirrors the store, creating it if needed. Cheap when it already exists. |
 | `ad_sync` | Bring `AD_DIR` up to date with the store. Publish anything an earlier `ad_commit` left unpublished. |
-| `ad_commit <message> <path>...` | Publish exactly these paths, relative to `AD_DIR`, as one atomic change: files that exist are added or updated, files that don't are removed. On a conflict with other writers, retry. When it can't publish them, fail (`die`), leaving the change for `ad_unlock` to undo; or exit 4 to keep it saved locally, so the next command retries it. |
+| `ad_commit <message> <path>...` | Publish exactly these paths, relative to `AD_DIR`, as one atomic change: files that exist are added or updated, files that don't are removed. On a conflict with other writers, retry. Exit 4 when the change is saved locally but couldn't be published, so the next command retries it; fail (`die`) before saving it, leaving what it wrote for `ad_unlock` to undo. |
 | `ad_poll` | Print a short token that changes whenever the store changes. Called every watch interval, so it must be cheap (one small round trip). |
 | `ad_peek <dir>` | List the files under `<dir>` in the store's latest state, one path per line, without changing `AD_DIR`. |
 | `ad_history <dir> [<ERE>]` | Print `<ref> <path>` for every version of every file ever under `<dir>`, oldest first, including removed ones: each time a file was added, rewritten or retyped. An adapter without history prints the current files, with `-` as the ref. With a pattern, it may leave out an added version with no line matching it, but never a rewritten one. It may list a version once when a later row has the same path, content and `<path>.sig`. Listing more is fine, since the CLI checks each file. If it can't read the history in full, or can't confirm it has the store's latest state, it prints a row `! !` (never just fewer rows), and the CLI's `holds` stops with an error. |
 | `ad_show <ref> <path>` | Print a file's content as of `<ref>`; for `-`, its current content. |
 | `ad_lock` (optional) | For an adapter whose `AD_DIR` other commands may use at once: take it for this command, waiting (a bounded time) while another command has it, and taking it over from one that's gone. The CLI calls it before `ad_open`, and `watch` around each look at the store. |
-| `ad_unlock [<exit status>]` (optional) | Release it. The CLI calls it on every exit, signals included, and `watch` before it waits. With a non-zero status, first undo whatever the command changed in `AD_DIR` since its `ad_sync`. |
+| `ad_unlock [<exit status>]` (optional) | Release it. The CLI calls it on every exit, signals included, and `watch` before it waits. With a non-zero status, first undo whatever the command wrote in `AD_DIR` since its `ad_sync` and hasn't saved. |
 
 The CLI writes every file to a temporary name, then renames it into place, inside `AD_DIR`, before calling
 `ad_commit`. Reads go through `AD_DIR` too, so an adapter for a remote service (a database, an HTTP API, an MCP
