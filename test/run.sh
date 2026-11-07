@@ -592,14 +592,10 @@ exec "%s" "$@"
     git --git-dir="$S" merge-base --is-ancestor "$(git -C "$C" rev-parse HEAD)" main; }
   # (git, and the mkdir, mv, rm and rmdir calls on the lock, on PATH logging each call with its process, its parent and
   # the lock's owner then, and the result for the lock calls; shown on a failure)
-  # (the lock calls' shims do as little as they can, since slowing them hides what they trace: one append, in order)
+  # (a git on PATH that logs each call with its process, its parent and the lock's owner then, shown on a failure)
   mkdir -p "$W/tracegit"; printf '%s\n' '#!/bin/sh' \
     'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$(cat "$TRACE_LOCK/owner" 2>/dev/null)] git $*" >> "$TRACE_LOG"' \
     "exec '$(command -v git)' \"\$@\"" > "$W/tracegit/git"; chmod +x "$W/tracegit/git"
-  for t in mkdir mv rm rmdir; do printf '%s\n' '#!/bin/sh' \
-    'case "$*" in (*/locks/*) ;; (*) exec "'"$(command -v $t)"'" "$@" ;; esac' \
-    '"'"$(command -v $t)"'" "$@"; r=$?; echo "  ppid=$PPID '"$t"' $* -> $r" >> "$TRACE_LOG"; exit $r' \
-    > "$W/tracegit/$t"; chmod +x "$W/tracegit/$t"; done
   for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
     for i in 1 2 3 4; do ( PATH="$W/tracegit:$PATH" TRACE_LOG="$T/c.trace" TRACE_LOCK="$LK/$id"; export PATH TRACE_LOG TRACE_LOCK
       echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
@@ -613,6 +609,18 @@ exec "%s" "$@"
   [ "$(sa sa1 list | grep -c 'sa2-c-')" = 4 ] && [ "$(sa sa2 list | grep -c 'sa1-c-')" = 4 ] &&
     ok "and each name lists exactly its four" || no "a name lists other than its four" "$(sa sa1 list; sa sa2 list)"
   [ ! -e "$LK/$id" ] && ok "and no lock is left" || no "a lock was left behind" "$(ls -A "$LK")"
+  # the same where mkdir isn't exclusive (some coreutils check, then create): a mkdir on PATH that never fails on a
+  # folder that's there
+  mkdir -p "$W/loosemkdir"; printf '%s\n' '#!/bin/sh' "exec '$(command -v mkdir)' -p \"\$@\"" > "$W/loosemkdir/mkdir"
+  chmod +x "$W/loosemkdir/mkdir"; rm -f "$T/c.fail" "$T/c.err"
+  for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
+    for i in 5 6 7 8; do ( PATH="$W/loosemkdir:$PATH"; export PATH
+      echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
+  wait
+  got=$(git --git-dir="$S" ls-tree -r --name-only main | sed -n 's/.*Z-\(sa[12]-c-[5-8]\)\.md$/\1/p' | sort)
+  [ ! -s "$T/c.fail" ] && [ "$(printf '%s\n' "$got" | uniq | wc -l | tr -d ' ')" = 8 ] && [ -z "$(printf '%s\n' "$got" | uniq -d)" ] &&
+    tidy && ok "and where mkdir isn't exclusive: all sent, each delivered once, the clone tidy" ||
+    no "where mkdir isn't exclusive, concurrent sends: $(cat "$T/c.fail" 2>/dev/null | wc -l | tr -d ' ') failed" "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null)"
 
   # a lock whose owner is gone is taken over: an exited process, or a pid now running something else
   dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp $wh 1" > "$LK/$id/owner"
@@ -655,23 +663,30 @@ exec "%s" "$@"
   lp=$!; up "$T/slow"; kill -TERM "$lp"; wait "$lp"; r=$?
   [ $r = 143 ] && [ ! -e "$LK/$id" ] && ok "a command stopped by a signal releases the lock" ||
     no "a stopped command (exit $r) left its lock" "$(cat "$LK/$id/owner" 2>/dev/null)"
-  # a lock with no owner record, however old (it may be one being made), isn't taken over: the waiter gives up,
-  # naming it (a date on PATH makes time fly)
+  # a lock folder with no record yet is taken: holding it is having the record
+  mkdir -p "$LK/$id"; expect "a lock folder with no record is taken" 0 "sa2-c-1" sa sa1 list
+  [ ! -e "$LK/$id" ] && ok "and released after" || no "the lock folder is still there" "$(ls -A "$LK/$id" 2>&1)"
+  # a lock held too long makes a waiter give up, naming it (a date on PATH makes time fly); so does a record left empty,
+  # which can't be told from one being written
   mkdir -p "$W/fastdate"; printf '%s\n' '#!/bin/sh' \
     '[ "$1" = +%s ] || exec '"'$(command -v date)'"' "$@"' 'n=$(cat "$DATEN" 2>/dev/null || echo 0); echo $((n + 1)) > "$DATEN"' \
     "echo \$(( \$('$(command -v date)' +%s) + n * 100 ))" > "$W/fastdate/date"; chmod +x "$W/fastdate/date"
-  mkdir -p "$LK/$id"; touch -t 202001010000 "$LK/$id"; rm -f "$T/daten"
-  expect "a lock held too long makes a waiter give up, naming the lock" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*left no record" \
+  sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp $wh $(sed 's/.*) //' "/proc/$sp/stat" 2>/dev/null | awk '{ print $20 }')" > "$LK/$id/owner"
+  [ -r "/proc/$sp/stat" ] || echo "$sp $wh -" > "$LK/$id/owner"; rm -f "$T/daten"
+  expect "a lock held too long makes a waiter give up, naming the lock" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*held by process $sp" \
     env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list
-  rmdir "$LK/$id"
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null; : > "$LK/$id/owner"; rm -f "$T/daten"
+  expect "and so does a record left empty" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*left no record" \
+    env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list
+  rm -rf "$LK/$id"
   # within <seconds> <command...>: it, stopped if still running after that long (exit 124); its output after it
   within() { ws=$1; shift; "$@" > "$T/within.out" 2>&1 & wpid=$!; n=0
     while kill -0 "$wpid" 2>/dev/null && [ $n -lt $((ws * 5)) ]; do sleep 0.2; n=$((n+1)); done
     if kill -0 "$wpid" 2>/dev/null; then kill "$wpid"; wait "$wpid" 2>/dev/null; echo "still running after ${ws}s" >> "$T/within.out"; wr=124
     else wait "$wpid"; wr=$?; fi; cat "$T/within.out"; return $wr; }
   fl() { env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list; }
-  # a dead owner's lock that can't be broken (a waiter's break folder was left in it) still makes a waiter give up
-  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id/break"; echo "$dp $wh 1" > "$LK/$id/owner"; rm -f "$T/daten"
+  # a dead owner's lock that can't be broken (a waiter's break file was left in it) still makes a waiter give up
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; : > "$LK/$id/break"; echo "$dp $wh 1" > "$LK/$id/owner"; rm -f "$T/daten"
   expect "a dead owner's lock that can't be broken still makes a waiter give up" 1 "gave up after" within 20 fl
   rm -rf "$LK/$id"
   # a record not of the form "<pid> <start>" (cut short) is waited out, never broken

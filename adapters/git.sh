@@ -62,15 +62,16 @@ ad_attrs() {
   ad_attrs_put "${1:-}" || die "can't write $af"
 }
 
-# The lock is a folder (mkdir is atomic everywhere; macOS has no flock) holding its owner's record: "<pid> <host>/<pid
-# namespace> <start>", the start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
-# AD_LOCK_WAIT seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break folder
-# (below) can land in it as it goes.
-# Signals wait while a command takes the lock and writes its record, so a stopped command never leaves a lock with no
-# record.
-# ceiling: a lock with no record (its command killed outright between mkdir and writing it) is never taken over, since
-# it can't be told from one being made; waiters give up, and the error says to remove it. And three or more commands taking over two dead owners' locks in a row could, in a window of a few system calls,
-# let one remove a live lock; owners only die that way when killed outright
+# The lock is a folder holding its owner's record: "<pid> <host>/<pid namespace> <start>", the start telling a reused
+# pid from the owner (macOS has no flock). Taking it is creating that record with the shell's noclobber, an exclusive
+# create the shell does itself: mkdir isn't exclusive everywhere (some coreutils check, then create), so the folder is
+# made with -p and the record decides. A lock whose owner is gone is taken over; a waiter gives up after AD_LOCK_WAIT
+# seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break file (below) can land in
+# it as it goes.
+# ceiling: a record left empty (its command killed outright between creating it and writing it) is never taken over,
+# since it can't be told from one being written; waiters give up, and the error says to remove it. And three or more
+# commands taking over two dead owners' locks in a row could, in a window of a few system calls, let one remove a live
+# lock; owners only die that way when killed outright
 AD_LOCK_WAIT=120
 # ad_born <pid>: when that process started (a token), or nothing when there's no such process or it's a zombie
 ad_born() {
@@ -93,10 +94,12 @@ ad_held() {
   st=$({ sed 's/.*) //' "/proc/$op/stat" 2>/dev/null || ps -o stat= -p "$op" 2>/dev/null; } | cut -c1)
   [ "$st" != Z ]; }
 ad_drop() { g="$1.gone.$$"; rm -rf "$g"; mv "$1" "$g" 2>/dev/null && rm -rf "$g"; }
-# ad_break <lock> <owner record>: remove a lock whose owner is gone, if the record still names it; the break folder
-# keeps two waiters from doing it at once
-ad_break() { mkdir "$1/break" 2>/dev/null || return
-  if [ "$(cat "$1/owner" 2>/dev/null)" = "$2" ]; then ad_drop "$1"; else rmdir "$1/break" 2>/dev/null; fi; }
+# ad_take <lock>: take it, if no one holds it (its record created, exclusively, with this command's own)
+ad_take() { mkdir -p "$1" 2>/dev/null; ( set -C; printf '%s\n' "$AD_ME" > "$1/owner" ) 2>/dev/null; }
+# ad_break <lock> <owner record>: remove a lock whose owner is gone, if the record still names it; the break file keeps
+# two waiters from doing it at once
+ad_break() { ( set -C; : > "$1/break" ) 2>/dev/null || return
+  if [ "$(cat "$1/owner" 2>/dev/null)" = "$2" ]; then ad_drop "$1"; else rm -f "$1/break"; fi; }
 ad_lock() {
   [ -z "${AD_LOCK:-}" ] || return 0
   l="$STATE/locks/$STORE_ID" t0=$(date +%s)
@@ -104,11 +107,11 @@ ad_lock() {
   AD_WHERE="$(uname -n 2>/dev/null | tr -d ' ')/$(readlink "/proc/$$/ns/pid" 2>/dev/null | tr -d ' ')"
   b=$(ad_born $$); AD_ME="$$ $AD_WHERE ${b:--}" AD_SIG=
   trap 'AD_SIG=129' HUP; trap 'AD_SIG=130' INT; trap 'AD_SIG=143' TERM
-  until mkdir "$l" 2>/dev/null; do
+  until ad_take "$l"; do
     [ -z "$AD_SIG" ] || exit "$AD_SIG"
     if [ ! -d "$l" ]; then
       # (gone again already: try once more; still not there means it can't be made)
-      mkdir "$l" 2>/dev/null && break
+      ad_take "$l" && break
       [ -d "$l" ] || die "can't create $l"
     fi
     o=$(cat "$l/owner" 2>/dev/null) || o=
@@ -119,7 +122,6 @@ ad_lock() {
     sleep 0.2
   done
   AD_LOCK=$l
-  { printf '%s\n' "$AD_ME" > "$l/owner.$$" && mv -f "$l/owner.$$" "$l/owner"; } || die "can't write $l/owner"
   trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
   [ -z "$AD_SIG" ] || exit "$AD_SIG"
 }
