@@ -184,3 +184,5 @@ First version.
   watcher or a hook to a supervisor that starts the agent and a scheduled check, with a worked loop (#51).
 - **Fix:** a `watch` that ends no longer removes the pid file of another watcher for the same name that started
   after it, so hooks that check for a running watcher still see that one (#51).
+- **Packaging:** the Claude Code plugin's manifest no longer pins a version, so updating the plugin from `/plugin`
+  (or `claude plugin update`) brings in each change on `main` (#52).

@@ -106,7 +106,9 @@ From a git clone, `agent-mailbox --version` names the commit, with `+changes` wh
   git -C ~/agent-mailbox pull --ff-only
   agent-mailbox doctor
   ```
-- **The Claude Code plugin:** update it from Claude Code's `/plugin` menu, then run `agent-mailbox doctor`.
+- **The Claude Code plugin:** update it from Claude Code's `/plugin` menu (Installed, the plugin, Update now) or with
+  `claude plugin update agent-mailbox@agent-mailbox`. Run `/reload-plugins` or start a new session so its hooks run
+  the new code, then run `agent-mailbox doctor`.
 
 Stop a running `watch` and start it again after updating, so it runs the new code.
 
