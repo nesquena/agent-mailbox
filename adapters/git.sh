@@ -63,6 +63,16 @@ ad_open() {
   # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
+  # names shared one clone (checkouts/<store id>) before they had one each: the first name to need its own takes that
+  # one over, with any commit a command left unpublished there, for its next sync to publish; other names clone anew
+  o="$STATE/checkouts/$STORE_ID"
+  if [ "$AD_ID" != "$STORE_ID" ] && [ ! -L "$o" ] && [ -d "$o/.git" ]; then
+    if [ ! -e "$AD_DIR" ]; then mv "$o" "$AD_DIR" 2>/dev/null || :
+    # (a name that has its own already, when an older version run since left a commit there, is told how to take it)
+    elif [ -n "$(ad_g --git-dir="$o/.git" rev-list -n 1 "refs/remotes/origin/$BRANCH..refs/heads/$BRANCH" 2>/dev/null)" ]
+    then warn "$o, the clone names shared before, holds a commit a command couldn't publish; to publish it, move $AD_DIR aside (if nothing in it is unpublished) and run this again"
+    fi
+  fi
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
@@ -141,23 +151,6 @@ ad_sync() {
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
     ad_push
-  fi
-  # names shared one clone before they had one each: what a command left unpublished there (it exited 4) is read from
-  # it, never written to it, and published from this clone. Commits the store already has (by content) are skipped, so
-  # names doing this at once publish each one once; a refused push exits 4 here like any other.
-  # ceiling: only that clone's mailbox branch is read; a conflicting commit is left there, with a warning each time
-  o="$STATE/checkouts/$STORE_ID/.git"
-  if [ "$AD_ID" != "$STORE_ID" ] && [ -d "$o" ] &&
-    ad_git fetch -q --no-tags "$o" "+refs/heads/$BRANCH:refs/agent-mailbox/shared" 2>/dev/null; then
-    if ad_remote_has_branch; then left=$(ad_git cherry "origin/$BRANCH" refs/agent-mailbox/shared | sed -n 's/^+ //p')
-    else left=$(ad_git rev-list --reverse refs/agent-mailbox/shared); fi
-    if [ -n "$left" ]; then
-      warn "publishing $(printf '%s\n' "$left" | wc -l | tr -d ' ') commit(s) left in ${o%/.git} from an earlier command"
-      # shellcheck disable=SC2086
-      if ad_git cherry-pick $left >/dev/null 2>&1; then ad_push
-      else ad_git cherry-pick --abort >/dev/null 2>&1
-        warn "can't publish what's left in ${o%/.git}: it conflicts with the store"; fi
-    fi
   fi
 }
 
