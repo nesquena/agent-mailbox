@@ -328,9 +328,10 @@ mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
     # two agents sharing one HOME (--as): each commit carries its own name, and no command rewrites the checkout's
     # git config (concurrent commands raced to lock it, and one could commit under the other's name)
     as carol --as d1 list >/dev/null 2>&1; C=$(ls -d "$W/home-carol/.local/state/agent-mailbox/checkouts/"*-d1)
+    [ -d "$C/.git" ] || C="$W/no-clone-for-d1"
     git -C "$C" config user.name stale; git -C "$C" config user.email stale@example.invalid
     echo hi | as carol --as d1 send bob shared - >/dev/null 2>&1
-    expect "a commit from a shared checkout carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
+    expect "a commit from a shared HOME carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
       git --git-dir="$STORE" log -1 --format='%an <%ae>' main
     [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
@@ -562,21 +563,37 @@ exec "%s" "$@"
   [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && [ "$(pn pn2 list | grep -c -- '-r[123]\.md$')" = 3 ] &&
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
-  # a commit left unpublished in the clone names shared before (a send that exited 4) is published by a name's command
+  # a commit left unpublished in the clone names shared before (a send that exited 4) is published by a name's command,
+  # once, without touching that clone, also when the store moved on and several names start at once
   PH2="$W/home-pername2"; HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
     setup --store "$T/s.git" >/dev/null 2>&1; HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" \
     --config "$T/none.cfg" agents >/dev/null 2>&1
   OC=$(ls -d "$PH2/.local/state/agent-mailbox/checkouts"/* | head -n 1)
-  mkdir -p "$OC/mailbox/inbox/pn3"; echo x > "$OC/mailbox/inbox/pn3/left.md"
-  (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m leftover)
-  echo x | pn pn2 send pn1 moved - >/dev/null 2>&1   # the store moves on meanwhile
-  cp "$T/pn3.cfg" "$T/pn3b.cfg"
-  expect "a name's command publishes a commit left in the clone names shared before" 0 "left\.md" \
-    env HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
-    "$SH" "$CLI" --config "$T/pn3b.cfg" list
-  [ "$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c 'inbox/pn3/left\.md$')" = 1 ] &&
-    [ -z "$(git -C "$OC" log --format=%h origin/main..HEAD)" ] && ok "and it's on the store once, nothing left behind" ||
-    no "the old clone's commit wasn't published" "$(git -C "$OC" log --oneline -3)"
+  pb() { HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" --config "$T/$1.cfg" list; }
+  left() { mkdir -p "$OC/mailbox/inbox/pn3"; echo "$1" > "$OC/mailbox/inbox/pn3/$1.md"
+    (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m "$1")
+    echo x | pn pn2 send pn1 "moved-$1" - >/dev/null 2>&1; }   # the store moves on meanwhile
+  left left0; was=$(git -C "$OC" rev-parse HEAD)
+  expect "a name's command publishes a commit left in the clone names shared before" 0 "left0\.md" pb pn3
+  for r in 1 2 3; do left "left$r"; for a in pn1 pn2 pn3 pn4; do ( pb $a >/dev/null 2>&1 ) & done; wait; done
+  n=0; for r in 0 1 2 3; do
+    [ "$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c "inbox/pn3/left$r\.md$")" = 1 ] && n=$((n+1)); done
+  [ $n = 4 ] && ok "names publishing it at once put each on the store once" ||
+    no "a commit left in the shared clone was lost or doubled ($n of 4 once)" "$(git --git-dir="$T/s.git" log --oneline -8 main)"
+  [ "$(git -C "$OC" rev-parse HEAD)" = "$(git -C "$OC" rev-parse main)" ] && [ ! -e "$OC/.git/rebase-merge" ] &&
+    [ "$(git -C "$OC" log --format=%s -1 "$was")" = left0 ] && [ "$(git -C "$OC" rev-list --count "$was..main")" = 3 ] &&
+    ok "and the shared clone is left as it was" || no "the shared clone was changed" "$(git -C "$OC" log --oneline -5)"
+  # a checkouts/<store id> that isn't a clone is left alone: git doesn't reach a repository around it
+  PH3="$W/home-pername3"; mkdir -p "$PH3"; git init -q --bare "$T/dot.git"
+  (cd "$PH3" && git init -q -b main && git -c user.email=e@e -c user.name=e commit -q --allow-empty -m base &&
+    git remote add origin "$T/dot.git" && git push -q origin main 2>/dev/null &&
+    git -c user.email=e@e -c user.name=e commit -q --allow-empty -m local)
+  mkdir -p "$PH3/.local/state/agent-mailbox/checkouts/${OC##*/}"
+  HOME="$PH3" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" --config "$T/pn4.cfg" list >/dev/null 2>&1
+  [ "$(git --git-dir="$T/dot.git" log --format=%s -1 main)" = base ] && ok "a shared-clone folder without .git reaches no other repository" ||
+    no "a command pushed the repository around the state folder" "$(git --git-dir="$T/dot.git" log --oneline -2 main)"
 
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
