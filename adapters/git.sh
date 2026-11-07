@@ -11,7 +11,7 @@
 # - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
 #   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
 # - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
-#   environment, never in the clone's config, which agents sharing the clone (`--as`) would race to rewrite.
+#   environment, never in the clone's config, which commands sharing the clone would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
@@ -64,12 +64,6 @@ ad_open() {
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
-    # (the clone names shared before may hold commits a command couldn't publish; this clone won't see them)
-    o="$STATE/checkouts/$STORE_ID"
-    if [ "$AD_ID" != "$STORE_ID" ] && [ -d "$o/.git" ]; then
-      k=$(ad_g -C "$o" rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null) && [ "${k:-0}" -gt 0 ] &&
-        warn "$o, the clone agent names shared before, holds $k commit(s) a command couldn't publish; publish them with: git -C '$o' push origin HEAD:$BRANCH"
-    fi
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
@@ -147,6 +141,17 @@ ad_sync() {
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
     ad_push
+  fi
+  # names shared one clone before they had one each: publish what a command left unpublished there too. A failure
+  # doesn't stop this command, and the next one tries again. ceiling: names publishing it at the same moment can
+  # collide in that clone; the loser warns and a later command finishes it
+  o="$STATE/checkouts/$STORE_ID"
+  if [ "$AD_ID" != "$STORE_ID" ] && [ -n "$(ad_g -C "$o" log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
+    ( AD_DIR=$o; err=$(ad_pull) || { warn "can't publish what's left in $o yet: $(printf '%s\n' "$err" | ad_gist)"; exit 1; }
+      k=$(ad_git rev-list --count "origin/$BRANCH..HEAD") && [ "$k" -gt 0 ] || exit 0
+      warn "publishing $k commit(s) left in $o from an earlier command"
+      ad_push ) || :
+    ad_pull >/dev/null 2>&1 || :
   fi
 }
 

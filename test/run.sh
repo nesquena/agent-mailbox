@@ -325,9 +325,9 @@ mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
     elif [ "$(git -C "$C" rev-parse refs/remotes/origin/main)" = "$before" ]; then ok "a peek leaves refs/remotes/origin/main alone"
     else no "a peek moved refs/remotes/origin/main"; fi
 
-    # two agents sharing one checkout (--as): each commit carries its own name, and no command rewrites the checkout's
+    # two agents sharing one HOME (--as): each commit carries its own name, and no command rewrites the checkout's
     # git config (concurrent commands raced to lock it, and one could commit under the other's name)
-    for C in "$W/home-carol/.local/state/agent-mailbox/checkouts/"*; do :; done
+    as carol --as d1 list >/dev/null 2>&1; C=$(ls -d "$W/home-carol/.local/state/agent-mailbox/checkouts/"*-d1)
     git -C "$C" config user.name stale; git -C "$C" config user.email stale@example.invalid
     echo hi | as carol --as d1 send bob shared - >/dev/null 2>&1
     expect "a commit from a shared checkout carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
@@ -555,20 +555,28 @@ exec "%s" "$@"
       ( echo x | pn $a send $o "r$r" - >/dev/null 2>>"$T/err" || echo x >> "$T/fail" ) & done; wait; done
   n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[123]\.md$')
   [ ! -s "$T/fail" ] && [ "$n" = 12 ] && ok "names sharing one HOME send at once: all 12 delivered" ||
-    no "names sharing one HOME: $(wc -l < "$T/fail" 2>/dev/null || echo 0) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
+    no "names sharing one HOME: $(cat "$T/fail" 2>/dev/null | wc -l) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
   [ "$(ls "$PH/.local/state/agent-mailbox/checkouts" | wc -l | tr -d ' ')" = 4 ] && ok "each name has a clone of its own" ||
     no "names don't have a clone each" "$(ls "$PH/.local/state/agent-mailbox/checkouts")"
-  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && ok "and each lists its own mail" || no "a name's list is wrong" "$(pn pn1 list)"
-  # a commit left unpublished in the clone names shared before is pointed out when a name first clones on its own
+  l3=$(pn pn3 list); r3=$?; l4=$(pn pn4 list); r4=$?
+  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && [ "$(pn pn2 list | grep -c -- '-r[123]\.md$')" = 3 ] &&
+    [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
+    no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
+  # a commit left unpublished in the clone names shared before (a send that exited 4) is published by a name's command
   PH2="$W/home-pername2"; HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
     setup --store "$T/s.git" >/dev/null 2>&1; HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" \
     --config "$T/none.cfg" agents >/dev/null 2>&1
   OC=$(ls -d "$PH2/.local/state/agent-mailbox/checkouts"/* | head -n 1)
-  (cd "$OC" && git -c user.email=e@e -c user.name=e commit -q --allow-empty -m leftover)
+  mkdir -p "$OC/mailbox/inbox/pn3"; echo x > "$OC/mailbox/inbox/pn3/left.md"
+  (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m leftover)
+  echo x | pn pn2 send pn1 moved - >/dev/null 2>&1   # the store moves on meanwhile
   cp "$T/pn3.cfg" "$T/pn3b.cfg"
-  expect "a name's first clone of its own points out the old clone's unpublished commit" 3 "holds 1 commit.*git -C" \
+  expect "a name's command publishes a commit left in the clone names shared before" 0 "left\.md" \
     env HOME="$PH2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
     "$SH" "$CLI" --config "$T/pn3b.cfg" list
+  [ "$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c 'inbox/pn3/left\.md$')" = 1 ] &&
+    [ -z "$(git -C "$OC" log --format=%h origin/main..HEAD)" ] && ok "and it's on the store once, nothing left behind" ||
+    no "the old clone's commit wasn't published" "$(git -C "$OC" log --oneline -3)"
 
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
