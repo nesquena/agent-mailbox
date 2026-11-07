@@ -27,7 +27,10 @@
 #   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
+# (git's automatic maintenance runs in the foreground, inside the command's lock: detached, as newer git does by
+# default, it could still be packing refs while the next command fetches)
+ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor= -c maintenance.autoDetach=false \
+  -c gc.autoDetach=false "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
@@ -63,10 +66,10 @@ ad_attrs() {
 # start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
 # AD_LOCK_WAIT seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break folder
 # (below) can land in it as it goes.
-# ceiling: a lock with no owner record (its command killed between mkdir and writing the record) is never taken over,
-# since a waiter can't tell it from one being made; the waiter's error says to remove it. And three or more commands
-# taking over two dead owners' locks in a row could, in a window of a few system calls, let one remove a live lock;
-# owners only die that way when killed outright
+# A lock with no owner record (its command cut off between mkdir and writing the record) counts as gone once it is a
+# minute old; a younger one may be one being made.
+# ceiling: three or more commands taking over two dead owners' locks in a row could, in a window of a few system calls,
+# let one remove a live lock; owners only die that way when killed outright
 AD_LOCK_WAIT=120
 # ad_born <pid>: when that process started (a token), or nothing when there's no such process or it's a zombie
 ad_born() {
@@ -75,7 +78,9 @@ ad_born() {
 # ad_held <owner record>: its owner still runs (with no start recorded, as where neither /proc nor ps can tell, a live
 # pid counts)
 ad_held() { op=${1%% *} os=${1#* }
-  case $op in (''|*[!0-9]*) return 1 ;; esac
+  # (a record not of that shape, such as one cut short, is taken as held: never broken, only waited out)
+  case $1 in (*' '*) ;; (*) return 0 ;; esac
+  case $op in (''|*[!0-9]*) return 0 ;; esac
   if [ "$os" = - ]; then kill -0 "$op" 2>/dev/null; else [ "$(ad_born "$op")" = "$os" ]; fi; }
 ad_drop() { g="$1.gone.$$"; rm -rf "$g"; mv "$1" "$g" 2>/dev/null && rm -rf "$g"; }
 # ad_break <lock> <owner record>: remove a lock whose owner is gone, if the record still names it; the break folder
@@ -88,26 +93,31 @@ ad_lock() {
   mkdir -p "$STATE/locks" || die "can't create $STATE/locks"
   b=$(ad_born $$); AD_ME="$$ ${b:--}"
   until mkdir "$l" 2>/dev/null; do
+    if [ ! -d "$l" ]; then
+      # (gone again already: try once more; still not there means it can't be made)
+      mkdir "$l" 2>/dev/null && break
+      [ -d "$l" ] || die "can't create $l"
+    fi
     o=$(cat "$l/owner" 2>/dev/null) || o=
+    [ $(( $(date +%s) - t0 )) -lt "$AD_LOCK_WAIT" ] ||
+      die "gave up after ${AD_LOCK_WAIT}s waiting for $l (held by ${o:+process ${o%% *}}${o:-a command that left no record}): if no agent-mailbox command is still running, remove that folder, then run this again"
     # a record naming this process, which doesn't hold the lock, was left by a part of it that was cut off
     if [ -n "$o" ] && { [ "$o" = "$AD_ME" ] || ! ad_held "$o"; }; then ad_break "$l" "$o"
-    elif [ $(( $(date +%s) - t0 )) -ge "$AD_LOCK_WAIT" ]; then
-      [ -d "$l" ] || die "can't create $l"
-      die "gave up after ${AD_LOCK_WAIT}s waiting for $l (held by ${o:+process ${o%% *}}${o:-a command that left no record}): if no agent-mailbox command is still running, remove that folder, then run this again"
-    fi
+    elif [ -z "$o" ] && [ -n "$(find "$l" -prune -mmin +1 2>/dev/null)" ]; then ad_break "$l" ""; fi
     sleep 0.2
   done
   AD_LOCK=$l
   { printf '%s\n' "$AD_ME" > "$l/owner.$$" && mv -f "$l/owner.$$" "$l/owner"; } || die "can't write $l/owner"
 }
-# ad_unlock [<exit status>]: release the lock; after a command that failed (a non-zero status) after its sync and
-# before its commit, first put the clone back as that sync left it
+# ad_unlock [<exit status>]: release the lock; after a command that failed once its sync was done, first drop what it
+# wrote and didn't commit (its commits, and a rebase it was cut off in, are kept for the next command to publish). The
+# statuses that only report (no mail, not released, not verified, a watch's time limit) wrote nothing
 ad_unlock() {
   [ -n "${AD_LOCK:-}" ] || return 0
-  [ "${1:-0}" = 0 ] || [ -z "${AD_BASE:-}" ] || ad_restore "$AD_BASE"
+  case ${1:-0} in (0|2|3|5|6) ;; (*) [ -z "${AD_SYNCED:-}" ] || { ad_git rebase --abort >/dev/null 2>&1; ad_restore "$(ad_head)"; } ;; esac
   o=$(cat "$AD_LOCK/owner" 2>/dev/null) || o=
   { [ -n "$o" ] && [ "$o" != "$AD_ME" ]; } || ad_drop "$AD_LOCK"
-  AD_LOCK= AD_BASE=
+  AD_LOCK= AD_SYNCED=
 }
 ad_head() { ad_git rev-parse -q --verify HEAD || echo -; }
 # ad_restore <commit, or - for none>: the branch, index and files exactly as of that commit, and nothing else in the tree
@@ -206,7 +216,7 @@ ad_sync() {
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
     ad_push || { warn "written locally, not published ($AD_ERR); re-run any command to publish it, don't resend"; exit 4; }
   fi
-  AD_BASE=$(ad_head)
+  AD_SYNCED=1
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
@@ -220,8 +230,6 @@ ad_commit() {
   ad_git add -A -f -- $keep || die "git add failed"
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
-  # committed: from here a failure keeps the commit for the next command to publish
-  AD_BASE=
   ad_push || { warn "written locally, not published ($AD_ERR); re-run any command to publish it, don't resend"; exit 4; }
 }
 

@@ -604,6 +604,10 @@ exec "%s" "$@"
   dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp 1" > "$LK/$id/owner"
   expect "a lock left by a process that exited is taken over" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the stale lock is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
+  # and one with no owner record, over a minute old (its command cut off before it wrote one)
+  mkdir -p "$LK/$id"; touch -t 202001010000 "$LK/$id"
+  expect "an ownerless lock over a minute old is taken over" 0 "sa2-c-1" sa sa1 list
+  [ ! -e "$LK/$id" ] && ok "and released after" || no "the old ownerless lock is still there" "$(ls -A "$LK/$id" 2>/dev/null)"
   sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp 1" > "$LK/$id/owner"
   expect "so is one whose pid now names another process" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the lock of a reused pid is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
@@ -612,7 +616,9 @@ exec "%s" "$@"
   # a git on PATH whose fetch, with SLOWFETCH set, first says so and pauses; whose commit, with FAILCOMMIT set, fails
   real_git=$(command -v git); mkdir -p "$W/slowgit"; printf '%s\n' '#!/bin/sh' \
     'case " $* " in (*" fetch "*) [ -z "${SLOWFETCH:-}" ] || { : > "$SLOWFETCH"; sleep 3; } ;; esac' \
-    'case " $* " in (*" commit "*) [ -z "${FAILCOMMIT:-}" ] || exit 1 ;; esac' "exec '$real_git' \"\$@\"" > "$W/slowgit/git"
+    'case " $* " in (*" commit "*) [ -z "${FAILCOMMIT:-}" ] || exit 1 ;; esac' \
+    'case " $* " in (*" commit "*) [ -z "${TERMAFTERCOMMIT:-}" ] || { "'"$real_git"'" "$@"; r=$?; kill -TERM $PPID; exit $r; } ;; esac' \
+    "exec '$real_git' \"\$@\"" > "$W/slowgit/git"
   chmod +x "$W/slowgit/git"
   # up <file>: wait up to 10 s for it to exist
   up() { n=0; while [ ! -e "$1" ] && [ $n -lt 50 ]; do sleep 0.2; n=$((n+1)); done; [ -e "$1" ]; }
@@ -627,7 +633,8 @@ exec "%s" "$@"
   lp=$!; up "$T/slow"; kill -TERM "$lp"; wait "$lp"; r=$?
   [ $r = 143 ] && [ ! -e "$LK/$id" ] && ok "a command stopped by a signal releases the lock" ||
     no "a stopped command (exit $r) left its lock" "$(cat "$LK/$id/owner" 2>/dev/null)"
-  # a lock with no owner record is never taken over: the waiter gives up, naming it (a date on PATH makes time fly)
+  # a fresh lock with no owner record (one being made) isn't taken over: the waiter gives up, naming it (a date on
+  # PATH makes time fly)
   mkdir -p "$W/fastdate"; printf '%s\n' '#!/bin/sh' \
     '[ "$1" = +%s ] || exec '"'$(command -v date)'"' "$@"' 'n=$(cat "$DATEN" 2>/dev/null || echo 0); echo $((n + 1)) > "$DATEN"' \
     "echo \$(( \$('$(command -v date)' +%s) + n * 100 ))" > "$W/fastdate/date"; chmod +x "$W/fastdate/date"
@@ -635,6 +642,24 @@ exec "%s" "$@"
   expect "a lock held too long makes a waiter give up, naming the lock" 1 "gave up after [0-9]+s waiting for .*/locks/$id .*left no record" \
     env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list
   rmdir "$LK/$id"
+  # within <seconds> <command...>: it, stopped if still running after that long (exit 124); its output after it
+  within() { ws=$1; shift; "$@" > "$T/within.out" 2>&1 & wpid=$!; n=0
+    while kill -0 "$wpid" 2>/dev/null && [ $n -lt $((ws * 5)) ]; do sleep 0.2; n=$((n+1)); done
+    if kill -0 "$wpid" 2>/dev/null; then kill "$wpid"; wait "$wpid" 2>/dev/null; echo "still running after ${ws}s" >> "$T/within.out"; wr=124
+    else wait "$wpid"; wr=$?; fi; cat "$T/within.out"; return $wr; }
+  fl() { env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list; }
+  # a dead owner's lock that can't be broken (a waiter's break folder was left in it) still makes a waiter give up
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id/break"; echo "$dp 1" > "$LK/$id/owner"; rm -f "$T/daten"
+  expect "a dead owner's lock that can't be broken still makes a waiter give up" 1 "gave up after" within 20 fl
+  rm -rf "$LK/$id"
+  # a record not of the form "<pid> <start>" (cut short) is waited out, never broken
+  mkdir -p "$LK/$id"; echo 4242 > "$LK/$id/owner"; rm -f "$T/daten"
+  expect "a lock whose record is cut short isn't broken: the waiter gives up" 1 "gave up after .*held by process 4242" within 20 fl
+  rm -rf "$LK/$id"
+  # a lock path that can't be a folder (a file there) fails at once, not after the wait
+  : > "$LK/$id"
+  expect "a lock that can't be made fails at once, saying so" 1 "can't create .*/locks/$id" within 10 sa sa1 list
+  rm -f "$LK/$id"
 
   # watch takes the lock only to look, so others can use the clone while it waits
   for m in $(sa sa1 list | grep '\.md$'); do sa sa1 consume "$(basename "$m")" >/dev/null; done; rm -f "$T/watch.out"; sa sa1 watch 1 30 > "$T/watch.out" 2>&1 & wp=$!
@@ -649,6 +674,14 @@ exec "%s" "$@"
   ( FAILCOMMIT=1 PATH="$W/slowgit:$PATH"; export FAILCOMMIT PATH; echo x | sa sa1 send sa2 nocommit - >/dev/null 2>&1 )
   tidy && ! sa sa2 list 2>/dev/null | grep -q nocommit && ok "a send that fails before its commit leaves nothing behind" ||
     no "a failed send left files in the clone" "$(git -C "$C" status --porcelain --ignored)"
+  # a signal just after the commit keeps it: the next command publishes it, once
+  tip=$(git --git-dir="$S" rev-parse main)
+  ( TERMAFTERCOMMIT=1 PATH="$W/slowgit:$PATH"; export TERMAFTERCOMMIT PATH; echo x | sa sa1 send sa2 termed - >/dev/null 2>&1 ); r=$?
+  [ $r = 143 ] && [ "$(git -C "$C" rev-parse HEAD^)" = "$tip" ] && [ -z "$(git -C "$C" status --porcelain --ignored)" ] &&
+    ok "a send stopped by a signal just after its commit keeps the commit" ||
+    no "a send stopped after its commit (exit $r) lost or mangled it" "$(git -C "$C" log --oneline -2; git -C "$C" status --porcelain --ignored)"
+  expect "and the next command publishes it" 0 "publishing 1 commit" sa sa1 list
+  [ "$(sa sa2 list | grep -c 'sa1-termed\.md')" = 1 ] && ok "delivered once" || no "the kept commit wasn't delivered once" "$(sa sa2 list)"
   printf '#!/bin/sh\n[ ! -f "%s" ] || exit 1\n' "$T/refuse" > "$S/hooks/pre-receive"; chmod +x "$S/hooks/pre-receive"
   : > "$T/refuse"; tip=$(git --git-dir="$S" rev-parse main)
   expect "a send the store refuses keeps its commit, saying not to resend" 4 "not published .*don't resend" \
