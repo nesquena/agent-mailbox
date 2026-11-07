@@ -110,7 +110,9 @@ From a git clone, `agent-mailbox --version` names the commit, with `+changes` wh
   with `claude plugin marketplace update agent-mailbox` and `claude plugin update agent-mailbox@agent-mailbox` (it
   says when there's nothing new). `/plugin` shows the commit an install runs. Start a new session so the hooks run
   the new code: `/reload-plugins` switches them in a running session, but a watcher the old hook already started
-  runs until it next wakes the session. Then run `agent-mailbox doctor`.
+  runs until it next wakes the session. Each update is a new folder
+  (`~/.claude/plugins/cache/agent-mailbox/agent-mailbox/<commit>/`), and Claude Code later removes the old one, so if
+  you put the CLI on PATH with `install.sh`, run it again from the new folder. Then run `agent-mailbox doctor`.
 
 Stop a running `watch` and start it again after updating, so it runs the new code.
 
