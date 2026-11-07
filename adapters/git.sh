@@ -62,8 +62,8 @@ ad_attrs() {
   ad_attrs_put "${1:-}" || die "can't write $af"
 }
 
-# The lock is a folder (mkdir is atomic everywhere; macOS has no flock) holding its owner's record: "<pid> <start>", the
-# start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
+# The lock is a folder (mkdir is atomic everywhere; macOS has no flock) holding its owner's record: "<pid> <host>/<pid
+# namespace> <start>", the start telling a reused pid from the owner. A lock whose owner is gone is taken over; a waiter gives up after
 # AD_LOCK_WAIT seconds, naming the lock. A lock is released by renaming it away first, so no waiter's break folder
 # (below) can land in it as it goes.
 # Signals wait while a command takes the lock and writes its record, so a stopped command never leaves a lock with no
@@ -79,10 +79,13 @@ ad_born() {
   else LC_ALL=C TZ=UTC0 ps -o stat= -o lstart= -p "$1" 2>/dev/null | awk '$1 !~ /^Z/ { $1 = ""; sub(/^ +/, ""); print }'; fi; }
 # ad_held <owner record>: its owner still runs (with no start recorded, as where neither /proc nor ps can tell, a live
 # pid counts)
-ad_held() { op=${1%% *} os=${1#* }
+ad_held() {
   # (a record not of that shape, such as one cut short, is taken as held: never broken, only waited out)
-  case $1 in (*' '*) ;; (*) return 0 ;; esac
+  case $1 in (*' '*' '*) ;; (*) return 0 ;; esac
+  op=${1%% *} r=${1#* }; ow=${r%% *} os=${r#* }
   case $op in (''|*[!0-9]*) return 0 ;; esac
+  # (an owner on another host, or in another pid namespace such as a container, can't be checked from here: held)
+  [ "$ow" = "$AD_WHERE" ] || return 0
   [ "$os" != - ] || { kill -0 "$op" 2>/dev/null; return; }
   b=$(ad_born "$op"); [ -z "$b" ] || { [ "$b" = "$os" ]; return; }
   # no start time to compare (none could be read): gone only if the process is gone or a zombie, else held
@@ -98,7 +101,8 @@ ad_lock() {
   [ -z "${AD_LOCK:-}" ] || return 0
   l="$STATE/locks/$STORE_ID" t0=$(date +%s)
   mkdir -p "$STATE/locks" || die "can't create $STATE/locks"
-  b=$(ad_born $$); AD_ME="$$ ${b:--}" AD_SIG=
+  AD_WHERE="$(uname -n 2>/dev/null | tr -d ' ')/$(readlink "/proc/$$/ns/pid" 2>/dev/null | tr -d ' ')"
+  b=$(ad_born $$); AD_ME="$$ $AD_WHERE ${b:--}" AD_SIG=
   trap 'AD_SIG=129' HUP; trap 'AD_SIG=130' INT; trap 'AD_SIG=143' TERM
   until mkdir "$l" 2>/dev/null; do
     [ -z "$AD_SIG" ] || exit "$AD_SIG"
@@ -130,6 +134,8 @@ ad_unlock() {
   AD_LOCK=
 }
 ad_head() { ad_git rev-parse -q --verify HEAD || echo -; }
+# ad_has <path>: that path is in the clone's last commit
+ad_has() { ad_git cat-file -e "HEAD:$1" 2>/dev/null; }
 # ad_changed: the clone holds something besides its last commit (files, or a rebase in progress)
 ad_changed() { [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ] ||
   [ -n "$(ad_git status --porcelain --ignored 2>/dev/null)" ]; }

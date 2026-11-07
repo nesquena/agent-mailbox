@@ -231,7 +231,7 @@ load_adapter() {
   [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
   STORE_ID=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)
   # an adapter whose local copy other commands share defines its own
-  ad_lock() { :; }; ad_unlock() { :; }
+  ad_lock() { :; }; ad_unlock() { :; }; ad_has() { [ -e "$AD_DIR/$1" ]; }
   # shellcheck source=/dev/null
   . "$LIB_DIR/$ADAPTER.sh"
   # the lock is released, and a failed command's writes undone, on every exit; a signal exits so that this runs
@@ -560,6 +560,8 @@ send)
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
+  # (published means in the commit: a command that took over this clone could have removed it before it was)
+  ad_has "$(rel "$f")" || die "not sent: the message was gone before it was published (another command used the store's clone); send it again"
   echo "sent $(rel "$f")" ;;
 list)
   [ $# -eq 0 ] || unknown "$1"

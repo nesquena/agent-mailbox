@@ -584,6 +584,8 @@ exec "%s" "$@"
   sa sa1 init >/dev/null; k=--no-key; [ -z "$SSH" ] || k=
   for a in sa1 sa2; do sa $a register --kind t --about t $k >/dev/null 2>&1; done
   CK="$SH_H/.local/state/agent-mailbox/checkouts" LK="$SH_H/.local/state/agent-mailbox/locks"
+  # wh: this machine and pid namespace, as an owner record names them
+  wh="$(uname -n | tr -d ' ')/$(readlink "/proc/$$/ns/pid" 2>/dev/null | tr -d ' ')"
   id=$(ls "$CK"); C="$CK/$id"
   # tidy: the shared clone holds nothing but the store's files, and its HEAD is on the store
   tidy() { [ -z "$(git -C "$C" status --porcelain --ignored)" ] &&
@@ -601,10 +603,10 @@ exec "%s" "$@"
   [ ! -e "$LK/$id" ] && ok "and no lock is left" || no "a lock was left behind" "$(ls -A "$LK")"
 
   # a lock whose owner is gone is taken over: an exited process, or a pid now running something else
-  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp 1" > "$LK/$id/owner"
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp $wh 1" > "$LK/$id/owner"
   expect "a lock left by a process that exited is taken over" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the stale lock is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
-  sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp 1" > "$LK/$id/owner"
+  sleep 30 & sp=$!; mkdir -p "$LK/$id"; echo "$sp $wh 1" > "$LK/$id/owner"
   expect "so is one whose pid now names another process" 0 "sa2-c-1" sa sa1 list
   [ ! -e "$LK/$id" ] && ok "and released after" || no "the lock of a reused pid is still there" "$(cat "$LK/$id/owner" 2>/dev/null)"
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
@@ -653,10 +655,14 @@ exec "%s" "$@"
     else wait "$wpid"; wr=$?; fi; cat "$T/within.out"; return $wr; }
   fl() { env PATH="$W/fastdate:$PATH" DATEN="$T/daten" HOME="$SH_H" "$SH" "$CLI" --config "$T/sa1.cfg" list; }
   # a dead owner's lock that can't be broken (a waiter's break folder was left in it) still makes a waiter give up
-  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id/break"; echo "$dp 1" > "$LK/$id/owner"; rm -f "$T/daten"
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id/break"; echo "$dp $wh 1" > "$LK/$id/owner"; rm -f "$T/daten"
   expect "a dead owner's lock that can't be broken still makes a waiter give up" 1 "gave up after" within 20 fl
   rm -rf "$LK/$id"
   # a record not of the form "<pid> <start>" (cut short) is waited out, never broken
+  # an owner on another host or in another pid namespace (a container) can't be checked from here: waited out
+  dp=$(sh -c 'echo $$'); mkdir -p "$LK/$id"; echo "$dp elsewhere/pid:[1] 1" > "$LK/$id/owner"; rm -f "$T/daten"
+  expect "a lock whose owner is on another host or in another namespace isn't broken" 1 "gave up after" within 20 fl
+  rm -rf "$LK/$id"
   mkdir -p "$LK/$id"; echo 4242 > "$LK/$id/owner"; rm -f "$T/daten"
   expect "a lock whose record is cut short isn't broken: the waiter gives up" 1 "gave up after .*held by process 4242" within 20 fl
   rm -rf "$LK/$id"
@@ -686,6 +692,12 @@ exec "%s" "$@"
   expect "an AD_LOCK in the environment doesn't skip the lock or remove that path" 0 "sa2-" env AD_LOCK="$T/notalock" \
     HOME="$SH_H" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" --config "$T/sa1.cfg" list
   [ -f "$T/notalock/keep/f" ] && ok "and the path it named is untouched" || no "the AD_LOCK path was removed" "$(ls -A "$T/notalock" 2>&1)"
+  # a send whose message is gone before it's published (another command took over the clone) says so, not "sent"
+  real_mv=$(command -v mv); mkdir -p "$W/vanishmv"; printf '%s\n' '#!/bin/sh' "'$real_mv' \"\$@\" || exit" \
+    'for a; do d=$a; done; case $d in (*-vanish.md) rm -f "$d" ;; esac' > "$W/vanishmv/mv"; chmod +x "$W/vanishmv/mv"
+  ( PATH="$W/vanishmv:$PATH"; export PATH; echo x | sa sa1 send sa2 vanish - > "$T/vanish.out" 2>&1 ); r=$?
+  [ $r = 1 ] && grep -q "not sent" "$T/vanish.out" && ! grep -q '^sent ' "$T/vanish.out" &&
+    ok "a send whose message is gone before it's published says it wasn't sent" || no "a lost send (exit $r) reported" "$(cat "$T/vanish.out")"
   # a signal just after the commit keeps it: the next command publishes it, once
   tip=$(git --git-dir="$S" rev-parse main)
   ( TERMAFTERCOMMIT=1 PATH="$W/slowgit:$PATH"; export TERMAFTERCOMMIT PATH; echo x | sa sa1 send sa2 termed - >/dev/null 2>&1 ); r=$?
