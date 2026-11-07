@@ -570,7 +570,9 @@ exec "%s" "$@"
       --store "$T/s.git" >/dev/null 2>&1; HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" \
       --config "$T/none.cfg" agents >/dev/null 2>&1
     # (the clone every command shared before is checkouts/<store id>: a nameless one's, moved there)
-    OC=$(ls -d "$1/.local/state/agent-mailbox/checkouts"/*.none | head -n 1); mv "$OC" "${OC%.none}"; OC=${OC%.none}
+    OC=$(ls -d "$1/.local/state/agent-mailbox/checkouts"/*.none 2>/dev/null | head -n 1)
+    [ -d "$OC/.git" ] || { no "no nameless clone to make the shared one from" "$(ls -A "$1/.local/state/agent-mailbox/checkouts")"; return 1; }
+    mv "$OC" "${OC%.none}"; OC=${OC%.none}
     mkdir -p "$OC/mailbox/inbox/pn3"; echo "$2" > "$OC/mailbox/inbox/pn3/$2.md"
     (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m "$2")
     echo x | pn pn2 send pn1 "moved-$2" - >/dev/null 2>&1; }   # the store moves on meanwhile
