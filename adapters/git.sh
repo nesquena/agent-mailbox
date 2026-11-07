@@ -64,22 +64,23 @@ ad_open() {
   # commands with no name have one of their own too (no name gives <id>.none)
   AD_ID=$STORE_ID.none; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
-  # every command shared one clone, checkouts/<store id>, before: the first to need a clone of its own takes that one
-  # over, with any commit a command left unpublished there, for its next sync to publish; the others clone anew
+  # every command shared one clone, checkouts/<store id>, before: the first name to need a clone of its own takes that
+  # one over, with any commit a command left unpublished there, for its next sync to publish; the others clone anew.
+  # (Not a command with no name: one may never run again, and what it took over would wait there unseen.)
   o="$STATE/checkouts/$STORE_ID"
-  if [ ! -L "$o" ] && [ -d "$o/.git" ]; then
+  if [ "$AD_ID" != "$STORE_ID.none" ] && [ ! -L "$o" ] && [ -d "$o/.git" ]; then
     if [ ! -e "$AD_DIR" ]; then mv "$o" "$AD_DIR" 2>/dev/null || :
       # (a clone that appeared meanwhile has it moved inside: move it back out, for a later command)
       [ ! -d "$AD_DIR/$STORE_ID/.git" ] || mv "$AD_DIR/$STORE_ID" "$o" 2>/dev/null || :
     # (one that has its own already, when an older version run since left a commit there, is told how to take it)
     elif [ -n "$(ad_g --git-dir="$o/.git" rev-list -n 1 "refs/remotes/origin/$BRANCH..refs/heads/$BRANCH" 2>/dev/null)" ]
-    then warn "$o, the clone all commands shared before, holds a commit a command couldn't publish; to publish it, move $AD_DIR aside (if nothing in it is unpublished) and run this again"
+    then warn "$o, the clone all commands shared before, holds a commit a command couldn't publish; to publish it, move $AD_DIR aside (if 'git -C \"$AD_DIR\" log origin/$BRANCH..$BRANCH' shows nothing) and run this again"
     fi
   fi
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
-    # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
+    # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<clone>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
     d=$AD_DIR AD_DIR="$STATE/checkouts/.$AD_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it. clone itself says which it

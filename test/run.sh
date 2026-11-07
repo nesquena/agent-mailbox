@@ -569,16 +569,18 @@ exec "%s" "$@"
   sh_home() { HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" setup \
       --store "$T/s.git" >/dev/null 2>&1; HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" \
       --config "$T/none.cfg" agents >/dev/null 2>&1
-    # (the clone every command shared before is checkouts/<store id>: a nameless one's, moved there)
-    OC=$(ls -d "$1/.local/state/agent-mailbox/checkouts"/*.none 2>/dev/null | head -n 1)
+    # (the clone every command shared before is checkouts/<store id>: the nameless one, whatever it's called, moved there)
+    OC=; for c in "$1/.local/state/agent-mailbox/checkouts"/*; do case ${c##*/} in (*-*) ;; (*) OC=$c ;; esac; done
     [ -d "$OC/.git" ] || { no "no nameless clone to make the shared one from" "$(ls -A "$1/.local/state/agent-mailbox/checkouts")"; return 1; }
-    mv "$OC" "${OC%.none}"; OC=${OC%.none}
+    [ "${OC%.none}" = "$OC" ] || { mv "$OC" "${OC%.none}"; OC=${OC%.none}; }
+    [ -d "$OC/.git" ] || { no "the shared clone wasn't made" "$OC"; return 1; }
     mkdir -p "$OC/mailbox/inbox/pn3"; echo "$2" > "$OC/mailbox/inbox/pn3/$2.md"
     (cd "$OC" && git add -A && git -c user.email=e@e -c user.name=e commit -q -m "$2")
     echo x | pn pn2 send pn1 "moved-$2" - >/dev/null 2>&1; }   # the store moves on meanwhile
   pb() { HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
     "$SH" "$CLI" --config "$T/$2.cfg" list; }
-  once() { [ "$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c "inbox/pn3/$1\.md$")" = 1 ]; }
+  once() { [ "$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c "inbox/pn3/$1\.md$")" = 1 ] &&
+    [ "$(git --git-dir="$T/s.git" log --format=%s main | grep -cx "$1")" = 1 ]; }
   sh_home "$W/home-pername2" left0; id=${OC##*/}
   expect "the first name with a clone of its own publishes a commit left in the clone names shared before" 0 "left0\.md" \
     pb "$W/home-pername2" pn3
@@ -601,6 +603,13 @@ exec "%s" "$@"
   mv "$W/home-pername-r1/.local/state/agent-mailbox/checkouts/$id-pn2" "$W/pn2-aside"
   pb "$W/home-pername-r1" pn2 >/dev/null 2>&1; once left4 && ok "and moving it aside publishes it" ||
     no "moving the name's clone aside didn't publish the shared clone's commit" "$(git --git-dir="$T/s.git" log --oneline -3 main)"
+  # a command with no name doesn't take it over (it may never run again): the next name does, and publishes its commit
+  sh_home "$W/home-pername-nl" left6; NL="$W/home-pername-nl/.local/state/agent-mailbox/checkouts"
+  HOME="$W/home-pername-nl" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
+    agents >/dev/null 2>&1; [ -d "$NL/$id/.git" ] && nl=kept || nl=taken
+  pb "$W/home-pername-nl" pn2 >/dev/null 2>&1
+  [ $nl = kept ] && once left6 && ok "a command with no name leaves it for the next name, which publishes its commit" ||
+    no "a nameless command took the shared clone over ($nl), or its commit wasn't published" "$(ls -A "$NL")"
   # commands with no name keep a clone of their own, which a name's first command leaves alone
   NC="$W/home-pername-r2/.local/state/agent-mailbox/checkouts"; was=$(ls -A "$NC" | tr '\n' ' ')
   HOME="$W/home-pername-r2" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/none.cfg" \
