@@ -89,7 +89,8 @@ ccver() {
       (sh|dash|bash|zsh|ksh|mksh|ash|busybox) p=$(ppid "$p") n=$((n+1)); continue ;;
     esac
     # the first other process is Claude Code: told by AI_AGENT (above), or a native install asked for its version
-    case "$x" in (/*/claude|/*/claude.exe|/*/claude/versions/[0-9]*) [ -z "$v" ] || return 1
+    # (asked whatever AI_AGENT says: 2.1.120 to 2.1.212 set it but not CLAUDE_PID)
+    case "$x" in (/*/claude|/*/claude.exe|/*/claude/versions/[0-9]*)
       w=$(printf '%s\n' "$("$x" --version 2>/dev/null)" | sed -n '1s/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) (Claude Code).*/\1/p')
       [ -z "$w" ] || { echo "$w $p"; return 0; } ;;
     esac
@@ -103,8 +104,7 @@ ccver() {
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
 #   terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
-# Code reads streaming input (a later flag or `-p` can undo it), and such a host may close the input and wait for
-# Claude Code to exit, which would wait for the hook. Each argument is read on its own where /proc has them, else from
+# Code reads streaming input (a later flag or `-p` can undo it). Each argument is read on its own where /proc has them, else from
 # the command line split at spaces.
 # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line reads as -p, and the hook
 # declines; and a cloud launch gets its real arguments only once a session claims it, which /proc doesn't show, so

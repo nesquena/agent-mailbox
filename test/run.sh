@@ -744,7 +744,7 @@ expect "nor a multi-line prompt holding a line --preload" 0 '^$' fakecc -p "$(pr
 # (a process this one started, beside it, with the same terminal for its output)
 FAKEBG="$T/fakebg"; export FAKEBG
 expect "a CLAUDE_PID handed down from an outer Claude Code isn't taken for this one's" 0 '^\r?$' ptycc
-kill "$(cat "$T/fakebg" 2>/dev/null)" 2>/dev/null; unset FAKEBG
+rm -f "$T/fakebg"; unset FAKEBG
   expect "an interactive session (its output a terminal) watches" 2 "rw-1\.md" ptycc
   expect "which clears the guard's note" 1 - test -e "$RS/rewake/rw/r1/declined"
   rm -f "$RS/rewake/rw/r1/woke"
@@ -806,6 +806,9 @@ if [ -n "$CC" ]; then
 m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$CCD/claude/versions/2.1.80" --preload /tmp/x.sock "$CCD/cc/stop.sh"; }
     echo hi | as rx send rw rw-n - >/dev/null 2>&1
     expect "a native Claude Code is told by asking it, by its versions path" 2 "rw-n\.md" nat
+    rm -f "$RS/rewake/rw/r1/woke"
+    # (2.1.120 to 2.1.212 set AI_AGENT for hooks, but not CLAUDE_PID)
+    expect "even when AI_AGENT names a version but no CLAUDE_PID does" 2 "rw-n\.md" nat AI_AGENT=claude-code_2-1-150_harness
     if [ -n "$PROCOK" ]; then rm -f "$RS/rewake/rw/r1/woke"
       expect "the cloud's launch watches: --preload first, its input not a terminal" 2 "rw-n\.md" natc
       rm -f "$RS/rewake/rw/r1/woke"
