@@ -590,10 +590,13 @@ exec "%s" "$@"
   # tidy: the shared clone holds nothing but the store's files, and its HEAD is on the store
   tidy() { [ -z "$(git -C "$C" status --porcelain --ignored)" ] &&
     git --git-dir="$S" merge-base --is-ancestor "$(git -C "$C" rev-parse HEAD)" main; }
-  # (a git on PATH that logs each call with its process, its parent and the lock's owner then, shown on a failure)
-  mkdir -p "$W/tracegit"; printf '%s\n' '#!/bin/sh' \
-    'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$(cat "$TRACE_LOCK/owner" 2>/dev/null)] $*" >> "$TRACE_LOG"' \
-    "exec '$(command -v git)' \"\$@\"" > "$W/tracegit/git"; chmod +x "$W/tracegit/git"
+  # (git, and the mkdir, mv, rm and rmdir calls on the lock, on PATH logging each call with its process, its parent and
+  # the lock's owner then, and the result for the lock calls; shown on a failure)
+  mkdir -p "$W/tracegit"; for t in git mkdir mv rm rmdir; do printf '%s\n' '#!/bin/sh' \
+    'case "'"$t"' $*" in (git*|*/locks/*) ;; (*) exec "'"$(command -v $t)"'" "$@" ;; esac' \
+    'o=$(cat "$TRACE_LOCK/owner" 2>/dev/null); "'"$(command -v $t)"'" "$@"; r=$?' \
+    'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$o] '"$t"' $* -> $r" >> "$TRACE_LOG"; exit $r' \
+    > "$W/tracegit/$t"; chmod +x "$W/tracegit/$t"; done
   for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
     for i in 1 2 3 4; do ( PATH="$W/tracegit:$PATH" TRACE_LOG="$T/c.trace" TRACE_LOCK="$LK/$id"; export PATH TRACE_LOG TRACE_LOCK
       echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
@@ -602,7 +605,7 @@ exec "%s" "$@"
   [ ! -s "$T/c.fail" ] && [ "$(printf '%s\n' "$got" | uniq | wc -l | tr -d ' ')" = 8 ] && [ -z "$(printf '%s\n' "$got" | uniq -d)" ] &&
     ok "2 names x 4 concurrent sends in one state folder: all sent, each delivered once" ||
     no "concurrent sends in one state folder: $(cat "$T/c.fail" 2>/dev/null | wc -l | tr -d ' ') failed" \
-      "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null; grep -E ' (fetch|push|rebase|commit|update-ref) ' "$T/c.trace" 2>/dev/null)"
+      "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null; sed 's/ -c [^ ]*//g; s/ -C [^ ]*checkouts/ -C checkouts/; s#/[^ ]*/locks/#locks/#g' "$T/c.trace" 2>/dev/null)"
   tidy && ok "and the shared clone is left tidy" || no "concurrent sends left the shared clone untidy" "$(git -C "$C" status --porcelain --ignored)"
   [ "$(sa sa1 list | grep -c 'sa2-c-')" = 4 ] && [ "$(sa sa2 list | grep -c 'sa1-c-')" = 4 ] &&
     ok "and each name lists exactly its four" || no "a name lists other than its four" "$(sa sa1 list; sa sa2 list)"
