@@ -592,10 +592,13 @@ exec "%s" "$@"
     git --git-dir="$S" merge-base --is-ancestor "$(git -C "$C" rev-parse HEAD)" main; }
   # (git, and the mkdir, mv, rm and rmdir calls on the lock, on PATH logging each call with its process, its parent and
   # the lock's owner then, and the result for the lock calls; shown on a failure)
-  mkdir -p "$W/tracegit"; for t in git mkdir mv rm rmdir; do printf '%s\n' '#!/bin/sh' \
-    'case "'"$t"' $*" in (git*|*/locks/*) ;; (*) exec "'"$(command -v $t)"'" "$@" ;; esac' \
-    'o=$(cat "$TRACE_LOCK/owner" 2>/dev/null); "'"$(command -v $t)"'" "$@"; r=$?' \
-    'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$o] '"$t"' $* -> $r" >> "$TRACE_LOG"; exit $r' \
+  # (the lock calls' shims do as little as they can, since slowing them hides what they trace: one append, in order)
+  mkdir -p "$W/tracegit"; printf '%s\n' '#!/bin/sh' \
+    'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$(cat "$TRACE_LOCK/owner" 2>/dev/null)] git $*" >> "$TRACE_LOG"' \
+    "exec '$(command -v git)' \"\$@\"" > "$W/tracegit/git"; chmod +x "$W/tracegit/git"
+  for t in mkdir mv rm rmdir; do printf '%s\n' '#!/bin/sh' \
+    'case "$*" in (*/locks/*) ;; (*) exec "'"$(command -v $t)"'" "$@" ;; esac' \
+    '"'"$(command -v $t)"'" "$@"; r=$?; echo "  ppid=$PPID '"$t"' $* -> $r" >> "$TRACE_LOG"; exit $r' \
     > "$W/tracegit/$t"; chmod +x "$W/tracegit/$t"; done
   for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
     for i in 1 2 3 4; do ( PATH="$W/tracegit:$PATH" TRACE_LOG="$T/c.trace" TRACE_LOCK="$LK/$id"; export PATH TRACE_LOG TRACE_LOCK
