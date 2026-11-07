@@ -590,13 +590,19 @@ exec "%s" "$@"
   # tidy: the shared clone holds nothing but the store's files, and its HEAD is on the store
   tidy() { [ -z "$(git -C "$C" status --porcelain --ignored)" ] &&
     git --git-dir="$S" merge-base --is-ancestor "$(git -C "$C" rev-parse HEAD)" main; }
+  # (a git on PATH that logs each call with its process, its parent and the lock's owner then, shown on a failure)
+  mkdir -p "$W/tracegit"; printf '%s\n' '#!/bin/sh' \
+    'echo "$(date +%H:%M:%S.%N 2>/dev/null) pid=$$ ppid=$PPID lock=[$(cat "$TRACE_LOCK/owner" 2>/dev/null)] $*" >> "$TRACE_LOG"' \
+    "exec '$(command -v git)' \"\$@\"" > "$W/tracegit/git"; chmod +x "$W/tracegit/git"
   for a in sa1 sa2; do o=sa2; [ $a = sa1 ] || o=sa1
-    for i in 1 2 3 4; do ( echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
+    for i in 1 2 3 4; do ( PATH="$W/tracegit:$PATH" TRACE_LOG="$T/c.trace" TRACE_LOCK="$LK/$id"; export PATH TRACE_LOG TRACE_LOCK
+      echo "$a $i" | sa $a send $o "c-$i" - >/dev/null 2>>"$T/c.err" || echo x >> "$T/c.fail" ) & done; done
   wait
   got=$(git --git-dir="$S" ls-tree -r --name-only main | sed -n 's/.*Z-\(sa[12]-c-[1-4]\)\.md$/\1/p' | sort)
   [ ! -s "$T/c.fail" ] && [ "$(printf '%s\n' "$got" | uniq | wc -l | tr -d ' ')" = 8 ] && [ -z "$(printf '%s\n' "$got" | uniq -d)" ] &&
     ok "2 names x 4 concurrent sends in one state folder: all sent, each delivered once" ||
-    no "concurrent sends in one state folder: $(wc -l < "$T/c.fail" 2>/dev/null || echo 0) failed" "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null)"
+    no "concurrent sends in one state folder: $(cat "$T/c.fail" 2>/dev/null | wc -l | tr -d ' ') failed" \
+      "$(printf '%s\n' "$got"; cat "$T/c.err" 2>/dev/null; grep -E ' (fetch|push|rebase|commit|update-ref) ' "$T/c.trace" 2>/dev/null)"
   tidy && ok "and the shared clone is left tidy" || no "concurrent sends left the shared clone untidy" "$(git -C "$C" status --porcelain --ignored)"
   [ "$(sa sa1 list | grep -c 'sa2-c-')" = 4 ] && [ "$(sa sa2 list | grep -c 'sa1-c-')" = 4 ] &&
     ok "and each name lists exactly its four" || no "a name lists other than its four" "$(sa sa1 list; sa sa2 list)"
@@ -630,7 +636,11 @@ exec "%s" "$@"
     no "a command didn't wait for the lock (exit $r; finished: $(cat "$T/order" | tr '\n' ' '))" "$(cat "$T/w.err")"
   # a waiter stopped by a signal exits at once, and leaves the holder's lock alone
   rm -f "$T/slow"; ( PATH="$W/slowgit:$PATH" SLOWFETCH="$T/slow"; export PATH SLOWFETCH; sa sa1 list >/dev/null 2>&1 ) & hp=$!
-  up "$T/slow"; sa sa2 list >/dev/null 2>&1 & qp=$!; sleep 0.6; kill -TERM "$qp"; t0=$(date +%s); wait "$qp"; r=$?; t1=$(date +%s)
+  # (the CLI itself in the background, so the signal reaches it: `sa ... &` would stop only the shell running sa, and
+  # leave the waiter running into the tests below)
+  up "$T/slow"; HOME="$SH_H" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" --config "$T/sa2.cfg" list >/dev/null 2>&1 & qp=$!
+  sleep 0.6; kill -TERM "$qp"; t0=$(date +%s); wait "$qp"; r=$?; t1=$(date +%s)
   [ $r = 143 ] && [ $((t1 - t0)) -le 2 ] && [ -f "$LK/$id/owner" ] && ok "a waiter stopped by a signal exits at once, leaving the lock" ||
     no "a stopped waiter (exit $r, $((t1 - t0)) s) or the holder's lock went wrong" "$(ls -A "$LK" 2>&1)"
   wait "$hp"
