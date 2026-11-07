@@ -726,7 +726,9 @@ watch)
     echo "$ME" > "$STATE/sessions/$SESSION"
   fi
   echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
-  trap 'rm -f "$STATE/run/$ME.pid"' EXIT
+  # (removed only while it still names this watcher: another watcher for the name may have started since)
+  unmark() { [ "$(cut -d' ' -f1 "$STATE/run/$ME.pid" 2>/dev/null)" != $$ ] || rm -f "$STATE/run/$ME.pid"; }
+  trap unmark EXIT
   trap 'exit 130' INT TERM
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"
   check() { files=$(ad_peek "$ROOT/inbox/$ME") || return 1

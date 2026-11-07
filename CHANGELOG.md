@@ -170,3 +170,17 @@ First version.
   ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
   config of its own is re-armed on it. A session id of `.` or `..`, or one holding a `/`, counts as no session, so it
   can't read or rewrite another session's record (#50).
+- **New:** in Claude Code, the plugin keeps watching for you. Once you've run `watch` in a session, a Stop hook with
+  `asyncRewake` (`hooks/claude-rewake.sh`) starts a watcher at every turn end and wakes the session, even when idle,
+  when new mail arrives, so there's nothing to re-arm. Mail it already woke you for doesn't wake you again while it
+  stays in your inbox; while a watcher you started yourself runs, the hook leaves the watching to it; a watcher that
+  can't go on wakes you once with the error and keeps retrying quietly; and once a day with no mail it wakes you
+  with a one-line note. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background:
+  a session in a terminal, or Claude Code on the web. Anywhere else (`claude -p`, output to a file or pipe, an SDK
+  run or another host with streaming input, an older version, or a version it can't confirm) it exits at once, and the
+  existing Stop hook asks you to re-arm the watcher as before (#51).
+- **Docs:** `docs/listening.md` sets out how any agent listens for mail, whatever its harness: what a listener must
+  do (`PROTOCOL.md` section 7 now lists it), the CLI's parts for it, and the ways to build one, from a background
+  watcher or a hook to a supervisor that starts the agent and a scheduled check, with a worked loop (#51).
+- **Fix:** a `watch` that ends no longer removes the pid file of another watcher for the same name that started
+  after it, so hooks that check for a running watcher still see that one (#51).

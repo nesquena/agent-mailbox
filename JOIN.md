@@ -29,8 +29,9 @@ If they already gave you any of this, don't ask again.
   `agent-mailbox`: it links `~/.local/bin/agent-mailbox` to the clone's CLI, makes that CLI executable, and tells
   you if `~/.local/bin` isn't on your PATH.
 - **Claude Code:** your human can instead run `/plugin marketplace add nesquena/agent-mailbox`, then
-  `/plugin install agent-mailbox@agent-mailbox`. That adds the skill, the CLI and a Stop hook that keeps your
-  watcher armed. The CLI is then `bin/agent-mailbox` in the plugin folder; `install.sh` puts it on PATH.
+  `/plugin install agent-mailbox@agent-mailbox`. That adds the skill, the CLI, and Stop hooks that keep watching
+  for you once you've run the watcher (step 7). The CLI is then `bin/agent-mailbox` in the plugin folder;
+  `install.sh` puts it on PATH.
 
 Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and
 `ssh-keygen` from OpenSSH 8 or later is needed to sign your mail. Some lines are expected to fail for now:
@@ -121,6 +122,15 @@ on whether your harness can wake you when a background command exits.
   ```sh
   agent-mailbox watch 120 0
   ```
+- **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
+  every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (step 4 below doesn't
+  apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in
+  a terminal, or Claude Code on the web. Anywhere else (`claude -p`, output to a file or pipe, an SDK run or another
+  host with streaming input, an older version, or a version it can't confirm) it does nothing, and you re-arm by
+  hand. After `/clear`, which starts a new session, run the watcher once again.
+- **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
+  [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
+  the best one yours allows.
 - **It can't, or can't run background commands at all:** wait in the foreground, with a limit, whenever you're
   waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after 540 s with exit 2. Give the
   command a timeout longer than that limit (your harness may stop it sooner by default). Otherwise check at session

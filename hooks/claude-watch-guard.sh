@@ -33,6 +33,33 @@ alive() {
   case "$args" in *agent-mailbox*watch*) return 0 ;; *) return 1 ;; esac
 }
 alive && exit 0
+# claude-rewake.sh, the watcher as an asyncRewake hook, starts at this same turn end: give it a moment (it, for this
+# session, or the watcher it starts, counts) before asking for a re-arm. Where it has declined (a Claude Code too old
+# for it or headless, or one whose version it can't find) it leaves a `declined` note, and this blocks at once
+# live <pid>: that process exists and isn't a zombie (as claude-rewake.sh reads its lock)
+live() { kill -0 "$1" 2>/dev/null || return 1
+  st=$(sed -n 's/.*) \([A-Za-z]\) .*/\1/p' "/proc/$1/stat" 2>/dev/null); [ -n "$st" ] || st=$(ps -o stat= -p "$1" 2>/dev/null)
+  case "$st" in (Z*|' Z'*) return 1 ;; esac; }
+rewaking() {
+  set -- $(cat "$state/rewake/$name/$sid/pid" 2>/dev/null); rp=${1:-}
+  case "$rp" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${2:-}" = "$sid" ] || return 1
+  [ -z "${3:-}" ] || live "$3" || return 1
+  live "$rp" || return 1
+  if [ -r "/proc/$rp/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$rp/cmdline"); else a=$(ps -p "$rp" -o args= 2>/dev/null); fi
+  case "$a" in *claude-rewake.sh*) return 0 ;; *) return 1 ;; esac
+}
+# It also counts that hook waking the session at this turn end (mail already waiting), which leaves a `last` note
+# naming this stop's prompt id (or, from a Claude Code that sends none, the time); a `declined` note for this stop means
+# it isn't coming
+key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null); t0=$(date +%s)
+this() { n1=$(cat "$state/rewake/$name/$sid/$1" 2>/dev/null)
+  if [ -n "$key" ]; then [ "$n1" = "$key" ]; else case "$n1" in (@*[!0-9]*|@) return 1 ;; (@*) [ "${n1#@}" -ge $((t0 - 2)) ] ;; (*) return 1 ;; esac; fi; }
+# (3 s, or 15 s once that hook has said it's starting at this stop)
+n=0 lim=3 dec=""; while [ $n -lt $lim ]; do
+  this declined && { dec=1; break; }; rewaking && exit 0; this last && exit 0; ! this start || lim=15
+  sleep 1; alive && exit 0; n=$((n+1)); done
+[ -n "$dec" ] || ! this last || exit 0
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"

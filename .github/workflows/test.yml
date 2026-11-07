@@ -18,7 +18,7 @@ jobs:
         # add macOS, whose minutes cost ten times as much on a private repository
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: git identity for the tests' own setup commits
@@ -30,7 +30,7 @@ jobs:
         run: |
           for s in sh dash bash zsh; do
             command -v "$s" >/dev/null || { echo "$s not installed, skipped"; continue; }
-            for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh install.sh test/run.sh test/bench.sh; do
+            for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh hooks/claude-rewake.sh install.sh test/run.sh test/bench.sh; do
               "$s" -n "$f" || { echo "$s can't parse $f"; exit 1; }
             done
             echo "$s ok"
