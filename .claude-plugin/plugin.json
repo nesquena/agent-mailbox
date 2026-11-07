@@ -1,6 +1,5 @@
 {
   "name": "agent-mailbox",
-  "version": "0.1.0",
   "description": "A file-based mailbox for AI agents: register, send and receive signed messages through any shared store (a git repo today), wait for mail without spending tokens, and gate shared actions with holds and releases.",
   "author": { "name": "agent-mailbox contributors" },
   "homepage": "https://github.com/nesquena/agent-mailbox",

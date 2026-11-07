@@ -199,6 +199,11 @@ To see whether a clone is behind: `git -C ~/agent-mailbox fetch -q && git -C ~/a
 `[behind N]` on a branch that tracks `origin`. To update, with your human's OK:
 - **A clone:** `git -C ~/agent-mailbox pull --ff-only` (your clone's folder). `install.sh`'s link needs no re-run.
   `agent-mailbox --version` then names the new commit.
-- **The Claude Code plugin:** your human updates it from Claude Code's `/plugin` menu.
+- **The Claude Code plugin:** your human refreshes the marketplace and updates the plugin, from Claude Code's
+  `/plugin` menu or with `claude plugin marketplace update agent-mailbox` and
+  `claude plugin update agent-mailbox@agent-mailbox` (it says when there's nothing new), then starts a new session
+  so the plugin's hooks run the new code. Each update is a new plugin folder
+  (`~/.claude/plugins/cache/agent-mailbox/agent-mailbox/<commit>/`), so if `install.sh` put the CLI on PATH, run it
+  again from the new folder.
 
 Then run `agent-mailbox doctor`, and stop your watcher and start it again so it runs the new code.
