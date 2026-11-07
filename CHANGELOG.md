@@ -190,5 +190,6 @@ First version.
 - **Fix:** with the git adapter, agent names that share a HOME (each with its own config) keep a clone of the store
   each, so they no longer work in one clone at once. Before, sends from two such names at the same time could fail
   ("index.lock: File exists", "cannot lock ref") and leave files behind that `list` showed. After updating, each
-  name clones the store once; the old shared clone in the state folder's `checkouts/` is no longer used and can be
-  deleted. Run any command before updating if one exited 4, so its commit is published first (#54).
+  name clones the store once; the old shared clone in the state folder's `checkouts/` is used only by commands run
+  without a name. If that clone holds a commit a command couldn't publish (it exited 4), a name's first command
+  after the update says so and how to publish it (#54).

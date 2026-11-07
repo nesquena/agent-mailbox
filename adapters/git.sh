@@ -64,6 +64,12 @@ ad_open() {
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
+    # (the clone names shared before may hold commits a command couldn't publish; this clone won't see them)
+    o="$STATE/checkouts/$STORE_ID"
+    if [ "$AD_ID" != "$STORE_ID" ] && [ -d "$o/.git" ]; then
+      k=$(ad_g -C "$o" rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null) && [ "${k:-0}" -gt 0 ] &&
+        warn "$o, the clone agent names shared before, holds $k commit(s) a command couldn't publish; publish them with: git -C '$o' push origin HEAD:$BRANCH"
+    fi
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
