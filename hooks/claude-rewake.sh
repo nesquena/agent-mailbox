@@ -104,8 +104,8 @@ ccver() {
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
 #   terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
-# Code reads streaming input (a later flag or `-p` can undo it). Each argument is read on its own where /proc has them, else from
-# the command line split at spaces.
+# Code reads streaming input (a later `--input-format`, or input from a terminal, undoes it). Each argument is read
+# on its own where /proc has them, else from the command line split at spaces.
 # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line reads as -p, and the hook
 # declines; and a cloud launch gets its real arguments only once a session claims it, which /proc doesn't show, so
 # one claimed for a headless run would be taken as streaming. Upgrade path: a field in the hook's input saying
@@ -116,10 +116,13 @@ background() {
   case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 1 ;; esac
   # one argument per line, a line break inside an argument (a multi-line prompt) kept apart as \001; without /proc,
   # the command line split at spaces, where a prompt's words can't be told from options, so only a terminal counts
-  if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline")
-    [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ] && ! term "$(readlink "/proc/$ccpid/fd/0" 2>/dev/null)" && return 0
-  else av=$(args "$ccpid" | tr ' ' '\n'); fi
+  if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline") px=1
+  else av=$(args "$ccpid" | tr ' ' '\n') px=""; fi
   printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
+  # (its input checked only where it can be read)
+  if [ -n "$px" ] && [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ]; then
+    i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) && [ -n "$i" ] && ! term "$i" && return 0
+  fi
   o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
   term "$o"
 }

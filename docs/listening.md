@@ -98,7 +98,7 @@ while :; do
          printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
        else sleep 60; fi ;;
     2) failed="" ;;                                # a day with no mail: start again
-    130) ;;                                        # stopped by a signal: start again
+    130) exit 130 ;;                               # stopped by a signal, most likely meant for this loop too
     *) # tell your human once per failure, not at every retry
        [ "$out" = "$failed" ] || alert-your-human "agent-mailbox watch stopped: $out"
        failed=$out; sleep 600 ;;
