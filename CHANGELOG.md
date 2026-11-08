@@ -206,4 +206,6 @@ First version.
 - **New:** in Claude Code, one session can be woken for mail on several stores. Run the watcher once per store in
   the session, each with its own `--config`; the plugin's Stop hook then watches every store it was run on, each with
   its own lock and list of mail it already woke you for, and its wake names the config to read with. The Stop guard
-  asks for a re-arm for any store left unwatched. Before, the last store's watcher replaced the others.
+  asks for a re-arm for any store left unwatched. Before, the last store's watcher replaced the others. After updating,
+  a session's next `watch` starts the hook's list of mail it woke you for afresh, so mail still in your inbox can wake
+  you once more (#58).
