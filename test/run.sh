@@ -1230,6 +1230,23 @@ if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid" && [ -s "$T/wp
     no "with the shell the hook ran through gone, every store's run stops" "$(ps -o pid=,args= -p "$(echo $ks | tr ' ' ,)")"
 else no "with the shell the hook ran through gone, every store's run stops" "they didn't start"; fi
 unset WPID; kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
+# a stop Claude Code waited for (stop_hook_active), at the prompt one store's run woke the session at: every store
+# steps aside, as one store's run does
+rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S2/pid" "$RS/rewake/rw/r9@$S2/declined"; echo p-L > "$RS/rewake/rw/r9@$S1/last"
+expect "a stop Claude Code waited for, at the prompt one store woke it at, makes every store step aside" 0 '^$' \
+  rewakej '{"session_id":"r9","prompt_id":"p-L","stop_hook_active":true}'
+expect "leaving each store a note for the guard" 0 - grep -qx p-L "$RS/rewake/rw/r9@$S2/declined"
+# the hook stopped just as a store's run has found mail: that mail is passed on, or wakes the next run, never neither
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
+: > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
+if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2
+  hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S1/pid")" | tr -d ' ')
+  echo hi | as rx send rw rx-7 - >/dev/null 2>&1
+  n=0; while [ $n -lt 100 ] && [ -e "$RS/rewake/rw/r9@$S1/pid" ]; do sleep 0.1; n=$((n+1)); done
+  kill -TERM "$hp" 2>/dev/null; wait "$bg"; rc=$?
+  if [ "$rc" = 2 ] && grep -q rx-7 "$T/bg.out"; then ok "mail found as the hook stops is passed on, or wakes the next run"
+  else expect "mail found as the hook stops is passed on, or wakes the next run" 2 "rx-7\.md" rewake r9; fi
+else no "mail found as the hook stops is passed on, or wakes the next run" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 # a store whose watcher can't go on says so once; the other store's mail still wakes the session after that
 mv "$C2" "$C2.off"
 expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9
@@ -1240,6 +1257,13 @@ if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >
     ("2 "*rx-3.md*) ok "and the other store's mail still wakes it" ;; (*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;; esac
 else no "and the other store's mail still wakes it" "it didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 mv "$C2.off" "$C2"
+# retiring the name on one store records it so, and the hook then watches only the other
+HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired >/dev/null 2>&1
+expect "retiring the name on one store records it in the session's list" 0 - test "$(tail -n 1 "$RS/session-stores/r9")" = "$S2 rw -"
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
+echo hi | as rx send rw rx-r - >/dev/null 2>&1
+expect "and the hook then watches only the other store" 2 "rx-r\.md" rewake r9
 
 elif [ -n "${CI:-}" ]; then no "the Claude Code asyncRewake hook" "no python3 3.9 or later for a terminal on CI"
 else sk "the Claude Code asyncRewake hook (no python3 3.9 or later for a terminal)"; fi

@@ -35,6 +35,8 @@ case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 if command -v jq >/dev/null 2>&1; then key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null | head -n 1)
 else key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
 [ -n "$key" ] || key="@$(date +%s)"
+if command -v jq >/dev/null 2>&1; then sha=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
+else sha=$(printf '%s' "$input" | sed -n 's/.*"stop_hook_active"[[:space:]]*:[[:space:]]*\(true\).*/\1/p' | head -n 1); fi
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
 # stores: this session's stores, as "<store id> <name> <config>": session-stores/<id> is a log `watch` appends to, a
 # line per store and name, its latest config (or -, retired) counting
@@ -45,8 +47,8 @@ stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[
 split() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }; }
 # the session's name and config: from its store line, else (before store lines) from the name and config `watch`
 # recorded; a run for one of several stores gets its own
-store="" n=0
-if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-}
+store="" n=0 kid=""
+if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-} kid=1
   printf '%s\n' "$store" | grep -Eq '^[A-Za-z0-9]{1,64}$' || exit 0
 else n=$(stores | wc -l)
   if [ "$n" -ge 1 ]; then split "$(stores | head -n 1)"
@@ -75,17 +77,27 @@ mine() {
 }
 # several stores: one run of this hook for each (its stdin this stop's input), its stderr kept; the first to exit 2
 # ends the others, and everything any of them said is passed on. A run whose parent is gone (this one, killed) stops
-# itself, as below
+# itself, as below. A run records the mail it woke for as pending; this hook adds it to that store's list only once it
+# has passed the wake on, so a stop in between wakes the session for it again rather than never
 if [ "$n" -ge 2 ]; then
   # (in the system's temporary folder, so one a killed hook leaves is cleared as other temporary files are)
   each=$(mktemp -d 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
+  while IFS= read -r l; do split "$l"; printf '%s\n' "$state/rewake/$name/$sid@$store"; done < "$each/list" > "$each/dirs"
+  # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside
+  w=""; [ "$sha" != true ] || while IFS= read -r d; do [ "$(cat "$d/last" 2>/dev/null)" != "$key" ] || w=1; done < "$each/dirs"
+  if [ -n "$w" ]; then
+    while IFS= read -r d; do mkdir -p "$d" && printf '%s\n' "$key" > "$d/declined"; done < "$each/dirs"; rm -rf "$each"; exit 0
+  fi
   while IFS= read -r l; do i=$((i+1)); split "$l"
     sh "$0" --store "$store" "$name" "$conf" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
   done < "$each/list"
   # (a run that's been waited for answers no more; one still running is stopped, then waited for)
   finish() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
-    for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done; rm -rf "$each"; exit "$1"; }
+    for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done
+    [ "$1" != 2 ] || while IFS= read -r d; do
+      [ ! -f "$d/pending" ] || { cat "$d/pending" >> "$d/woke" && rm -f "$d/pending"; }; done < "$each/dirs"
+    rm -rf "$each"; exit "$1"; }
   trap 'finish 0' TERM INT HUP
   # (and once the shell Claude Code started this hook through is gone, as a single store's run stops then)
   top=$PPID
@@ -182,10 +194,8 @@ background() {
   o=$(fdname "$ccpid" 1)
   term "$o"
 }
-# a stop that a Stop hook already kept going (stop_hook_active) at the prompt this hook already woke the session at
-# means Claude Code waited for it: run as an ordinary Stop hook after all, so it steps aside
-if command -v jq >/dev/null 2>&1; then sha=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
-else sha=$(printf '%s' "$input" | sed -n 's/.*"stop_hook_active"[[:space:]]*:[[:space:]]*\(true\).*/\1/p' | head -n 1); fi
+# a stop that a Stop hook already kept going (stop_hook_active, read above) at the prompt this hook already woke the
+# session at means Claude Code waited for it: run as an ordinary Stop hook after all, so it steps aside
 looped() { [ "$sha" = true ] && [ "$prev" = "$key" ]; }
 cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
 case "$ccpid" in (*[!0-9]*) ccpid="" ;; esac
@@ -198,7 +208,9 @@ rm -f "$run/declined"
 # a watcher already running for this name (one the agent started by hand) wakes the session itself; this hook starts
 # at the turn end after it exits. A stopped hook's own watcher, still finishing its last poll, isn't one: `child` names it;
 # for a run that watches one of several stores, only a watcher on that store counts (its own pid file)
-set -- $(cat "$state/run/$name${store:+@$store}.pid" 2>/dev/null); wp=${1:-}
+# (or the name's own pid file when it names this store, as an older CLI's watcher writes only that)
+set -- $(cat "$state/run/$name@$store.pid" 2>/dev/null || cat "$state/run/$name.pid" 2>/dev/null); wp=${1:-}
+[ -z "$store" ] || [ "${3:-}" = "$store" ] || wp=""
 case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
   if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac
@@ -215,6 +227,8 @@ if ! claim; then
 fi
 if mine; then unclaim; exit 0; fi
 printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; unclaim
+# (mail an earlier run left pending, never passed on, wakes the session again)
+rm -f "$run/pending"
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
 # note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
 note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
@@ -283,7 +297,9 @@ while :; do
     printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn's end." >&2; exit 2; }
   # the watcher in the background, so a stop (TERM) can end it too
   # shellcheck disable=SC2086
-  "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
+  # (a run for one of several stores leaves the session's own name record alone: its watcher runs with no session)
+  if [ -n "$kid" ]; then AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
+  else "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 & fi
   child=$!; echo "$child" > "$run/child"
   wait "$child"; rc=$?; child=""
   case $rc in
@@ -294,7 +310,9 @@ while :; do
       # (said first, then recorded as woken for: a stop between the two wakes the session for it again, never not at all)
       c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
       { printf '%s\n' "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
-      sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
+      # (a run for one of several stores leaves it pending, for the hook that started it to add once it has passed the
+      # wake on)
+      if [ -n "$kid" ]; then sed -n '2,$s#.*/##p' "$run/out" > "$run/pending"; else sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"; fi
       exit 2 ;;
     2)
       note last

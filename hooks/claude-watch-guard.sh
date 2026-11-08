@@ -38,9 +38,11 @@ pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }
   [ "$store" != - ] || store=""; dir="$state/rewake/$name/$sid${store:+@$store}"; }
 pick "$(printf '%s\n' "$list" | head -n 1)"
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-# (on one of several stores, only a watcher on that store counts: its own pid file)
+# (for a store, only a watcher on that store counts: its own pid file, or the name's when it names the store, as an
+# older CLI's watcher writes only that)
 alive() {
-  set -- $(cat "$state/run/$name${store:+@$store}.pid" 2>/dev/null); pid=${1:-}
+  set -- $(cat "$state/run/$name@$store.pid" 2>/dev/null || cat "$state/run/$name.pid" 2>/dev/null); pid=${1:-}
+  [ -z "$store" ] || [ "${3:-}" = "$store" ] || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   if [ -r "/proc/$pid/cmdline" ]; then args=$(tr '\0' ' ' < "/proc/$pid/cmdline"); else args=$(ps -p "$pid" -o args= 2>/dev/null); fi

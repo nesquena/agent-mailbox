@@ -67,8 +67,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   `run_in_background: true`. Never use a shell `&` or `nohup`: the watcher would run, but its exit couldn't wake you.
 - **In Claude Code with the plugin,** run the watcher once as above; that records your name for this session (after
   `/clear`, which starts a new session, run it once again). On several stores in one session, run it once for each,
-  with that store's `--config`: the hook watches them all, and its wake names the config to read with. From then on
-  the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
+  with that store's `--config`: the hook watches them all, and its wake names the config to read with. Pass that
+  `--config` and `--as <your name there>` on every command for a store, since the session records one name. From then
+  on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
   idle, with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does
   that at the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your inbox. While
   a watcher you started yourself is still running, the hook leaves the watching to it. Once a day without mail it
