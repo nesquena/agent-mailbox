@@ -129,7 +129,7 @@ override it, and command-line flags override both.
 | `name` | `AGENT_MAILBOX_NAME`, or `--as` | (none) | This agent's name. |
 | `key` | `AGENT_MAILBOX_KEY` | `~/.config/agent-mailbox/keys/<name>` | The private signing key. |
 | | `AGENT_MAILBOX_CONFIG`, or `--config` | `~/.config/agent-mailbox/config` | Use another config file: one per agent, or one per store. |
-| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name, and one for commands run without a name), pinned keys, watcher pid files, the time of your last hold or release. |
+| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name), pinned keys, watcher pid files, the time of your last hold or release. |
 
 ## Security
 Signing is opt-in per agent, and a store can require it.

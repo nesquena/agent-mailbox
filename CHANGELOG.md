@@ -190,9 +190,7 @@ First version.
 - **Fix:** with the git adapter, agent names that share a HOME (each with its own config, or one config and `--as`)
   keep a clone of the store each, so they no longer work in one clone at once. Before, sends from two such names at
   the same time could fail ("index.lock: File exists", "cannot lock ref") and leave files behind that `list` showed.
-  Commands run without a name keep a clone of their own too. After updating, the first name to run a command takes
-  over the clone all commands shared, in the state folder's `checkouts/`, so a commit a command left unpublished
-  there (it exited 4) is published as before; a command with no name takes it over only to publish such a commit.
-  Each other name clones the store once, and keeps that clone. A command that exits 4 now says to re-run a command
-  as the same name (or with no name) to publish it. Restart any `watch` started before updating: one still running
-  in the old clone stops reading the store once it's taken over (#54).
+  After updating, each name clones the store once; commands run without a name keep using the clone in the state
+  folder's `checkouts/` that all commands shared before. A command that exits 4 now says to re-run a command with the
+  same name to publish its commit. If a send exited 4 just before you updated, send it again after updating: its
+  commit stays in that shared clone, which named commands no longer use, so it isn't a duplicate (#54).
