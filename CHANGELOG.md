@@ -142,7 +142,9 @@ First version.
   line-ending conversion, no filters such as Git LFS, no merge drivers), never recurses into submodules and runs no
   git hooks or file-system monitor, so every message is checked out exactly as it was stored and its signature
   verifies, whatever git settings the store or your git config carry. An existing checkout is checked out again once,
-  on its next command (#27).
+  on its next command (#27). After updating, let that first command finish before starting another that uses the same
+  clone: a command running alongside it can find a message it consumed back in the inbox, or a record it updated
+  unchanged (#43).
 - **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
   for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
   (#27).

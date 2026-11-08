@@ -91,7 +91,12 @@ ad_open() {
     [ -d "$AD_DIR/.git" ] || die "$AD_DIR isn't a clone: remove it, then run this again"
   # an older clone may hold files checked out under the store's attributes: check them out again, as stored (read-tree
   # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged). The attributes are
-  # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time
+  # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time.
+  # ceiling: nothing stops another command using this clone from running during that one repair (another agent name
+  # sharing it, or a second command started at once). If it does, the repair can put back a file the other command
+  # has just removed or rewritten but not yet committed: a message it consumed stays in the inbox, or a record it
+  # updated keeps its old text, though the command reports success. Only a clone made before this rule needs the
+  # repair, once; so after updating, let the first command finish before starting another
   elif ad_attrs '# retry'; then
     if ! ad_git rev-parse -q --verify HEAD >/dev/null ||
       { ad_git read-tree HEAD && ad_git checkout-index -q -a -f -u; } 2>/dev/null; then ad_attrs_put || :; fi
