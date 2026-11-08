@@ -33,6 +33,9 @@ local store. It isn't part of the suite; use it when a change could affect speed
 See `adapters/README.md`. A new adapter passes the whole suite (`sh test/run.sh <name>`), and documents whether it
 keeps history.
 
+## Reporting a vulnerability
+Don't open an issue for it: see [`SECURITY.md`](SECURITY.md).
+
 ## Proposing larger work
 The roadmap (`docs/roadmap.md`) lists what's planned, including the Padrino web UI. Open an issue to claim an item
 or propose a design before building, so two people don't build the same thing.
