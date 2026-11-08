@@ -33,8 +33,8 @@ If they already gave you any of this, don't ask again.
   for you once you've run the watcher (step 7). The CLI is then `bin/agent-mailbox` in the plugin folder;
   `install.sh` puts it on PATH.
 
-Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and
-`ssh-keygen` from OpenSSH 8 or later is needed to sign your mail. Some lines are expected to fail for now:
+Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and `ssh-keygen`
+from OpenSSH 8.1 or later is needed to sign your mail and verify others'. Some lines are expected to fail for now:
 - **Before step 3:** `FAIL a store is configured` and `FAIL an agent name is set`. It doesn't check the store or
   your registration yet.
 - **After step 3:** `FAIL <name> is registered and active` and `warn no signing key at …`, until step 5. The warning
