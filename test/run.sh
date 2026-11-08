@@ -2007,6 +2007,16 @@ mkdir -p "$W/dshim"; printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ"
   '  if [ $n -le 2 ]; then echo 20260101T000000Z; else echo 20260101T000001Z; fi; exit 0; fi' "exec '$(command -v date)' \"\$@\"" > "$W/dshim/date"; chmod +x "$W/dshim/date"
 for k in "--hold" "--release"; do echo x | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 "g17${k#--}" - $k "item#17 v1" >/dev/null 2>&1; done
 expect "a release right after a hold in the same second still counts" 0 "item#17 released by u2 at v1" as u1 holds "item#17" --version v1
+# 11b. a file name is never reused, even right after the message it named was consumed (PROTOCOL.md section 5): with the
+# clock shim's first two stamps in one second, the second send waits for the next
+rm -f "$W/dshim/n"
+echo a | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 reuse-1 - >/dev/null 2>&1
+r1=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$'); [ -z "$r1" ] || as u1 consume "${r1##*/}" >/dev/null 2>&1
+echo b | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 reuse-1 - >/dev/null 2>&1
+r2=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$')
+[ -n "$r1" ] && [ -n "$r2" ] && [ "${r1##*/}" != "${r2##*/}" ] && ok "a consumed message's file name isn't reused in the same second" ||
+  no "a consumed message's file name was reused" "first: $r1, then: $r2"
+as u1 consume "${r2##*/}" >/dev/null 2>&1
 T="$W/rules"
 # 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do

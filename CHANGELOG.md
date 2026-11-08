@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second.

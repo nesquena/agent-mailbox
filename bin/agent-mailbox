@@ -547,6 +547,13 @@ send)
   fi
   context="${context:-general}"
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # a message's file name is never reused (PROTOCOL.md section 5), even once the message it named is consumed: a send
+  # waits for the next second when this sender already used the same name for the same recipient in this second. The
+  # record holds the second, then each <to>/<name> used in it. ceiling: like the hold record below, it knows only this
+  # machine's sends
+  used="$STATE/names/$STORE_ID/$ME"
+  while { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ] &&
+    grep -qxF -- "$to/$stamp-$ME-$topic.md" "$used"; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
   # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
   # or release waits for the next second after this sender's previous one in this store, so the two never tie.
   # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set
@@ -556,6 +563,10 @@ send)
     while [ "$(cat "$last" 2>/dev/null)" = "$stamp" ]; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
     mkdir -p "$STATE/gates/$STORE_ID" && printf '%s\n' "$stamp" > "$last" || die "can't write $last"
   fi
+  mkdir -p "$STATE/names/$STORE_ID" || die "can't create $STATE/names/$STORE_ID"
+  if { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ]; then
+    printf '%s\n' "$to/$stamp-$ME-$topic.md" >> "$used"
+  else printf '%s\n%s\n' "$stamp" "$to/$stamp-$ME-$topic.md" > "$used"; fi || die "can't write $used"
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
   no_link "$f"; no_link "$M/inbox/$to/.keep"; [ -d "$M/inbox/$to" ] || [ ! -e "$M/inbox/$to" ] || die "$(rel "$M/inbox/$to") isn't a folder"
