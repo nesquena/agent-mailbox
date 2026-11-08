@@ -209,4 +209,5 @@ First version.
   its wake names the config to read with. The Stop guard asks for a re-arm for any store left unwatched; with a
   different name on each store, pass `--as <name>` with each store's `--config`. A `watch` without `--also` replaces
   the stores the hook watches, as before. After updating, a session's next `watch` starts the hook's list of mail it
-  woke you for afresh, so mail still in your inbox can wake you once more (#58).
+  woke you for afresh, so mail still in your inbox can wake you once more. In a session that ran `watch` before
+  updating, run a plain `watch` on your first store once before adding another with `--also` (#58).

@@ -1148,6 +1148,13 @@ if up "$RS/rewake/rw/r6@$S6/pid" && up "$RS/rewake/rw/r6@$S6/child"; then
     (*) no "a hook restarting its watcher doesn't drop a store added with --also" "$(cat "$RS/session-stores/r6")" ;; esac
 else no "a hook restarting its watcher doesn't drop a store added with --also" "it didn't start"; fi
 kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r6@$S6/pid" 2>/dev/null)" 2>/dev/null; wait "$b6" 2>/dev/null
+# (a session an older CLI registered, with no store lines: the hook records its store, so a store added with --also
+# later keeps it)
+mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r5"
+printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r5"
+rm -f "$RS/session-stores/r5"; rewake r5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
+expect "a session an older CLI registered keeps its store when another is added with --also" 0 - \
+  test "$(grep -vc ' -$' "$RS/session-stores/r5" 2>/dev/null)" = 2
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
 reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
@@ -1265,6 +1272,13 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rew
   expect "a stop the guard kept going isn't taken for one Claude Code waited at" 2 "rx-b\.md" \
     rewakej '{"session_id":"r9","prompt_id":"p-B","stop_hook_active":true}'
 else sk "a stop the guard kept going isn't taken for one Claude Code waited at (no jq)"; fi
+# another hook holding one store (its mail pending, not yet passed on): a wake on the other store doesn't record that
+# mail as woken for, which is the other hook's to do
+"$SH" -c 'sleep 60; :' claude-rewake.sh & oh=$!; echo "$oh r9" > "$RS/rewake/rw/r9@$S1/pid"; echo x-other.md > "$RS/rewake/rw/r9@$S1/pending"
+echo hi | as rz send rw rz-o - >/dev/null 2>&1
+expect "a wake on one store wakes for its mail" 2 "rz-o\.md" rewake r9
+expect "and leaves another hook's pending mail to that hook" 1 - grep -qx x-other.md "$RS/rewake/rw/r9@$S1/woke"
+kill "$oh" 2>/dev/null; wait "$oh" 2>/dev/null; rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S1/pending"
 # the hook stopped just as a store's run has found mail: that mail is passed on, or wakes the next run, never neither
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!

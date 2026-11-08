@@ -47,12 +47,12 @@ stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[
 split() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }; }
 # the session's name and config: from its store line, else (before store lines) from the name and config `watch`
 # recorded; a run for one of several stores gets its own
-store="" n=0 kid=""
+store="" n=0 kid="" legacy=""
 if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-} kid=1
   printf '%s\n' "$store" | grep -Eq '^[A-Za-z0-9]{1,64}$' || exit 0
 else n=$(stores | wc -l)
   if [ "$n" -ge 1 ]; then split "$(stores | head -n 1)"
-  else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
+  else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); legacy=1; fi
 fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
@@ -304,8 +304,13 @@ while :; do
   # the watcher in the background, so a stop (TERM) can end it too
   # shellcheck disable=SC2086
   # (with no session: a watcher this hook starts isn't the agent registering, so it changes none of the session's
-  # records, nor the stores the session watches)
-  AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
+  # records, nor the stores the session watches. But a session a CLI from before store lines registered gets this
+  # store's line once, with --also, which drops none, so a store the agent adds with --also later keeps this one.
+  # ceiling: an --also the agent runs before this hook's first start in the session still replaces it; a plain
+  # watch on the first store first, once, keeps both)
+  if [ -n "$legacy" ] && [ ! -s "$state/session-stores/$sid" ]; then
+    AGENT_MAILBOX_SESSION=$sid CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex --also > "$run/out" 2>&1 &
+  else AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 & fi
   child=$!; echo "$child" > "$run/child"
   wait "$child"; rc=$?; child=""
   case $rc in
