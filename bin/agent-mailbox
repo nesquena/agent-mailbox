@@ -159,6 +159,11 @@ SESSION="${AGENT_MAILBOX_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
 # a session id that could name another folder (`.`, `..`, or holding a /) is no session, as the Stop hook reads it
 case "$SESSION" in (.|..|*/*) SESSION= ;; esac
 session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
+# session_store <config>|-: record this store and name for this session in session-stores/<session id>, one line each
+# ("<store id> <name> <config>"), so the Claude Code hook can watch every store a session uses; or, with -, drop it
+session_store() { t="$STATE/session-stores/$SESSION"; mkdir -p "$STATE/session-stores"
+  { [ ! -f "$t" ] || awk -v s="$STORE_ID" -v n="$ME" '!($1 == s && $2 == n)' "$t"
+    [ "$1" = - ] || printf '%s %s %s\n' "$STORE_ID" "$ME" "$1"; } > "$t.$$" && mv -f "$t.$$" "$t"; }
 ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
 KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
 
@@ -442,7 +447,10 @@ register|update)
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
-  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"; fi
+  if [ "$status" = retired ] && [ -n "$SESSION" ]; then
+    [ "$(session_name)" != "$ME" ] || rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"
+    session_store - 2>/dev/null || true
+  fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
@@ -724,10 +732,13 @@ watch)
     else case "$CONFIG" in (/*) c=$CONFIG ;; (*) c="$(pwd)/$CONFIG" ;; esac; fi
     printf '%s\n' "$c" > "$STATE/session-configs/$SESSION"
     echo "$ME" > "$STATE/sessions/$SESSION"
+    session_store "$c"
   fi
-  echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
+  # (one for the name, and one for the name on this store, since one name can be in use on several stores)
+  for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
   # (removed only while it still names this watcher: another watcher for the name may have started since)
-  unmark() { [ "$(cut -d' ' -f1 "$STATE/run/$ME.pid" 2>/dev/null)" != $$ ] || rm -f "$STATE/run/$ME.pid"; }
+  unmark() { for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do
+    [ "$(cut -d' ' -f1 "$pf" 2>/dev/null)" != $$ ] || rm -f "$pf"; done; }
   trap unmark EXIT
   trap 'exit 130' INT TERM
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"

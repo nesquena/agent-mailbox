@@ -17,9 +17,13 @@
 # consumed doesn't wake the session at every turn end; only new mail does.
 #
 # It acts only in a session that has run `agent-mailbox watch`, which records the session's name (and config) under
-# the CLI's state folder; any other session exits 0 at once. It finds those records through the same state path the
-# CLI uses (AGENT_MAILBOX_STATE, else XDG_STATE_HOME, else ~/.local/state). AGENT_MAILBOX_REWAKE_INTERVAL and
-# AGENT_MAILBOX_REWAKE_MAX set watch's interval and limit in seconds (120 and 86100, five minutes under the timeout).
+# the CLI's state folder; any other session exits 0 at once. A session that ran `watch` on several stores (each store
+# and name a line in session-stores/<session id>) gets a watcher for each: this hook runs itself once per store
+# (`--store <store id> <name> <config>`), each run with its own lock, notes and list of mail it woke for, and passes on
+# the first that has something to say, with anything another has said by then. It finds those records through the
+# same state path the CLI uses (AGENT_MAILBOX_STATE, else XDG_STATE_HOME, else ~/.local/state).
+# AGENT_MAILBOX_REWAKE_INTERVAL and AGENT_MAILBOX_REWAKE_MAX set watch's interval and limit in seconds (120 and 86100,
+# five minutes under the timeout).
 input=$(cat 2>/dev/null)
 if command -v jq >/dev/null 2>&1; then sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 else sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
@@ -32,15 +36,16 @@ if command -v jq >/dev/null 2>&1; then key=$(printf '%s' "$input" | jq -r '.prom
 else key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
 [ -n "$key" ] || key="@$(date +%s)"
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
-name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid")
+# stores: this session's valid store lines
+stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
+  "$state/session-stores/$sid" 2>/dev/null; }
+store=""
+if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-}
+  printf '%s\n' "$store" | grep -Eq '^[A-Za-z0-9]{1,64}$' || exit 0
+else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
-# this session's files: its lock, the mail it woke for, its last error (one folder per session, so two sessions
-# that use one name, against the protocol, don't share them)
-# ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
-run="$state/rewake/$name/$sid"; mkdir -p "$run" 2>/dev/null || exit 0
 # args <pid>: that process's command line, its arguments joined by spaces
 args() { if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o args= 2>/dev/null; fi; }
 # ppid <pid>: its parent's pid
@@ -59,6 +64,29 @@ mine() {
   [ -z "${3:-}" ] || live "$3" || return 1
   case "$(args "$1")" in (*claude-rewake.sh*) return 0 ;; (*) return 1 ;; esac
 }
+# several stores: one run of this hook for each (its stdin this stop's input), its stderr kept; the first to exit 2
+# ends the others, and everything any of them said is passed on. A run whose parent is gone (this one, killed) stops
+# itself, as below
+if [ -z "$store" ] && [ "$(stores | wc -l)" -ge 2 ]; then
+  mkdir -p "$state/rewake" 2>/dev/null; each=$(mktemp -d "$state/rewake/.each.XXXXXX" 2>/dev/null) || exit 0
+  printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
+  while read -r s n c; do i=$((i+1))
+    sh "$0" --store "$s" "$n" "$c" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
+  done < "$each/list"
+  # (a run that's been waited for answers no more; one still running is stopped, then waited for)
+  end() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
+    for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done; rm -rf "$each"; exit "$1"; }
+  trap 'end 0' TERM INT HUP
+  while :; do
+    left=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || { kids=$left; end 2; }; fi; done
+    kids=$left; [ -n "$kids" ] || end 0
+    sleep 1 & wait $!
+  done
+fi
+# this session's files: its lock, the mail it woke for, its last error (one folder per session, so two sessions
+# that use one name, against the protocol, don't share them; and one per store, for a session on several)
+# ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
+run="$state/rewake/$name/$sid${store:+@$store}"; mkdir -p "$run" 2>/dev/null || exit 0
 # this stop's key, for a hook already watching that may wake the session during this stop
 printf '%s\n' "$key" > "$run/key"
 mine && exit 0
@@ -155,8 +183,9 @@ then
 fi
 rm -f "$run/declined"
 # a watcher already running for this name (one the agent started by hand) wakes the session itself; this hook starts
-# at the turn end after it exits. A stopped hook's own watcher, still finishing its last poll, isn't one: `child` names it
-wp=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
+# at the turn end after it exits. A stopped hook's own watcher, still finishing its last poll, isn't one: `child` names it;
+# for a run that watches one of several stores, only a watcher on that store counts (its own pid file)
+set -- $(cat "$state/run/$name${store:+@$store}.pid" 2>/dev/null); wp=${1:-}
 case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
   if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac

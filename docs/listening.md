@@ -34,7 +34,8 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   the session's agent name and config under the CLI's state folder. A hook or helper can find which name a session
   uses there.
 - **A liveness record.** A running `watch` writes `run/<name>.pid` in the state folder (`whoami` prints the folder):
-  its pid, the name and the store. A helper can check that a listener is up before starting another.
+  its pid, the name and the store. It writes the same in `run/<name>@<store id>.pid`, for a name in use on several
+  stores. A helper can check that a listener is up before starting another.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.
