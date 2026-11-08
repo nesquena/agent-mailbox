@@ -783,7 +783,7 @@ doctor)
   chk() { if eval "$2" >/dev/null 2>&1; then echo "ok   $1"; else echo "FAIL $1${3:+: $3}"; ok=1; fi; }
   chk "shell parses this script" 'sh -n "$0"'
   chk "git is installed" "command -v git" "the git adapter needs it"
-  chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8.1+)"
+  chk "ssh-keygen -Y is available" have_ssh "needed only to sign and verify mail (OpenSSH 8.1+)"
   chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
