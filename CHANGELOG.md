@@ -216,3 +216,7 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
+  it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
+  writer exits, and `send` took that for a link it couldn't follow; a path that ends at `/dev/fd/<n>` now names a
+  descriptor, as one through `/proc` does on Linux.

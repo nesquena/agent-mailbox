@@ -88,8 +88,14 @@ hops() {
       [ ! -L "$hd" ] || (hops "$hd" $((hl + 1)) 1) || return 1
       hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
     # the end must be the very file named, or a link was read as a name other than the one stored (macOS's readlink
-    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file
-    if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || [ "$rp" -ef "$h1" ]; return; fi
+    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file.
+    # So does one that ends at /dev/fd/<n> (macOS, BSD: where /dev/stdin leads), which names a descriptor; and on macOS
+    # a stat of it fails now and then while a pipe's writer exits, so it isn't compared either. Every hop before it is
+    # still listed and checked. ceiling: on macOS and BSD the walk can't see the file behind a descriptor, so a secret
+    # file redirected to stdin, or named as /dev/fd/<n>, is caught only by the private-key check on the body's text
+    # (as before: comparing /dev/fd/<n> with itself never refused one)
+    if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || { [ "$rd" = /dev/fd ] &&
+      case $(basename "$rp") in (''|*[!0-9]*) false ;; esac; } || [ "$rp" -ef "$h1" ]; return; fi
     rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
     # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
     # aren't walked again; but not under /proc, where self names the subshell phys ran in

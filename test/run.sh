@@ -1412,6 +1412,20 @@ if command -v perl >/dev/null 2>&1; then
     close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
   expect "and its text is the body" 0 "^from a socket$" block i2 sock
 else sk "a socket on stdin sends (no perl)"; fi
+# on macOS, /dev/stdin leads to /dev/fd/0, and a stat of that fails now and then while a pipe's writer exits (EBADF).
+# A sandbox that denies that stat makes it fail every time; the body is still read from fd 0, so the send goes through
+if [ "$(uname -s)" = Darwin ] && command -v sandbox-exec >/dev/null 2>&1 &&
+   printf '%s\n' '(version 1)' '(allow default)' '(deny file-read-metadata (regex #"^/dev/fd/[0-9]+$"))' > "$T/nofd.sb" &&
+   echo x | sandbox-exec -f "$T/nofd.sb" /bin/sh -c '! [ /dev/fd/0 -ef /dev/stdin ] && [ "$(cat)" = x ]' 2>/dev/null; then
+  expect "a pipe on stdin sends when /dev/fd/0 can't be stat'ed" 0 "^sent" \
+    sh -c "echo 'from a pipe' | HOME='$W/home-i1' sandbox-exec -f '$T/nofd.sb' '$SH' '$CLI' send i2 nofd -"
+  expect "and its text is the body" 0 "^from a pipe$" block i2 nofd
+else sk "a pipe on stdin sends when /dev/fd/0 can't be stat'ed (macOS with sandbox-exec only)"; fi
+# the walk's earlier hops still count when it ends at /dev/fd/<n>: a link in the config folder that leads to stdin
+ln -s /dev/stdin "$W/home-i1/.config/agent-mailbox/to-stdin"
+expect "a config-folder link to /dev/stdin is refused" 1 "refusing to send" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 link-stdin '$W/home-i1/.config/agent-mailbox/to-stdin' < '$T/b'"
+rm -f "$W/home-i1/.config/agent-mailbox/to-stdin"
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
 
