@@ -1,9 +1,13 @@
 name: test
 
 on:
+  # a change to prose alone (Markdown, docs/, LICENSE) runs no tests: the suite reads none of it. A change that also
+  # touches anything else runs them as before, and a manual run always does
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
 
 permissions:
