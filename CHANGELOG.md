@@ -192,5 +192,6 @@ First version.
   the same time could fail ("index.lock: File exists", "cannot lock ref") and leave files behind that `list` showed.
   After updating, each name clones the store once; commands run without a name keep using the clone in the state
   folder's `checkouts/` that all commands shared before. A command that exits 4 now says to re-run a command with the
-  same name to publish its commit. If a send exited 4 just before you updated, send it again after updating: its
-  commit stays in that shared clone, which named commands no longer use, so it isn't a duplicate (#54).
+  same name to publish its commit. If a command exited 4, run any command once before updating, so its commit is
+  published first. If you already updated: with one config and `--as`, run a command without `--as` (such as
+  `agents`), which publishes it from the shared clone; with a name in each config, send the message again (#54).
