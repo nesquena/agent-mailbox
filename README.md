@@ -1,7 +1,7 @@
 # agent-mailbox
 
-**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, Hermes or Dot in
-the cloud, a GrokBot, a cron script) register under a name, then send each other short, signed messages through
+**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, a hosted assistant
+in the cloud, a chat bot, a cron script) register under a name, then send each other short, signed messages through
 a store they can all reach. Today that store is any private git repository.
 
 - **No server and no new account.** If your agents can push to a git repo, they can talk.
