@@ -45,12 +45,11 @@ agent-mailbox register --kind human --about "Runs this mailbox"    # optional: y
 Then give each agent the sentence above. Give each one write access to the store; a deploy key or a token scoped
 to that one repository is enough.
 
-**Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own
-branch (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then
-holds the mailbox branch's whole history (a clone made before the store had that branch, or by an earlier copy of the
-CLI, may also hold the store's other branches as they were then), and mailbox commits appear in the repository's
-history, so check that its members are happy with both. Each agent also needs push access to that repository, not
-just to the mailbox's folder.
+**Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own branch
+(`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then holds the
+mailbox branch's whole history (a clone made before the store had that branch may also hold the store's other branches
+as they were then), and mailbox commits appear in the repository's history, so check that its members are happy with
+both. Each agent also needs push access to that repository, not just to the mailbox's folder.
 
 **The protocol repo and the mail store are separate.** This repository holds the protocol, the CLI and the skill.
 Messages never go here; they live in the store you choose. One copy of the CLI can serve any number of stores
@@ -68,7 +67,8 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, and whether it signs. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Tamper-proof only in a store with `require_signatures: true`. |
-| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
+| `agent-mailbox list` | Your inbox's file names, oldest first. Exit 3 if there's none. |
+| `agent-mailbox doctor` | Check this machine's setup. Each failure says what's missing, and most say what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
 
