@@ -9,8 +9,8 @@
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
 # It acts only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal,
-# or the cloud's launch (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
-# for a re-arm as before.
+# the cloud's launch, or a session the Claude desktop app starts on macOS (see the checks below). Anywhere else it
+# exits 0 at once, and claude-watch-guard.sh asks for a re-arm as before.
 # One instance per session: a pid file that counts only while that pid is still this script and the Claude Code it
 # ran under is still alive (so neither a pid reused after a restart nor a hook left behind by a crash counts). Mail
 # it already woke the session for is passed to `watch` as --except at its next start, so mail you read but haven't
@@ -99,11 +99,14 @@ ccver() {
   return 1
 }
 # background: Claude Code (ccpid) runs this hook in the background. With none of the options that make it headless
-# (-p alone or in a group of short options such as -pc, --print, --init-only, --sdk-url), two cases are taken as
+# (-p alone or in a group of short options such as -pc, --print, --init-only, --sdk-url), three cases are taken as
 # evidence:
 # - an interactive session: its output a terminal;
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
-#   terminal.
+#   terminal;
+# - the Claude desktop app's launch, a session with streaming input: its entrypoint (claude-desktop), started by the
+#   app's launcher (`Claude.app/Contents/Helpers/disclaimer`), never by a shell or a Claude Code, so a claude started
+#   from a session can't pass for it, whatever its arguments; and its input not a terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
 # Code reads streaming input (a later `--input-format`, or input from a terminal, undoes it). Each argument is read
 # on its own where /proc has them, else from the command line split at spaces.
@@ -112,6 +115,9 @@ ccver() {
 # one claimed for a headless run would be taken as streaming. Upgrade path: a field in the hook's input saying
 # whether it runs in the background
 term() { case "$1" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac; return 1; }
+# fdname <pid> <fd>: what that descriptor names, from /proc, else lsof (which macOS keeps in /usr/sbin)
+fdname() { readlink "/proc/$1/fd/$2" 2>/dev/null ||
+  { lsof -a -p "$1" -d "$2" -Fn || /usr/sbin/lsof -a -p "$1" -d "$2" -Fn; } 2>/dev/null | sed -n 's/^n//p' | head -n 1; }
 background() {
   [ -n "$ccpid" ] || return 1
   case "${CLAUDE_CODE_ENTRYPOINT:-}" in (sdk-*|claude-code-github-action) return 1 ;; esac
@@ -124,7 +130,15 @@ background() {
   if [ -n "$px" ] && [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ]; then
     i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) && [ -n "$i" ] && ! term "$i" && return 0
   fi
-  o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+  # (the parent's executable: /proc's link where there is one, else the path ps shows)
+  if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = claude-desktop ]; then
+    pp=$(ppid "$ccpid"); x=""
+    [ -z "$pp" ] || x=$(readlink "/proc/$pp/exe" 2>/dev/null) || x=$(ps -o comm= -p "$pp" 2>/dev/null)
+    case "$x" in (*/Claude.app/Contents/Helpers/disclaimer)
+      i=$(fdname "$ccpid" 0); [ -n "$i" ] && ! term "$i" && return 0 ;;
+    esac
+  fi
+  o=$(fdname "$ccpid" 1)
   term "$o"
 }
 # a stop that a Stop hook already kept going (stop_hook_active) at the prompt this hook already woke the session at

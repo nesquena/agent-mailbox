@@ -840,6 +840,41 @@ m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$CCD/cla
       expect "nor --preload anywhere else, such as a prompt that is --preload" 0 '^$' natc -- --preload
       expect "nor a first argument (a prompt) whose first line is --preload" 0 '^$' natc "$(printf -- '--preload\nhi')"
     else sk "the cloud's launch watches (no /proc)"; fi
+    # the desktop app starts Claude Code through a helper inside its bundle: a stand-in there, which runs its arguments
+    # and waits for them; natd [args...]: the stand-in Claude Code started by it as the app starts it (its entrypoint,
+    # or DENTRY's; its input not a terminal), or, with DDIRECT set, started directly; natdt: that, its input a terminal
+    DISC="$CCD/Claude.app/Contents/Helpers/disclaimer"; mkdir -p "${DISC%/*}"
+    printf '%s\n' '#include <sys/wait.h>' '#include <unistd.h>' \
+      'int main(int c, char **v) { pid_t p = fork(); if (!p) { execv(v[1], v + 1); _exit(127); } int s;' \
+      '  waitpid(p, &s, 0); return WIFEXITED(s) ? WEXITSTATUS(s) : 1; }' > "$CCD/disc.c"
+    SJ="--output-format stream-json --verbose --input-format stream-json"
+    natd() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT="${DENTRY:-claude-desktop}" \
+      ${DDIRECT:-"$DISC"} "$CCD/claude/versions/2.1.80" "$@" "$CCD/cc/stop.sh" < /dev/null; }
+    natdt() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT=claude-desktop python3 -c 'import os, subprocess, sys
+m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$DISC" "$CCD/claude/versions/2.1.80" $SJ "$CCD/cc/stop.sh"; }
+    # natds: that, its input a unix socket, as the app gives it
+    natds() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT=claude-desktop python3 -c 'import socket, subprocess, sys
+a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$DISC" "$CCD/claude/versions/2.1.80" $SJ "$CCD/cc/stop.sh"; }
+    if ! "$CC" -o "$DISC" "$CCD/disc.c" 2>/dev/null; then sk "the desktop app's launch watches (its helper didn't build)"
+    elif [ -n "$PROCOK" ] || command -v lsof >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r1/woke"
+      expect "the desktop app's launch watches: started by the app, its input not a terminal" 2 "rw-n\.md" natd $SJ
+      rm -f "$RS/rewake/rw/r1/woke"
+      expect "and with its input a unix socket, as the app gives it" 2 "rw-n\.md" natds
+      rm -f "$RS/rewake/rw/r1/woke"
+      expect "but not with its input a terminal" 0 '^$' natdt
+      expect "nor with -p" 0 '^$' natd $SJ -p hi
+      DENTRY=cli; expect "nor started by the app under another entrypoint" 0 '^$' natd $SJ; unset DENTRY
+      # (a claude started from a session's shell inherits the entrypoint; its arguments, or a prompt naming them, are
+      # no evidence)
+      DDIRECT=env; expect "nor one the app didn't start, with the same arguments" 0 '^$' natd $SJ
+      expect "or a prompt that names them" 0 '^$' natd -- "explain --input-format stream-json"; unset DDIRECT
+      # (nor anything else in the app's bundle, such as a Claude Code a session started with exec)
+      OTHER="$CCD/Claude.app/Contents/Resources/claude"; mkdir -p "${OTHER%/*}"; cp "$DISC" "$OTHER"
+      DDIRECT=$OTHER; expect "nor one started by another executable in the app's bundle" 0 '^$' natd $SJ; unset DDIRECT
+      # (or by the Claude Code the app bundles, whose own bundle differs from the app's only by case)
+      CLI2="$CCD/claude-code/2.1.80/h/claude.app/Contents/MacOS/claude"; mkdir -p "${CLI2%/*}"; cp "$DISC" "$CLI2"
+      DDIRECT=$CLI2; expect "nor one the bundled Claude Code started" 0 '^$' natd $SJ; unset DDIRECT
+    else sk "the desktop app's launch watches (no /proc or lsof)"; fi
     as rw consume "$(as rw list | grep rw-n)" >/dev/null; rm -f "$RS/rewake/rw/r1/woke"
     expect "and one below 2.1.69 is left to the guard" 0 '^$' nat CCV=2.1.68
     expect "even with AI_AGENT naming a newer one: the native answer counts" 0 '^$' nat CCV=2.1.68 AI_AGENT=claude-code_2-1-150_harness
