@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# a newer push to a pull request's branch, or a newer manual run on the same branch, cancels the run it supersedes;
+# runs on main each finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 jobs:
   test:
     strategy:
@@ -30,6 +36,9 @@ jobs:
           git config --global user.name test
           git config --global user.email test@example.invalid
           git config --global init.defaultBranch main
+      - name: Install dash and zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q dash zsh
       - name: Parse under every available shell
         run: |
           for s in sh dash bash zsh; do
@@ -39,9 +48,6 @@ jobs:
             done
             echo "$s ok"
           done
-      - name: Install dash (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y -q dash
       - name: Test suite (default sh)
         run: REQUIRE_SSH=1 sh test/run.sh
       - name: Test suite (dash)
