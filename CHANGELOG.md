@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
+  retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
+  consume it first (or reroute it to another agent), or pass `--force` to retire with it unread.

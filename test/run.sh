@@ -1369,7 +1369,19 @@ expect "a session id holding a / names no other session's record" 0 "^name: *h2$
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=../session-configs/sr AGENT_MAILBOX_NAME=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
 cmp -s "$W/sr-config-before" "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" &&
   ok "and no other session's watch rewrites its config record" || no "another session's watch rewrote sr's config record"
+# an agent retires once its inbox is empty: with mail waiting, update refuses, naming it, unless --force
+echo x | as h1 send h2 waiting-1 - >/dev/null 2>&1
+expect "retiring with mail still waiting is refused, naming it" 1 "still holds .*-h1-waiting-1\.md.*--force" as h2 update --status retired
+expect "and the record stays active" 0 "^h2 .*active" as h1 agents
+expect "--force retires anyway" 0 "update: h2 \(retired\)" as h2 update --status retired --force
+expect "and the agent comes back with update" 0 "update: h2 \(active\)" as h2 update --status active
+expect "--force is for update only" 1 "unknown option --force" as h2 register --kind t --about t --force
+# past five waiting messages, it names five and counts the rest
+for i in 2 3 4 5 6 7; do echo x | as h1 send h2 "waiting-$i" - >/dev/null 2>&1; done
+expect "past five, it names five and counts the rest" 1 "still holds [0-9]+ message\\(s\\): .*\\(and [0-9]+ more\\)" as h2 update --status retired
 for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
+expect "with the inbox empty, retiring works" 0 "update: h2 \\(retired\\)" as h2 update --status retired
+as h2 update --status active >/dev/null 2>&1
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
