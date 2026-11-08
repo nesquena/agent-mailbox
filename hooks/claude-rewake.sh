@@ -300,9 +300,9 @@ while :; do
     printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn's end." >&2; exit 2; }
   # the watcher in the background, so a stop (TERM) can end it too
   # shellcheck disable=SC2086
-  # (a run for one of several stores leaves the session's own name record alone: its watcher runs with no session)
-  if [ -n "$kid" ]; then AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
-  else "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 & fi
+  # (with no session: a watcher this hook starts isn't the agent registering, so it changes none of the session's
+  # records, nor the stores the session watches)
+  AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 &
   child=$!; echo "$child" > "$run/child"
   wait "$child"; rc=$?; child=""
   case $rc in

@@ -1138,6 +1138,16 @@ as rx consume "$(as rx list | grep rx-q | sed 's#.*/##')" >/dev/null 2>&1
 regs r7 --config "$C2"; echo hi | as rx send rw rx-p - >/dev/null 2>&1
 expect "and a plain watch on another store stops the earlier store's" 2 "daily limit" rewake r7
 as rw consume "$(as rw list | grep rx-p | sed 's#.*/##')" >/dev/null 2>&1
+# (a watcher the hook starts isn't the agent registering: a hook already running when a store is added with --also,
+# restarting its watcher, leaves that store watched)
+regs r6; S6=$(cut -d' ' -f1 "$RS/session-stores/r6" | head -n 1)
+rewake r6 AGENT_MAILBOX_REWAKE_MAX=60 CLAUDE_CODE_SESSION_ID=r6 CCOUT="$T/bg6.out" & b6=$!
+if up "$RS/rewake/rw/r6@$S6/pid" && up "$RS/rewake/rw/r6@$S6/child"; then
+  ALSO=--also; regs r6 --config "$C2"; ALSO=; kill -TERM "$(cat "$RS/rewake/rw/r6@$S6/child")" 2>/dev/null; sleep 3
+  case "$(grep -c ' -$' "$RS/session-stores/r6")" in (0) ok "a hook restarting its watcher doesn't drop a store added with --also" ;;
+    (*) no "a hook restarting its watcher doesn't drop a store added with --also" "$(cat "$RS/session-stores/r6")" ;; esac
+else no "a hook restarting its watcher doesn't drop a store added with --also" "it didn't start"; fi
+kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r6@$S6/pid" 2>/dev/null)" 2>/dev/null; wait "$b6" 2>/dev/null
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
 reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
@@ -1183,8 +1193,11 @@ if up "$RS/run/rw.pid"; then
     guardr9() { printf '{"session_id":"r9","prompt_id":"%s"}' "$1" | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= \
       AGENT_MAILBOX_STATE= "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r '.reason // empty'; }
     rm -f "$RS/rewake/rw/r9@$S2/pid" "$RS/rewake/rw/r9@$S2/last"
-    case "$(guardr9 p-91)" in (*"is not running"*second*) ok "the Stop guard blocks for the store with no watcher, naming its config" ;;
-      (*) no "the Stop guard blocks for the store with no watcher, naming its config" "$(guardr9 p-91)" ;; esac
+    g=$(guardr9 p-91)
+    case "$g" in (*"is not running"*second*) ok "the Stop guard blocks for the store with no watcher, naming its config" ;;
+      (*) no "the Stop guard blocks for the store with no watcher, naming its config" "$g" ;; esac
+    case "$g" in (*"watch 120 0 --also"*) ok "and its re-arm keeps the other stores (--also)" ;;
+      (*) no "and its re-arm keeps the other stores (--also)" "$g" ;; esac
     echo p-92 > "$RS/rewake/rw/r9@$S2/last"
     expect "and lets the stop through once that store's hook has woken the session" 0 '^$' guardr9 p-92
     echo p-93 > "$RS/rewake/rw/r9@$S2/declined"; t0=$(date +%s); g=$(guardr9 p-93)
