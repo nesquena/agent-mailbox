@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** with the git adapter, a first `init` whose push failed (exit 4) is published by the next command, as any
+  other unpublished commit is. Before, on a store with no mailbox branch yet, it never was: `init` then said a
+  mailbox already existed, and the store still had none.

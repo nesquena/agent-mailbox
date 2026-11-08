@@ -137,11 +137,16 @@ ad_push() {
 
 ad_sync() {
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
-  # publish anything an earlier command committed but couldn't push
-  if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
+  # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
+  # commit this clone has (an init whose push failed)
+  if ad_remote_has_branch; then
+    [ -z "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ] && return
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
-    ad_push
+  else
+    ad_git rev-parse -q --verify HEAD >/dev/null || return 0
+    warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
+  ad_push
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
