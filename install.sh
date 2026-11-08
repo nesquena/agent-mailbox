@@ -13,4 +13,4 @@ ln -sf "$src" "$dest" || exit 1
 chmod +x "$src"
 echo "linked $dest -> $src"
 case ":$PATH:" in *":$prefix/bin:"*) ;; *) echo "note: $prefix/bin isn't on your PATH; add it to use 'agent-mailbox' directly" ;; esac
-command -v ssh-keygen >/dev/null 2>&1 || echo "note: ssh-keygen (OpenSSH 8+) isn't installed, so mail from this machine will be unsigned"
+command -v ssh-keygen >/dev/null 2>&1 || echo "note: ssh-keygen (OpenSSH 8.1+) isn't installed, so mail from this machine will be unsigned"
