@@ -866,6 +866,9 @@ m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$DISC" "
       # (nor anything else in the app's bundle, such as a Claude Code a session started with exec)
       OTHER="$CCD/Claude.app/Contents/Resources/claude"; mkdir -p "${OTHER%/*}"; cp "$DISC" "$OTHER"
       DDIRECT=$OTHER; expect "nor one started by another executable in the app's bundle" 0 '^$' natd $SJ; unset DDIRECT
+      # (or by the Claude Code the app bundles, whose own bundle differs from the app's only by case)
+      CLI2="$CCD/claude-code/2.1.80/h/claude.app/Contents/MacOS/claude"; mkdir -p "${CLI2%/*}"; cp "$DISC" "$CLI2"
+      DDIRECT=$CLI2; expect "nor one the bundled Claude Code started" 0 '^$' natd $SJ; unset DDIRECT
     else sk "the desktop app's launch watches (no /proc or lsof)"; fi
     as rw consume "$(as rw list | grep rw-n)" >/dev/null; rm -f "$RS/rewake/rw/r1/woke"
     expect "and one below 2.1.69 is left to the guard" 0 '^$' nat CCV=2.1.68

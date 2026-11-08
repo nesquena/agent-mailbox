@@ -9,7 +9,7 @@
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
 # It acts only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal,
-# or the cloud's launch (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
+# the cloud's launch, or the Claude desktop app's on macOS (see the checks below). Anywhere else it exits 0 at once, and claude-watch-guard.sh asks
 # for a re-arm as before.
 # One instance per session: a pid file that counts only while that pid is still this script and the Claude Code it
 # ran under is still alive (so neither a pid reused after a restart nor a hook left behind by a crash counts). Mail
@@ -133,7 +133,8 @@ background() {
     pp=$(ppid "$ccpid"); x=""
     [ -z "$pp" ] || x=$(readlink "/proc/$pp/exe" 2>/dev/null) || x=$(ps -o comm= -p "$pp" 2>/dev/null)
     case "$x" in (*/Claude.app/Contents/Helpers/disclaimer|*/Claude.app/Contents/MacOS/Claude)
-      i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) || i=$(lsof -a -p "$ccpid" -d 0 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+      i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) || i=$( (lsof -a -p "$ccpid" -d 0 -Fn ||
+        /usr/sbin/lsof -a -p "$ccpid" -d 0 -Fn) 2>/dev/null | sed -n 's/^n//p' | head -n 1)
       [ -n "$i" ] && ! term "$i" && return 0 ;;
     esac
   fi
