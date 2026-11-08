@@ -68,15 +68,17 @@ rewaking() {
 key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null); t0=$(date +%s)
 this() { n1=$(cat "$dir/$1" 2>/dev/null)
   if [ -n "$key" ]; then [ "$n1" = "$key" ]; else case "$n1" in (@*[!0-9]*|@) return 1 ;; (@*) [ "${n1#@}" -ge $((t0 - 2)) ] ;; (*) return 1 ;; esac; fi; }
-# A store is covered when its watcher runs, or its hook does or has woken the session at this stop. The stop is blocked
-# for the first store that isn't: at once when its hook declined, else after the wait (3 s, or 15 s once a hook has
-# said it's starting at this stop)
+# A store is covered when its watcher runs, or its hook does or has woken the session at this stop; and once any
+# store's hook has woken it at this stop, every store is (that wake stopped the others' runs, and the next turn's end
+# starts them all again). The stop is blocked for the first store that isn't: at once when its hook declined, else
+# after the wait (3 s, or 15 s once a hook has said it's starting at this stop)
 n=0 lim=3; while :; do
-  miss="" dec=""; while IFS= read -r l; do pick "$l"; alive && continue
+  miss="" dec="" woke=""; while IFS= read -r l; do pick "$l"; ! this last || woke=1; alive && continue
     this declined && { miss=$l dec=1; break; }
     rewaking || this last || { [ -n "$miss" ] || miss=$l; ! this start || lim=15; }; done <<LIST
 $list
 LIST
+  [ -n "$dec" ] || [ -z "$woke" ] || exit 0
   [ -n "$miss" ] || exit 0; [ -z "$dec" ] && [ $n -lt $lim ] || break; sleep 1; n=$((n+1)); done
 pick "$miss"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally

@@ -1187,6 +1187,10 @@ if up "$RS/run/rw.pid"; then
   else sk "the Stop guard on two stores (no jq)"; fi
 else no "a hand watcher on one store doesn't stand in for the other's" "the watcher didn't start"; fi
 kill "$hw" 2>/dev/null; wait "$hw" 2>/dev/null
+# one store's hook having woken the session at this stop covers the others (that wake stopped their runs)
+if command -v jq >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r9@$S2/last" "$RS/rewake/rw/r9@$S2/pid"; echo p-95 > "$RS/rewake/rw/r9@$S1/last"
+  expect "a wake on one store at this stop lets the stop through for the other" 0 '^$' guardr9 p-95
+else sk "a wake on one store at this stop lets the stop through for the other (no jq)"; fi
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
 for f in $(am2 list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S2/woke"; done
 # a hook stopped (TERM) stops each store's run and watcher at once, silently; one killed outright leaves none behind
