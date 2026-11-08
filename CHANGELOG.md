@@ -125,11 +125,11 @@ First version.
   link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
   signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the end
   (a name holding a newline, or folder links nested more than 8 deep), and a body (file or stdin) holding a line of a
-  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header or trailer), are
-  refused with exit 1 before anything is written; the error names the folder, or says how to go on. It's a deny-list of
-  the obvious cases, not a guarantee. The state folder holds the git adapter's copy of the store, so to forward a
-  message you received, copy its text into a new file first; to send part of a file from one of those folders on
-  purpose, copy that part the same way (#26).
+  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header, or its
+  `Private-Lines:` or `Private-MAC:` line), are refused with exit 1 before anything is written; the error names the
+  folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee. The state folder holds the git
+  adapter's copy of the store, so to forward a message you received, copy its text into a new file first; to send part
+  of a file from one of those folders on purpose, copy that part the same way (#26).
 - **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
   the `--` is), instead of refusing it as an unknown option (#26).
 - **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
