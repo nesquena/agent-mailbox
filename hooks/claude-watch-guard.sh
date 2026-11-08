@@ -25,17 +25,21 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
-name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid")
-printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
-# what to check: each store line (as claude-rewake.sh reads them) when there are several, else the session's one name;
-# as "<store id or -> <name> <config>"
-list=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
+# what to check, as claude-rewake.sh reads it: each store line when there are several; else the session's one name and
+# config, from its store line or, before store lines, from the name and config `watch` recorded. As
+# "<store id or -> <name> <config>"
+lines=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
   "$state/session-stores/$sid" 2>/dev/null)
-[ "$(printf '%s\n' "$list" | grep -c .)" -ge 2 ] || list="- $name $conf"
-# pick <line>: set store, name, conf and the folder claude-rewake.sh keeps for it
-pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name"}; conf=${conf# }
-  [ "$store" != - ] || store=""; dir="$state/rewake/$name/$sid${store:+@$store}"; }
+first=$(printf '%s\n' "$lines" | head -n 1)
+if [ -n "$first" ]; then name=$(printf '%s\n' "$first" | cut -d' ' -f2); conf=${first#* }; conf=${conf#* }
+else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
+printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
+list=$lines; [ "$(printf '%s\n' "$lines" | grep -c .)" -ge 2 ] || list="- $name $conf"
+first=$(printf '%s\n' "$first" | cut -d' ' -f1,2)
+# pick <line>: set store, name, conf and the folder claude-rewake.sh keeps for it (the first store keeps the session's)
+pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name"}; conf=${conf# }; sub=""
+  [ "$store" != - ] || store=""; [ -z "$store" ] || [ "$store $name" = "$first" ] || sub="@$store"
+  dir="$state/rewake/$name/$sid$sub"; }
 # (on one of several stores, only a watcher on that store counts: its own pid file)
 alive() {
   set -- $(cat "$state/run/$name${store:+@$store}.pid" 2>/dev/null); pid=${1:-}

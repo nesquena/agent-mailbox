@@ -1128,8 +1128,10 @@ reg() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG=
   CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" "$@" watch 1 1 >/dev/null 2>&1; }
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
 reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
-reg --config "$C2"; reg --config "$C2"
+reg --config "$C2"; reg --config "$C2"; reg
 expect "watch on a second store adds a line for it, and again replaces it" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
+case "$(head -n 1 "$RS/session-stores/r9")" in (*/second) no "in place: the first store stays first" "$(cat "$RS/session-stores/r9")" ;;
+  (*) ok "in place: the first store stays first" ;; esac
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
 r=$(rewake r9); rc=$?
@@ -1184,28 +1186,45 @@ for f in $(am2 list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw
 # a hook stopped (TERM) stops each store's run and watcher at once, silently; one killed outright leaves none behind
 # either: each run stops itself once the hook that started it is gone
 # runs: the pids of the two runs and their watchers, from their lock and child files
-runs() { for s in "$S1" "$S2"; do cut -d' ' -f1 "$RS/rewake/rw/r9@$s/pid" 2>/dev/null; cat "$RS/rewake/rw/r9@$s/child" 2>/dev/null; done; }
+runs() { for d in "$RS/rewake/rw/r9" "$RS/rewake/rw/r9@$S2"; do cut -d' ' -f1 "$d/pid" 2>/dev/null; cat "$d/child" 2>/dev/null; done; }
 # gone <seconds> <pids>: within that long, none of them is still running (a zombie isn't)
 gone() { n=0; while [ $n -lt "$1" ]; do a=""; for k in $2; do kill -0 "$k" 2>/dev/null &&
     ! ps -o stat= -p "$k" 2>/dev/null | grep -q '^ *Z' && a=1; done; [ -n "$a" ] || return 0; sleep 1; n=$((n+1)); done; return 1; }
-rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S2/pid"
+rm -f "$RS/rewake/rw/r9/pid" "$RS/rewake/rw/r9@$S2/pid"
 rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
-if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2; ks=$(runs)
-  hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S1/pid")" | tr -d ' '); kill -TERM "$hp"; wait "$bg"; rc=$?
+if up "$RS/rewake/rw/r9/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2; ks=$(runs)
+  hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9/pid")" | tr -d ' '); kill -TERM "$hp"; wait "$bg"; rc=$?
   gone 5 "$ks" && [ "$rc" = 0 ] && [ ! -s "$T/bg.out" ] && ok "a stopped hook stops both stores' runs and watchers, silently" ||
     no "a stopped hook stops both stores' runs and watchers, silently" "exit $rc: $(cat "$T/bg.out")"
 else no "a stopped hook stops both stores' runs and watchers, silently" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
-if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2; ks=$(runs)
-  hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S1/pid")" | tr -d ' '); kill -KILL "$hp"
+if up "$RS/rewake/rw/r9/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2; ks=$(runs)
+  hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9/pid")" | tr -d ' '); kill -KILL "$hp"
   gone 30 "$ks" && ok "a hook killed outright leaves no run or watcher behind" || no "a hook killed outright leaves no run or watcher behind" "$(ps -o pid=,args= -p "$(echo $ks | tr ' ' ,)")"
 else no "a hook killed outright leaves no run or watcher behind" "they didn't start"; fi
 kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+# the session's own name record gone (its name retired on one store, say) leaves the store lines to go by
+mv "$RS/sessions/r9" "$RS/sessions/r9.off"; mv "$RS/session-configs/r9" "$RS/session-configs/r9.off"
+echo hi | as rz send rw rz-5 - >/dev/null 2>&1
+expect "with the session's name record gone, its store lines still wake it" 2 "rz-5\.md" rewake r9
+mv "$RS/sessions/r9.off" "$RS/sessions/r9"; mv "$RS/session-configs/r9.off" "$RS/session-configs/r9"
+# the shell Claude Code started the hook through killed, while Claude Code lives on: every store's run stops
+printf '%s\n' 'CC=$$; "$RSH" -c '"'"'echo $$ > "$WPID"; printf "{\"session_id\":\"r9\"}" | env HOME="$RH" \' \
+  '  AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID=$1 AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 "$RSH" "$RHOOK" \' \
+  '  >/dev/null 2>&1'"'"' sh "$CC"; sleep 30' > "$T/cc3.sh"
+rm -f "$RS/rewake/rw/r9/pid" "$RS/rewake/rw/r9@$S2/pid" "$T/wpid"; WPID="$T/wpid"; export WPID
+bgterm "$T/ccpid" "$T/cc3.sh"
+if up "$RS/rewake/rw/r9/pid" && up "$RS/rewake/rw/r9@$S2/pid" && [ -s "$T/wpid" ]; then sleep 2; ks=$(runs)
+  kill -KILL "$(cat "$T/wpid")"
+  gone 10 "$ks" && ok "with the shell the hook ran through gone, every store's run stops" ||
+    no "with the shell the hook ran through gone, every store's run stops" "$(ps -o pid=,args= -p "$(echo $ks | tr ' ' ,)")"
+else no "with the shell the hook ran through gone, every store's run stops" "they didn't start"; fi
+unset WPID; kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
 # a store whose watcher can't go on says so once; the other store's mail still wakes the session after that
 mv "$C2" "$C2.off"
 expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
-if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >/dev/null 2>&1
+if up "$RS/rewake/rw/r9/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >/dev/null 2>&1
   n=0; while [ $n -lt 20 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; wait "$bg"; rc=$?
   case "$rc $(cat "$T/bg.out")" in (*"can't go on"*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;;
     ("2 "*rx-3.md*) ok "and the other store's mail still wakes it" ;; (*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;; esac

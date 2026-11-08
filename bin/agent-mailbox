@@ -161,9 +161,12 @@ case "$SESSION" in (.|..|*/*) SESSION= ;; esac
 session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
 # session_store <config>|-: record this store and name for this session in session-stores/<session id>, one line each
 # ("<store id> <name> <config>"), so the Claude Code hook can watch every store a session uses; or, with -, drop it
+# (replaced in place, so the first store a session watched stays first)
 session_store() { t="$STATE/session-stores/$SESSION"; mkdir -p "$STATE/session-stores"
-  { [ ! -f "$t" ] || awk -v s="$STORE_ID" -v n="$ME" '!($1 == s && $2 == n)' "$t"
-    [ "$1" = - ] || printf '%s %s %s\n' "$STORE_ID" "$ME" "$1"; } > "$t.$$" && mv -f "$t.$$" "$t"; }
+  [ -f "$t" ] || : > "$t"
+  SS_S=$STORE_ID SS_N=$ME SS_L=$1 awk 'BEGIN { s = ENVIRON["SS_S"]; n = ENVIRON["SS_N"]; l = ENVIRON["SS_L"]; nl = s " " n " " l }
+    $1 == s && $2 == n { if (!d && l != "-") print nl; d = 1; next } { print } END { if (!d && l != "-") print nl }' \
+    "$t" > "$t.$$" && mv -f "$t.$$" "$t"; }
 ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
 KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
 

@@ -39,10 +39,17 @@ state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbo
 # stores: this session's valid store lines
 stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
   "$state/session-stores/$sid" 2>/dev/null; }
-store=""
+# the session's name and config: from its first store line (the first store it watched), else from the name and
+# config `watch` recorded before store lines; a run for one of several stores gets its own. The first store keeps the
+# session's own folder (below), so adding a store never moves its history; the others get one each
+store="" sub="" n=0
 if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-}
   printf '%s\n' "$store" | grep -Eq '^[A-Za-z0-9]{1,64}$' || exit 0
-else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
+  [ "$(stores | head -n 1 | cut -d' ' -f1,2)" = "$store $name" ] || sub="@$store"
+else n=$(stores | wc -l)
+  if [ "$n" -ge 1 ]; then l=$(stores | head -n 1); name=$(printf '%s\n' "$l" | cut -d' ' -f2); conf=${l#* }; conf=${conf#* }
+  else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
+fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
@@ -67,7 +74,7 @@ mine() {
 # several stores: one run of this hook for each (its stdin this stop's input), its stderr kept; the first to exit 2
 # ends the others, and everything any of them said is passed on. A run whose parent is gone (this one, killed) stops
 # itself, as below
-if [ -z "$store" ] && [ "$(stores | wc -l)" -ge 2 ]; then
+if [ "$n" -ge 2 ]; then
   mkdir -p "$state/rewake" 2>/dev/null; each=$(mktemp -d "$state/rewake/.each.XXXXXX" 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
   while read -r s n c; do i=$((i+1))
@@ -77,19 +84,20 @@ if [ -z "$store" ] && [ "$(stores | wc -l)" -ge 2 ]; then
   finish() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
     for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done; rm -rf "$each"; exit "$1"; }
   trap 'finish 0' TERM INT HUP
+  # (and once the shell Claude Code started this hook through is gone, as a single store's run stops then)
+  top=$PPID
   while :; do
+    live "$top" || finish 0
     left="" woke=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || woke=1; fi; done
     kids=$left; [ -z "$woke" ] || finish 2; [ -n "$kids" ] || finish 0
     sleep 1 & wait $!
   done
 fi
 # this session's files: its lock, the mail it woke for, its last error (one folder per session, so two sessions
-# that use one name, against the protocol, don't share them; and one per store, for a session on several)
-# ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
-run="$state/rewake/$name/$sid${store:+@$store}"; mkdir -p "$run" 2>/dev/null || exit 0
-# (a session that watched one store before it added another starts each store's list from the one it had, so mail it
-# woke for then doesn't wake it again; names from another store's inbox only drop off)
-[ -z "$store" ] || [ -e "$run/woke" ] || [ ! -s "$state/rewake/$name/$sid/woke" ] || cp "$state/rewake/$name/$sid/woke" "$run/woke"
+# that use one name, against the protocol, don't share them; and one per store after the first, for a session on
+# several). ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is
+# stale. Retiring the first store's name makes the next store the first, whose folder changes once
+run="$state/rewake/$name/$sid$sub"; mkdir -p "$run" 2>/dev/null || exit 0
 # this stop's key, for a hook already watching that may wake the session during this stop
 printf '%s\n' "$key" > "$run/key"
 mine && exit 0
