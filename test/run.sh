@@ -354,6 +354,31 @@ case " $ADAPTERS " in *" git "*)
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
 
+  echo "== git: the agent whose init loses a race to another's can carry on"
+  # an init left unpublished (the store's folders read-only for its push), then another agent's init wins
+  T="$W/initrace"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in ir1 ir2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "an init left unpublished is dropped once another agent's wins (read-only folders don't stop this user)"
+  else
+    as ir1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    as ir2 init --title winner >/dev/null
+    expect "the loser's next command drops its unpublished init" 0 "dropping this clone's own unpublished init" as ir1 agents
+    expect "and its clone has the winner's store.md" 0 "^title: winner$" cat "$W/home-ir1/.local/state/agent-mailbox/checkouts/"*-ir1/mailbox/store.md
+    expect "and later commands work" 0 "^register: ir1 " as ir1 register --kind t --about t --no-key
+  fi
+  # the race itself: another agent's init lands just before this one's first push
+  T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" push "*) [ -e "$RACE_DONE" ] || { : > "$RACE_DONE"; sh -c "$RACE_CMD" >/dev/null 2>&1; } ;; esac' \
+    'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  expect "an init that loses the race says so, and fails" 1 "another agent initialized the mailbox at 'mailbox/' first.*title: winner" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
+      RACE_CMD="HOME='$W/home-ir4' '$SH' '$CLI' init --title winner" HOME="$W/home-ir3" "$SH" "$CLI" init --title loser
+  expect "and the store keeps the winner's settings" 0 "^title: winner$" git --git-dir="$T/store.git" show main:mailbox/store.md
+  expect "and the loser's next command works" 0 "NAME" as ir3 agents
+
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

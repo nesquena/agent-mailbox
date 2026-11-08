@@ -118,6 +118,19 @@ ad_pull() {
       return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
+  # an init this clone made while the store had no branch, and never published, is a commit with no parent. If the store
+  # has a branch now (another agent's init won the race), that commit can never rebase onto it: drop it, keeping
+  # anything committed after it. Only a root commit that is exactly an init is dropped
+  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1 &&
+    root=$(ad_git rev-list --max-parents=0 HEAD) && [ "$(printf '%s\n' "$root" | wc -l)" -eq 1 ] &&
+    [ "$(ad_git log -1 --format=%s "$root")" = "mailbox: init" ] &&
+    [ "$(ad_git diff-tree --root --no-commit-id --name-only -r "$root" | LC_ALL=C sort | tr '\n' ' ')" = \
+      "$ROOT/agents/.keep $ROOT/inbox/.keep $ROOT/store.md " ]; then
+    warn "the store was initialized by another agent first: dropping this clone's own unpublished init"
+    if [ "$(ad_git rev-parse HEAD)" = "$root" ]; then ad_git reset -q --hard "origin/$BRANCH"
+    else ad_git rebase -q --onto "origin/$BRANCH" "$root" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }; fi
+    return
+  fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
   else

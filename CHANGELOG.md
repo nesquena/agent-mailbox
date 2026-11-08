@@ -216,3 +216,7 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** with the git adapter, the agent whose `init` loses a race to another agent's can carry on. Its clone kept
+  its own unpublished init, and every later command failed with "can't update from the store" until the clone was
+  deleted by hand. That init is now dropped (anything committed after it is kept), and an `init` that loses the race
+  fails saying so, with the winner's title and `require_signatures`, instead of exit 4.
