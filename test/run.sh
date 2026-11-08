@@ -516,7 +516,7 @@ exec "%s" "$@"
   [ -z "$(git -C "$C" for-each-ref --format='%(refname)' | grep big)" ] && ok "a new checkout fetches only the mailbox branch" ||
     no "a new checkout fetched another branch" "$(git -C "$C" for-each-ref --format='%(refname)')"
   # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
-  expect "doctor on a branch the store doesn't have says it isn't initialized" 1 "FAIL the store is reachable and initialized" \
+  expect "doctor on a branch the store doesn't have says it isn't initialized, and where to see why" 1 "FAIL the store is reachable and initialized: run agents to see why" \
     env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
   expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
   [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
@@ -1374,6 +1374,8 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here; run update --status active" \
+  env HOME="$W/home-h2" "$SH" "$CLI" doctor
 
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"

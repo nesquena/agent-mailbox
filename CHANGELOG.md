@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** `doctor` tells a retired name to come back with `update --status active`; it said "run register", which
+  refuses a name that's already registered. A store that isn't reachable or initialized now says to run `agents` to
+  see why.

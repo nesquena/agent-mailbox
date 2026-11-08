@@ -791,10 +791,15 @@ doctor)
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   if [ -n "$STORE" ]; then
     ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
-      { echo "FAIL the store is reachable and initialized"; ok=1; }
+      { echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; }
   fi
-  [ -z "$ME" ] || [ -z "$STORE" ] || { ( load_adapter >/dev/null 2>&1 && active "$ME" ) && echo "ok   $ME is registered and active" ||
-      { echo "FAIL $ME is registered and active: run register"; ok=1; }; }
+  # a name with a record that isn't active (retired) comes back with update, not register, which would refuse it
+  [ -z "$ME" ] || [ -z "$STORE" ] || case $( load_adapter >/dev/null 2>&1 || exit
+      if active "$ME"; then echo ok; elif [ -f "$(record "$ME")" ]; then echo inactive; fi ) in
+    (ok) echo "ok   $ME is registered and active" ;;
+    (inactive) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
+    (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
+  esac
   [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
