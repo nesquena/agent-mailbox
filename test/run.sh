@@ -1126,7 +1126,9 @@ for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/
 # reg [args...]: watch once in session r9, as the agent does to register
 reg() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
   CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" "$@" watch 1 1 >/dev/null 2>&1; }
-reg; reg --config "$C2"; reg --config "$C2"
+# (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
+reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
+reg --config "$C2"; reg --config "$C2"
 expect "watch on a second store adds a line for it, and again replaces it" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
@@ -1136,11 +1138,17 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw. Read it: "*"--config "*seco
   (*) no "mail on the second store wakes the session with that store's read command" "$rc $r" ;; esac
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c"
+case "$r" in (*rx-0*) no "mail it woke for on one store before adding another doesn't wake it again" "$r" ;;
+  (*) ok "mail it woke for on one store before adding another doesn't wake it again" ;; esac
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
 r=$(rewake r9); rc=$?
 case "$rc $r" in (*rz-1*|*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw. Read it: "*rx-1.md*) ok "mail on the first store wakes it, and mail it woke for on the other doesn't" ;;
   (*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;; esac
+# (the first store's run waking first, the second's, listed after it, is stopped too: none is left watching)
+op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null)
+[ -z "$op" ] || ! kill -0 "$op" 2>/dev/null && ok "and the other store's run is stopped with it" ||
+  no "and the other store's run is stopped with it" "$(ps -o pid=,args= -p "$op")"
 # mail on both at once: all of it is passed on, in this wake or, if one store's run was stopped first, the next
 echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >/dev/null 2>&1
 r=$(rewake r9); rc=$?; case "$r" in (*rx-2.md*rz-2.md*|*rz-2.md*rx-2.md*) ;; (*) r="$r $(rewake r9)" ;; esac

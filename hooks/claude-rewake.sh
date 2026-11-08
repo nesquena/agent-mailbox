@@ -78,8 +78,8 @@ if [ -z "$store" ] && [ "$(stores | wc -l)" -ge 2 ]; then
     for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done; rm -rf "$each"; exit "$1"; }
   trap 'finish 0' TERM INT HUP
   while :; do
-    left=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || { kids=$left; finish 2; }; fi; done
-    kids=$left; [ -n "$kids" ] || finish 0
+    left="" woke=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || woke=1; fi; done
+    kids=$left; [ -z "$woke" ] || finish 2; [ -n "$kids" ] || finish 0
     sleep 1 & wait $!
   done
 fi
@@ -87,6 +87,9 @@ fi
 # that use one name, against the protocol, don't share them; and one per store, for a session on several)
 # ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
 run="$state/rewake/$name/$sid${store:+@$store}"; mkdir -p "$run" 2>/dev/null || exit 0
+# (a session that watched one store before it added another starts each store's list from the one it had, so mail it
+# woke for then doesn't wake it again; names from another store's inbox only drop off)
+[ -z "$store" ] || [ -e "$run/woke" ] || [ ! -s "$state/rewake/$name/$sid/woke" ] || cp "$state/rewake/$name/$sid/woke" "$run/woke"
 # this stop's key, for a hook already watching that may wake the session during this stop
 printf '%s\n' "$key" > "$run/key"
 mine && exit 0
