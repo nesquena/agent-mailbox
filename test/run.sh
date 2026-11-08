@@ -840,6 +840,24 @@ m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$CCD/cla
       expect "nor --preload anywhere else, such as a prompt that is --preload" 0 '^$' natc -- --preload
       expect "nor a first argument (a prompt) whose first line is --preload" 0 '^$' natc "$(printf -- '--preload\nhi')"
     else sk "the cloud's launch watches (no /proc)"; fi
+    # natd [args...]: as the desktop app starts it (its entrypoint, or DENTRY's; streaming input and output); natdt:
+    # that, with its input a terminal
+    SJ="--output-format stream-json --verbose --input-format stream-json"
+    natd() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT="${DENTRY:-claude-desktop}" \
+      "$CCD/claude/versions/2.1.80" "$@" "$CCD/cc/stop.sh" < /dev/null; }
+    natdt() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT=claude-desktop python3 -c 'import os, subprocess, sys
+m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$CCD/claude/versions/2.1.80" $SJ "$CCD/cc/stop.sh"; }
+    if [ -n "$PROCOK" ] || command -v lsof >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r1/woke"
+      expect "the desktop app's launch watches: streaming input, not from a terminal" 2 "rw-n\.md" natd $SJ
+      rm -f "$RS/rewake/rw/r1/woke"
+      expect "as does --input-format=stream-json" 2 "rw-n\.md" natd --input-format=stream-json
+      rm -f "$RS/rewake/rw/r1/woke"
+      expect "but not with its input a terminal" 0 '^$' natdt
+      expect "nor without streaming input" 0 '^$' natd --output-format stream-json
+      expect "nor with a later --input-format" 0 '^$' natd $SJ --input-format text
+      expect "nor with -p" 0 '^$' natd $SJ -p hi
+      DENTRY=cli; expect "nor streaming input under another entrypoint" 0 '^$' natd $SJ; unset DENTRY
+    else sk "the desktop app's launch watches (no /proc or lsof)"; fi
     as rw consume "$(as rw list | grep rw-n)" >/dev/null; rm -f "$RS/rewake/rw/r1/woke"
     expect "and one below 2.1.69 is left to the guard" 0 '^$' nat CCV=2.1.68
     expect "even with AI_AGENT naming a newer one: the native answer counts" 0 '^$' nat CCV=2.1.68 AI_AGENT=claude-code_2-1-150_harness

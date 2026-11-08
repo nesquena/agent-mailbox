@@ -99,11 +99,13 @@ ccver() {
   return 1
 }
 # background: Claude Code (ccpid) runs this hook in the background. With none of the options that make it headless
-# (-p alone or in a group of short options such as -pc, --print, --init-only, --sdk-url), two cases are taken as
+# (-p alone or in a group of short options such as -pc, --print, --init-only, --sdk-url), three cases are taken as
 # evidence:
 # - an interactive session: its output a terminal;
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
-#   terminal.
+#   terminal;
+# - the Claude desktop app, a session with streaming input: its entrypoint (claude-desktop), `stream-json` as the
+#   last `--input-format`, and its input not a terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
 # Code reads streaming input (a later `--input-format`, or input from a terminal, undoes it). Each argument is read
 # on its own where /proc has them, else from the command line split at spaces.
@@ -123,6 +125,12 @@ background() {
   # (its input checked only where it can be read)
   if [ -n "$px" ] && [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ]; then
     i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) && [ -n "$i" ] && ! term "$i" && return 0
+  fi
+  if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = claude-desktop ] && [ "$(printf '%s\n' "$av" | sed 1d | awk '
+    w { v = $0; w = 0; next } /^--input-format$/ { w = 1; next } /^--input-format=/ { v = substr($0, 16) }
+    END { print v }')" = stream-json ]; then
+    i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) || i=$(lsof -a -p "$ccpid" -d 0 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
+    [ -n "$i" ] && ! term "$i" && return 0
   fi
   o=$(readlink "/proc/$ccpid/fd/1" 2>/dev/null) || o=$(lsof -a -p "$ccpid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
   term "$o"

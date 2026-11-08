@@ -199,3 +199,7 @@ First version.
   of `mkdir`, which isn't exclusive everywhere (the Rust coreutils' `mkdir`, the default on Ubuntu 26.04, can report
   success to two hooks at once). Before, two hooks starting together there could both start a watcher for one name.
   A mutex folder an older version left behind is cleared after a minute, as before (#56).
+- **New:** the Claude Code plugin's Stop hook also runs in the Claude desktop app, which runs it in the background:
+  a session there (entrypoint `claude-desktop`, streaming input not from a terminal) is woken on new mail like one in
+  a terminal or on the web, instead of being asked to re-arm the watcher. Headless runs (`claude -p`) still exit at
+  once.
