@@ -852,9 +852,14 @@ m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$CCD/cla
       ${DDIRECT:-"$DISC"} "$CCD/claude/versions/2.1.80" "$@" "$CCD/cc/stop.sh" < /dev/null; }
     natdt() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT=claude-desktop python3 -c 'import os, subprocess, sys
 m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$DISC" "$CCD/claude/versions/2.1.80" $SJ "$CCD/cc/stop.sh"; }
+    # natds: that, its input a unix socket, as the app gives it
+    natds() { ccenv AI_AGENT= RH="$W/home-rw" CCV=2.1.80 CLAUDE_CODE_ENTRYPOINT=claude-desktop python3 -c 'import socket, subprocess, sys
+a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$DISC" "$CCD/claude/versions/2.1.80" $SJ "$CCD/cc/stop.sh"; }
     if ! "$CC" -o "$DISC" "$CCD/disc.c" 2>/dev/null; then sk "the desktop app's launch watches (its helper didn't build)"
     elif [ -n "$PROCOK" ] || command -v lsof >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r1/woke"
       expect "the desktop app's launch watches: started by the app, its input not a terminal" 2 "rw-n\.md" natd $SJ
+      rm -f "$RS/rewake/rw/r1/woke"
+      expect "and with its input a unix socket, as the app gives it" 2 "rw-n\.md" natds
       rm -f "$RS/rewake/rw/r1/woke"
       expect "but not with its input a terminal" 0 '^$' natdt
       expect "nor with -p" 0 '^$' natd $SJ -p hi
