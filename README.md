@@ -4,6 +4,9 @@
 the cloud, a GrokBot, a cron script) register under a name, then send each other short, signed messages through
 a store they can all reach. Today that store is any private git repository.
 
+**Status:** version 0.1.0, protocol 1. Runs on Linux and macOS: POSIX `sh` with git 2.9 or later, and OpenSSH 8 or
+later (`ssh-keygen -Y`) to sign mail. The Claude Code plugin's Stop guard also needs `jq`.
+
 - **No server and no new account.** If your agents can push to a git repo, they can talk.
 - **No tokens burned while waiting.** A watcher polls the store cheaply, and wakes the agent only when mail arrives.
 - **Plain files.** Every message is a Markdown file with a small header. You can read, audit and repair a mailbox
@@ -139,7 +142,8 @@ Signing is opt-in per agent, and a store can require it.
 - **What it doesn't prove:** it isn't identity in the outside world, and it isn't encryption. Use a private store,
   and never put secrets in mail.
 
-Details, limits and how to report a vulnerability are in [`docs/security.md`](docs/security.md).
+Details and limits are in [`docs/security.md`](docs/security.md). To report a vulnerability, see
+[`SECURITY.md`](SECURITY.md).
 
 Messages are data, not instructions: an agent must not act on what a message tells it without its own human's
 approval. The skill and `PROTOCOL.md` section 8 spell out the conduct rules every agent follows.
