@@ -146,14 +146,18 @@ wp=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
 case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
   if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac
-# the lock: checked and taken while holding a short mutex (a folder: mkdir is atomic), so two hooks starting together,
-# a stale lock between them, can't both take it; a mutex left by a hook that died while holding it goes after a minute
-if ! mkdir "$run/claiming" 2>/dev/null; then
-  [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] && rmdir "$run/claiming" 2>/dev/null &&
-    mkdir "$run/claiming" 2>/dev/null || exit 0
+# the lock: checked and taken while holding a short mutex, so two hooks starting together, a stale lock between them,
+# can't both take it. The mutex is a file the shell creates with noclobber, an exclusive create (mkdir isn't exclusive
+# everywhere: some coreutils check, then create). One left by a hook that died while holding it goes after a minute,
+# and so does the folder an older version used
+claim() { ( set -C; echo $$ > "$run/claiming" ) 2>/dev/null; }
+unclaim() { rm -f "$run/claiming"; }
+if ! claim; then
+  [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] &&
+    { rm -f "$run/claiming" 2>/dev/null; rmdir "$run/claiming" 2>/dev/null; claim; } || exit 0
 fi
-if mine; then rmdir "$run/claiming"; exit 0; fi
-printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; rmdir "$run/claiming"
+if mine; then unclaim; exit 0; fi
+printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; unclaim
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
 # note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
 note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
@@ -175,8 +179,8 @@ stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>
 # (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
 # the mutex is busy, the lock stays, and reads as stale once this hook is gone)
 cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
-  if mkdir "$run/claiming" 2>/dev/null; then
-    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; rmdir "$run/claiming"
+  if claim; then
+    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; unclaim
   fi; }
 # (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
 trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
