@@ -2083,6 +2083,17 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+# where a link kept in ~/.ssh leads, named directly: the file one leads to, and a file under the folder one leads to
+refused "or the file a link in ~/.ssh leads to, named directly" "$T/ssh-config"
+refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
+# the CLI's config file by another name: a hard link to it
+ln "$C/config" "$T/hl-config" && refused "or a hard link to the CLI's config file" "$T/hl-config"
+# the account's own ~/.ssh when HOME is elsewhere, as it is here: its known_hosts, if it has one
+an=$(id -un 2>/dev/null); ah=""
+case "$an" in (''|*[!A-Za-z0-9._-]*|[-]*) ;; (*) eval "ah=~$an" ;; esac
+if [ -n "$ah" ] && [ "$ah" != "$H" ] && [ -f "$ah/.ssh/known_hosts" ]; then
+  refused "or a file in the account's own ~/.ssh, when HOME is elsewhere" "$ah/.ssh/known_hosts"
+else sk "a file in the account's own ~/.ssh is refused (the account has no ~/.ssh/known_hosts here)"; fi
 refused "or a link to such a file" "$T/via-dir.md"
 refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"

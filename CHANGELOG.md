@@ -221,6 +221,10 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **`send` refuses more ways to name a secret:** the file a symlink kept in `~/.ssh` or the CLI's config folder leads
+  to (a `~/.ssh/config` managed from a dotfiles folder, say), or a file under the folder one leads to, named
+  directly; the CLI's config file or signing key by any name for that file, such as a hard link; and a file in the
+  account's own `~/.ssh` when `HOME` points elsewhere.
 - **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
