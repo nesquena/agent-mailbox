@@ -77,32 +77,35 @@ hops() {
   # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too.
   # $2: how many folder links deep this call is (8 at most); $3 set: skip the folders above the first hop, which the
   # caller walks itself
-  rp=$1 hl=${2:-0} hs=${3:-} pr=; [ "$hl" -le 8 ] || return 1
+  rp=$1 hl=${2:-0} hs=${3:-} pr= hk=; [ "$hl" -le 8 ] || return 1
   case "$rp" in (/*) ;; (*) rp=${PWD:-.}/$rp ;; esac; n=0 h1=$rp
   # a name holding a newline can't be followed exactly ($(...) drops trailing ones): refuse it
   while case "$rp" in (*"$NL"*) return 1 ;; esac; rd=$(phys "$(dirname "$rp")"); do
     printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; case "$rd" in (/proc|/proc/*) pr=1 ;; esac
+    # the hop's folders, from its own up: up to the root, or, for a relative target, up to the folder of the link it
+    # came from, which is physical (no links) all the way up. hd is absolute and has no trailing /, so cutting its last
+    # part needs no dirname
     hd=$(dirname "$rp"); [ -z "$hs" ] || hd=/; hs=""
-    while [ "$hd" != / ] && [ "$hd" != . ]; do
+    while [ "$hd" != / ] && [ "$hd" != . ] && [ "$hd" != "$hk" ]; do
       # a folder that's a link: where it sits and everything it leads to
       [ ! -L "$hd" ] || (hops "$hd" $((hl + 1)) 1) || return 1
-      hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
+      hn=${hd%/*}; [ -n "$hn" ] || hn=/; [ "$hn" != "$hd" ] || break; hd=$hn; done
     # the end must be the very file named, or a link was read as a name other than the one stored (macOS's readlink
-    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file.
-    # So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor; and on macOS a stat of it fails
-    # now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one hop, isn't compared either.
-    # Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see the file behind a
-    # descriptor, so a secret file redirected to stdin, or named as /dev/fd/<n>, is caught only by the private-key check
-    # on the body's text (as before: comparing /dev/fd/<n> with /dev/stdin never refused a secret). $PWD names the
-    # folder the command runs in: sh, dash and bash keep an inherited PWD only when it's that same folder, so
-    # $PWD/<file> and <file> are one file
+    # prints some bytes as ?): refuse, not guess. ceiling: a walk through /proc (a pipe on stdin) ends at a name that's
+    # no file, so it skips that check. So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor;
+    # and on macOS a stat of it fails now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one
+    # hop, isn't compared either. Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see
+    # the file behind a descriptor, so a secret file redirected to stdin, or named as /dev/fd/<n>, is caught only by the
+    # private-key check on the body's text (as before: comparing /dev/fd/<n> with /dev/stdin never refused a secret).
+    # $PWD names the folder the command runs in: sh, dash and bash keep an inherited PWD only when it's that same
+    # folder, so $PWD/<file> and <file> are one file
     if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || { [ "$h1" = /dev/stdin ] && [ "$n" -eq 1 ] &&
       [ "$rd" = /dev/fd ] && case $(basename "$rp") in (''|*[!0-9]*) false ;; esac; } || [ "$rp" -ef "$h1" ]; return; fi
     rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
     # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
     # aren't walked again; but not under /proc, where self names the subshell phys ran in
-    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
-      (*) rp=${rd%/}/$rl ;; esac ;; esac; done; return 1
+    n=$((n+1)) hk=; case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
+      (*) rp=${rd%/}/$rl hk=${rd%/} ;; esac ;; esac; done; return 1
 }
 real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
   while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .); do rl=${rl%.}; rl=${rl%"$NL"}; n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done

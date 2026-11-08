@@ -221,6 +221,9 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **`send`'s path check is much faster on deep link chains:** it no longer runs `dirname` for every folder of every
+  hop, and after a link with a relative target it doesn't walk again the folders it already knows hold no links. A
+  chain of 20 links 300 folders deep went from about 29 s to under 1 s.
 - **`send` refuses more ways to name a secret:** the file a symlink kept in `~/.ssh` or the CLI's config folder leads
   to (a `~/.ssh/config` managed from a dotfiles folder, say), or a file under the folder one leads to, named
   directly; the CLI's config file or signing key by any name for that file, such as a hard link; and a file in the
