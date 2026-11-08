@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** the git adapter matches the mailbox branch by its exact name. A store with no `main` but a ref whose name
+  ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
+  with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip.
