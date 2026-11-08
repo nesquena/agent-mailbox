@@ -1,7 +1,7 @@
 #!/bin/sh
 # test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
 # gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
-# Needs git; the signature tests need ssh-keygen (OpenSSH 8+) and are skipped without it. Exit 0 when all pass.
+# Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run it with a specific shell to test that shell: `dash test/run.sh`, `bash test/run.sh`.
 set -u
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
@@ -2134,5 +2134,8 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+# install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
+  env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
