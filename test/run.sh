@@ -2118,6 +2118,21 @@ mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
 " "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
 n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
   env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
+# a decoy folder link named as readlink shows the real one, leading to /dev/fd: the end it reaches isn't exempt from
+# the same-file check (only /dev/stdin's own link to fd/<n> is). macOS only: elsewhere /dev/stdin leads through /proc
+if [ "$(uname -s)" = Darwin ]; then
+  mkdir -p "$T/dfd/real"; ln -s "$H/.ssh/config" "$T/dfd/real/9"; ln -s "$T/dfd/real" "$T/dfd/d
+"; ln -s /dev/fd "$T/dfd/d?"; ln -s "$T/dfd/d
+/9" "$T/dfd/notes.md"
+  n=$((n+1)); expect "or a chain whose shown name leads into /dev/fd" 1 "refusing to send" \
+    env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/dfd/notes.md"
+else sk "a chain whose shown name leads into /dev/fd is refused (macOS only)"; fi
+# stdin's link shown as a digit-named file that isn't in /dev/fd isn't exempt either
+mkdir -p "$T/lierl" "$T/decoy"; echo decoy > "$T/decoy/7"
+printf '#!/bin/sh\ncase "$1" in (/dev/stdin) echo "%s/decoy/7" ;; (*) exec "%s" "$@" ;; esac\n' "$T" "$(command -v readlink)" > "$T/lierl/readlink"
+chmod +x "$T/lierl/readlink"
+n=$((n+1)); expect "or stdin whose link is shown as a digit-named file outside /dev/fd" 1 "can't be followed" \
+  sh -c "echo hi | env PATH='$T/lierl:$PATH' HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
