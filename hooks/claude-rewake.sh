@@ -104,9 +104,10 @@ ccver() {
 # - an interactive session: its output a terminal;
 # - the cloud's launch, a session with streaming input: `--preload` as its first argument, and its input not a
 #   terminal;
-# - the Claude desktop app's launch, a session with streaming input: its entrypoint (claude-desktop), started by an
-#   executable inside a `Claude.app` bundle (the app or its helper, never a shell, so a claude started from a
-#   session's shell can't pass for it, whatever its arguments), and its input not a terminal.
+# - the Claude desktop app's launch, a session with streaming input: its entrypoint (claude-desktop), started by the
+#   app itself or its launcher (`Claude.app/Contents/MacOS/Claude`, `Claude.app/Contents/Helpers/disclaimer`), never
+#   by a shell or a Claude Code, so a claude started from a session can't pass for it, whatever its arguments; and
+#   its input not a terminal.
 # Other hosts with streaming input (`--input-format stream-json`) decline: the flag alone doesn't show that Claude
 # Code reads streaming input (a later `--input-format`, or input from a terminal, undoes it). Each argument is read
 # on its own where /proc has them, else from the command line split at spaces.
@@ -131,7 +132,7 @@ background() {
   if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = claude-desktop ]; then
     pp=$(ppid "$ccpid"); x=""
     [ -z "$pp" ] || x=$(readlink "/proc/$pp/exe" 2>/dev/null) || x=$(ps -o comm= -p "$pp" 2>/dev/null)
-    case "$x" in (*/Claude.app/Contents/*)
+    case "$x" in (*/Claude.app/Contents/Helpers/disclaimer|*/Claude.app/Contents/MacOS/Claude)
       i=$(readlink "/proc/$ccpid/fd/0" 2>/dev/null) || i=$(lsof -a -p "$ccpid" -d 0 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)
       [ -n "$i" ] && ! term "$i" && return 0 ;;
     esac

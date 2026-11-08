@@ -863,6 +863,9 @@ m, s = os.openpty(); sys.exit(subprocess.call(sys.argv[1:], stdin=s))' "$DISC" "
       # no evidence)
       DDIRECT=env; expect "nor one the app didn't start, with the same arguments" 0 '^$' natd $SJ
       expect "or a prompt that names them" 0 '^$' natd -- "explain --input-format stream-json"; unset DDIRECT
+      # (nor anything else in the app's bundle, such as a Claude Code a session started with exec)
+      OTHER="$CCD/Claude.app/Contents/Resources/claude"; mkdir -p "${OTHER%/*}"; cp "$DISC" "$OTHER"
+      DDIRECT=$OTHER; expect "nor one started by another executable in the app's bundle" 0 '^$' natd $SJ; unset DDIRECT
     else sk "the desktop app's launch watches (no /proc or lsof)"; fi
     as rw consume "$(as rw list | grep rw-n)" >/dev/null; rm -f "$RS/rewake/rw/r1/woke"
     expect "and one below 2.1.69 is left to the guard" 0 '^$' nat CCV=2.1.68
