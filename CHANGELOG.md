@@ -218,4 +218,4 @@ First version.
   wake you twice (#58).
 - **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
   retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
-  consume it first (or reroute it to another agent), or pass `--force` to retire with it unread.
+  consume it first (or reroute it to another agent), or pass `--force` to retire with it unread (#73).

@@ -1300,9 +1300,10 @@ if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >
     ("2 "*rx-3.md*) ok "and the other store's mail still wakes it" ;; (*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;; esac
 else no "and the other store's mail still wakes it" "it didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 mv "$C2.off" "$C2"
-# retiring the name on one store records it so, and the hook then watches only the other
+# retiring the name on one store records it so, and the hook then watches only the other (--force: mail sent above is
+# still waiting there, and this is about the session's list, not the inbox)
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired >/dev/null 2>&1
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired --force >/dev/null 2>&1
 expect "retiring the name on one store records it in the session's list" 0 - test "$(tail -n 1 "$RS/session-stores/r9")" = "$S2 rw -"
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
