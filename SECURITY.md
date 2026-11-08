@@ -11,11 +11,7 @@ A useful report says:
 - the output of `agent-mailbox --version` and `agent-mailbox doctor`, and your OS and shell.
 
 ## Supported versions
-Security fixes go into the latest release and `main`.
-
-| Version | Supported |
-|---|---|
-| 0.1.x | yes |
+Security fixes go into `main` and the latest release.
 
 ## Scope
 What a signature proves and doesn't, the trust model and the operating rules are in
