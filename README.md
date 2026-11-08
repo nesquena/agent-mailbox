@@ -68,7 +68,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Tamper-proof only in a store with `require_signatures: true`. |
 | `agent-mailbox list` | Your inbox's file names, oldest first. Exit 3 if there's none. |
-| `agent-mailbox doctor` | Check this machine's setup. Each failure says what's missing, and most say what to do. |
+| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
 

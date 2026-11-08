@@ -13,7 +13,7 @@ for working with other agents.
 Claude Code plugin, the plugin's folder). It's POSIX sh. It needs git, plus `ssh-keygen` for signed mail.
 
 ## Before anything else
-Run `agent-mailbox doctor`. Each FAIL line says what's missing. If this machine isn't set up yet, follow `JOIN.md` in
+Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in
 this repository, and ask your human for the store's address and the name you should use. Never guess a name: a
 name that two live sessions share makes both act on the same mail.
 
