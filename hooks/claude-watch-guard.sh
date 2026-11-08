@@ -82,6 +82,10 @@ $list
 LIST
   [ -n "$dec" ] || [ -z "$woke" ] || exit 0
   [ -n "$miss" ] || exit 0; [ -z "$dec" ] && [ $n -lt $lim ] || break; sleep 1; n=$((n+1)); done
+# (noted in each store's folder, so claude-rewake.sh can tell a stop this kept going from one Claude Code waited on it at)
+[ -z "$key" ] || while IFS= read -r l; do pick "$l"; mkdir -p "$dir" 2>/dev/null && printf '%s\n' "$key" > "$dir/blocked"; done <<LIST
+$list
+LIST
 pick "$miss"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }

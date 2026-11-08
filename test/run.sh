@@ -1125,18 +1125,26 @@ am2() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION
 am2 setup --store "$T/store2" --adapter dir --name rw >/dev/null; am2 init >/dev/null; am2 register --kind t --about t --no-key >/dev/null
 as rz setup --store "$T/store2" --adapter dir --name rz >/dev/null; as rz register --kind t --about t --no-key >/dev/null
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
-# reg [args...]: watch once in session r9, as the agent does to register
-reg() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" "$@" watch 1 1 >/dev/null 2>&1; }
-reg8() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r8 "$SH" "$CLI" "$@" watch 1 1 >/dev/null 2>&1; }
+# regs <session> [args...]: watch once in that session, as the agent does to register (with --also when ALSO is
+# set); reg: in r9
+ALSO=""
+regs() { s=$1; shift; HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= \
+  AGENT_MAILBOX_NAME= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=$s "$SH" "$CLI" "$@" watch 1 1 $ALSO >/dev/null 2>&1; }
+reg() { regs r9 "$@"; }
+# (a plain watch makes this the session's only store, as before; another store, or another name, replaces it)
+regs r7 --as rx; regs r7 --as rw; echo hi | as rw send rx rx-q - >/dev/null 2>&1
+expect "a plain watch under another name stops the earlier name's wakes" 2 "daily limit" rewake r7
+as rx consume "$(as rx list | grep rx-q | sed 's#.*/##')" >/dev/null 2>&1
+regs r7 --config "$C2"; echo hi | as rx send rw rx-p - >/dev/null 2>&1
+expect "and a plain watch on another store stops the earlier store's" 2 "daily limit" rewake r7
+as rw consume "$(as rw list | grep rx-p | sed 's#.*/##')" >/dev/null 2>&1
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
 reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
-reg --config "$C2"; reg --config "$C2"; reg
-expect "watch on a second store adds a line for it, and again replaces it" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
+ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
+expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
 n=0 lost=""; while [ $n -lt 10 ]; do rm -f "$RS/session-stores/r8"
-  reg8 & reg8 --config "$C2" & wait; [ "$(grep -c . "$RS/session-stores/r8")" = 2 ] || lost="$lost $n"; n=$((n+1)); done
+  ALSO=--also; regs r8 & regs r8 --config "$C2" & wait; ALSO=; [ "$(grep -c . "$RS/session-stores/r8")" = 2 ] || lost="$lost $n"; n=$((n+1)); done
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
@@ -1236,6 +1244,14 @@ rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S2/pid" "$RS/rewake/rw/r9@$S
 expect "a stop Claude Code waited for, at the prompt one store woke it at, makes every store step aside" 0 '^$' \
   rewakej '{"session_id":"r9","prompt_id":"p-L","stop_hook_active":true}'
 expect "leaving each store a note for the guard" 0 - grep -qx p-L "$RS/rewake/rw/r9@$S2/declined"
+# a stop the Stop guard blocked (it notes that) isn't one Claude Code waited for this hook at, though a store's run
+# woke the session at its prompt meanwhile: the stores aren't left unwatched
+if command -v jq >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S2/pid" "$RS/rewake/rw/r9@$S2/last"
+  rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid; guardr9 p-B > /dev/null; echo p-B > "$RS/rewake/rw/r9@$S1/last"
+  echo hi | as rx send rw rx-b - >/dev/null 2>&1
+  expect "a stop the guard kept going isn't taken for one Claude Code waited at" 2 "rx-b\.md" \
+    rewakej '{"session_id":"r9","prompt_id":"p-B","stop_hook_active":true}'
+else sk "a stop the guard kept going isn't taken for one Claude Code waited at (no jq)"; fi
 # the hook stopped just as a store's run has found mail: that mail is passed on, or wakes the next run, never neither
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!

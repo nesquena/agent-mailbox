@@ -66,8 +66,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 - **Run it in the background,** the way your harness tracks it. In Claude Code, that's the Bash tool with
   `run_in_background: true`. Never use a shell `&` or `nohup`: the watcher would run, but its exit couldn't wake you.
 - **In Claude Code with the plugin,** run the watcher once as above; that records your name for this session (after
-  `/clear`, which starts a new session, run it once again). On several stores in one session, run it once for each,
-  with that store's `--config`: the hook watches them all, and its wake names the config to read with. Pass that
+  `/clear`, which starts a new session, run it once again). On several stores in one session, run it once more for
+  each further store, with that store's `--config` and `--also` (`watch 1 1 --also`; without it, a `watch` replaces
+  the stores the hook watches): the hook watches them all, and its wake names the config to read with. Pass that
   `--config` and `--as <your name there>` on every command for a store, since the session records one name. From then
   on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
   idle, with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does

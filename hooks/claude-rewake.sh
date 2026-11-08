@@ -84,8 +84,10 @@ if [ "$n" -ge 2 ]; then
   each=$(mktemp -d 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
   while IFS= read -r l; do split "$l"; printf '%s\n' "$state/rewake/$name/$sid@$store"; done < "$each/list" > "$each/dirs"
-  # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside
-  w=""; [ "$sha" != true ] || while IFS= read -r d; do [ "$(cat "$d/last" 2>/dev/null)" != "$key" ] || w=1; done < "$each/dirs"
+  # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside;
+  # not when the Stop guard blocked this stop (it notes that), which kept the turn going itself
+  w=""; [ "$sha" != true ] || while IFS= read -r d; do [ "$(cat "$d/last" 2>/dev/null)" != "$key" ] ||
+    [ "$(cat "$d/blocked" 2>/dev/null)" = "$key" ] || w=1; done < "$each/dirs"
   if [ -n "$w" ]; then
     while IFS= read -r d; do mkdir -p "$d" && printf '%s\n' "$key" > "$d/declined"; done < "$each/dirs"; rm -rf "$each"; exit 0
   fi
@@ -196,7 +198,8 @@ background() {
 }
 # a stop that a Stop hook already kept going (stop_hook_active, read above) at the prompt this hook already woke the
 # session at means Claude Code waited for it: run as an ordinary Stop hook after all, so it steps aside
-looped() { [ "$sha" = true ] && [ "$prev" = "$key" ]; }
+# (but not a stop the Stop guard blocked, which kept the turn going itself)
+looped() { [ "$sha" = true ] && [ "$prev" = "$key" ] && [ "$(cat "$run/blocked" 2>/dev/null)" != "$key" ]; }
 cc=$(ccver); ccv=${cc%% *}; ccpid=${cc#"$ccv"}; ccpid=${ccpid# }
 case "$ccpid" in (*[!0-9]*) ccpid="" ;; esac
 if ! printf '%s\n' "$ccv" | awk -F. '{ exit !($1 > 2 || $1 == 2 && ($2 > 1 || $2 == 1 && $3 >= 69)) }' || ! background || looped
