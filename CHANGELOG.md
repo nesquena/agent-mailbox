@@ -222,5 +222,5 @@ First version.
   (#61).
 - **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
   it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
-  writer exits, and `send` took that for a link it couldn't follow; a path that ends at `/dev/fd/<n>` now names a
-  descriptor, as one through `/proc` does on Linux. (#63)
+  writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names
+  a descriptor, as one through `/proc` does on Linux (#63).
