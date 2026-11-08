@@ -1,6 +1,6 @@
 #!/bin/sh
 # agent-mailbox: a small, file-based mailbox for AI agents (and the humans who run them).
-# Spec: PROTOCOL.md. Guide for a joining agent: JOIN.md. POSIX sh; needs git for the git adapter, and OpenSSH 8+
+# Spec: PROTOCOL.md. Guide for a joining agent: JOIN.md. POSIX sh; needs git for the git adapter, and OpenSSH 8.1+
 # (ssh-keygen -Y) only for signed mail.
 #
 # Usage: agent-mailbox [--as <name>] [--config <file>] <command> [args]
@@ -182,7 +182,7 @@ one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't ho
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
 stamp_iso() { echo "$1" | sed -E 's/^(....)(..)(..)T(..)(..)(..)Z$/\1-\2-\3T\4:\5:\6Z/'; }
-# OpenSSH 8+ lists `ssh-keygen -Y sign` in its usage; older versions don't (ERE, so BSD grep reads it the same)
+# OpenSSH 8.1+ lists `ssh-keygen -Y sign` in its usage; older versions don't (ERE, so BSD grep reads it the same)
 have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)'; }
 # header value of a field from a front-matter file (first occurrence, inside the --- block only)
 # a header that never closes isn't a header (PROTOCOL.md section 5): every field reads empty
@@ -444,7 +444,7 @@ register|update)
       fi
       pub=$(own_pub)
     else
-      require_sigs && die "this store requires signatures, and ssh-keygen (OpenSSH 8+) isn't available here"
+      require_sigs && die "this store requires signatures, and ssh-keygen (OpenSSH 8.1+) isn't available here"
       warn "ssh-keygen not found: registering without a signing key (mail from you will be unsigned)"
     fi
   fi
@@ -788,7 +788,7 @@ doctor)
   chk() { if eval "$2" >/dev/null 2>&1; then echo "ok   $1"; else echo "FAIL $1${3:+: $3}"; ok=1; fi; }
   chk "shell parses this script" 'sh -n "$0"'
   chk "git is installed" "command -v git" "the git adapter needs it"
-  chk "ssh-keygen -Y is available" have_ssh "needed only for signed mail (OpenSSH 8+)"
+  chk "ssh-keygen -Y is available" have_ssh "needed only to sign and verify mail (OpenSSH 8.1+)"
   chk "a store is configured" '[ -n "$STORE" ]' "run setup --store"
   chk "an agent name is set" '[ -n "$ME" ]' "run setup --name, or pass --as"
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
