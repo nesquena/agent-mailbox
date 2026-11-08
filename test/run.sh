@@ -1414,6 +1414,16 @@ if command -v perl >/dev/null 2>&1; then
 else sk "a socket on stdin sends (no perl)"; fi
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
+# the name record is advisory: a send whose record can't be written warns, and still sends
+NR="$W/home-i1/.local/state/agent-mailbox/names"; chmod -R a-w "$NR"
+if (true > "$NR/probe") 2>/dev/null; then rm -f "$NR/probe"; chmod -R u+w "$NR"
+  sk "a send whose name record can't be written still sends (read-only folders don't stop this user)"
+else
+  expect "a send whose name record can't be written warns, and still sends" 0 "can't record this send's file name.*sending anyway" \
+    sh -c "echo x | HOME='$W/home-i1' '$SH' '$CLI' send i2 norec - 2>&1"
+  chmod -R u+w "$NR"
+  expect "and the message is delivered" 0 "^x$" block i2 norec
+fi
 
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
