@@ -210,4 +210,4 @@ First version.
   different name on each store, pass `--as <name>` with each store's `--config`. A `watch` without `--also` replaces
   the stores the hook watches, as before. After updating, the hook's list of mail it woke you for starts afresh once
   per session, so mail still in your inbox can wake you once more. In a session that ran `watch` before updating,
-  adding a store with `--also` before the first turn has ended needs a plain `watch` on your first store first (#58).
+  run a plain `watch` on your first store once before adding another with `--also` (#58).
