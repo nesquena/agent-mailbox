@@ -91,22 +91,25 @@ if [ "$n" -ge 2 ]; then
   if [ -n "$w" ]; then
     while IFS= read -r d; do mkdir -p "$d" && printf '%s\n' "$key" > "$d/declined"; done < "$each/dirs"; rm -rf "$each"; exit 0
   fi
+  # (each run as <pid>:<its line>, so the mail it left pending is found in its own store's folder)
   while IFS= read -r l; do i=$((i+1)); split "$l"
-    sh "$0" --store "$store" "$name" "$conf" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
+    sh "$0" --store "$store" "$name" "$conf" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!:$i"
   done < "$each/list"
-  # (a run that's been waited for answers no more; one still running is stopped, then waited for)
-  finish() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
+  # (a run that's been waited for answers no more; one still running is stopped, then waited for. Only the mail its
+  # own runs that woke the session left pending is recorded as woken for: another hook's is that hook's to record)
+  finish() { trap '' TERM INT HUP; for k in $kids; do kill "${k%%:*}" 2>/dev/null; done
+    for k in $kids; do wait "${k%%:*}" 2>/dev/null; [ $? != 2 ] || won="$won ${k#*:}"; done
     for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done
-    [ "$1" != 2 ] || while IFS= read -r d; do
-      [ ! -f "$d/pending" ] || { cat "$d/pending" >> "$d/woke" && rm -f "$d/pending"; }; done < "$each/dirs"
+    [ "$1" != 2 ] || for j in $won; do d=$(sed -n "${j}p" "$each/dirs")
+      [ ! -f "$d/pending" ] || { cat "$d/pending" >> "$d/woke" && rm -f "$d/pending"; }; done
     rm -rf "$each"; exit "$1"; }
-  trap 'finish 0' TERM INT HUP
+  won=""; trap 'finish 0' TERM INT HUP
   # (and once the shell Claude Code started this hook through is gone, as a single store's run stops then)
   top=$PPID
   while :; do
     live "$top" || finish 0
-    left="" woke=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || woke=1; fi; done
-    kids=$left; [ -z "$woke" ] || finish 2; [ -n "$kids" ] || finish 0
+    left=""; for k in $kids; do if live "${k%%:*}"; then left="$left $k"; else wait "${k%%:*}"; [ $? != 2 ] || won="$won ${k#*:}"; fi; done
+    kids=$left; [ -z "$won" ] || finish 2; [ -n "$kids" ] || finish 0
     sleep 1 & wait $!
   done
 fi
