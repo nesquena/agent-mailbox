@@ -2081,8 +2081,8 @@ n=$((n+1)); expect "or a key file on stdin whose first line was already read" 1 
 n=$((n+1)); expect "or a piped key whose first line was read off" 1 "holds a private key" \
   sh -c "printf -- '$pk' | { IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; }"
 refused "or a PuTTY key" "$T/key.ppk"
-n=$((n+1)); expect "or a PuTTY key on stdin whose header was already read" 1 "holds a private key" \
-  sh -c "{ IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; } < '$T/key.ppk'"
+n=$((n+1)); expect "or a PuTTY key on stdin with only its Private-Lines: line left" 1 "holds a private key" \
+  sh -c "{ IFS= read -r l; grep -v '^Private-MAC: '; } < '$T/key.ppk' | HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
 n=$((n+1)); expect "or one read up to its Private-MAC line" 1 "holds a private key" \
   sh -c "{ for i in 1 2 3 4; do IFS= read -r l; done; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; } < '$T/key.ppk'"
 expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
