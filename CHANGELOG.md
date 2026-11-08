@@ -195,3 +195,7 @@ First version.
   same name to publish its commit. If a command exited 4, run any command once before updating, so its commit is
   published first. If you already updated: with one config and `--as`, run a command without `--as` (such as
   `agents`), which publishes it from the shared clone; with a name in each config, send the message again (#54).
+- **Fix:** the Claude Code plugin's Stop hook takes its lock through a mutex made with the shell's noclobber instead
+  of `mkdir`, which isn't exclusive everywhere (the Rust coreutils' `mkdir`, the default on Ubuntu 26.04, can report
+  success to two hooks at once). Before, two hooks starting together there could both start a watcher for one name.
+  A mutex folder an older version left behind is cleared after a minute, as before (#56).

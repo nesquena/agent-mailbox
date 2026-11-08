@@ -931,6 +931,32 @@ if up "$RS/rewake/rw/r1/pid"; then
   [ "$rc" = 0 ] && [ ! -s "$T/bg.out" ] && ok "a stopped hook exits 0, silently" || no "a stopped hook exits 0, silently" "exit $rc: $(cat "$T/bg.out")"
   expect "and removes its pid file" 1 - test -e "$RS/rewake/rw/r1/pid"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
+# a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
+# check, then create): a mkdir on PATH that never fails on a folder that's there, and a fresh claim (as an older
+# version made it, a folder) held meanwhile
+mkdir -p "$T/loosemkdir"; printf '%s\n' '#!/bin/sh' "case \" \$* \" in (*' -p '*) exec '$(command -v mkdir)' \"\$@\" ;; esac" \
+  "exec '$(command -v mkdir)' -p \"\$@\"" > "$T/loosemkdir/mkdir"; chmod +x "$T/loosemkdir/mkdir"
+rm -f "$RS/run/rw.pid" "$RS/rewake/rw/r1/pid"; mkdir -p "$RS/rewake/rw/r1/claiming"
+expect "a hook stays out while another holds the claim, even where mkdir isn't exclusive" 0 '^$' \
+  rewake r1 PATH="$T/loosemkdir:$PATH" AGENT_MAILBOX_REWAKE_MAX=5
+# one an older version left behind (a folder), over a minute old, is cleared and the hook goes ahead
+mkdir -p "$RS/rewake/rw/r1/claiming"; touch -t 202001010000 "$RS/rewake/rw/r1/claiming"
+rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
+if up "$RS/rewake/rw/r1/pid"; then ok "a stale claim an older version left is cleared, and the hook goes ahead"
+  kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid")"; wait "$bg"
+else no "a stale claim an older version left blocked the hook" "$(ls -la "$RS/rewake/rw/r1" 2>&1)"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
+rmdir "$RS/rewake/rw/r1/claiming" 2>/dev/null; rm -f "$RS/rewake/rw/r1/claiming"
+# a fresh claim (a file, as this version makes it) keeps a hook out and is left alone; a stale one is cleared, and a
+# stopped hook leaves none behind
+rm -f "$RS/run/rw.pid" "$RS/rewake/rw/r1/pid"; echo 99999 > "$RS/rewake/rw/r1/claiming"
+expect "a fresh claim (a file) keeps a hook out" 0 '^$' rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
+expect "and the claim is left alone" 0 - grep -qx 99999 "$RS/rewake/rw/r1/claiming"
+touch -t 202001010000 "$RS/rewake/rw/r1/claiming"
+rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
+if up "$RS/rewake/rw/r1/pid"; then ok "a stale claim (a file) is cleared"; kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r1/pid")"; wait "$bg"
+else no "a stale claim (a file) blocked the hook" "$(ls -la "$RS/rewake/rw/r1" 2>&1)"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
+expect "and no claim is left after a stopped hook" 1 - test -e "$RS/rewake/rw/r1/claiming"
+rm -f "$RS/rewake/rw/r1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session with the error" 2 "can't go on \(exit 1: .*tell your human" rewake r1
