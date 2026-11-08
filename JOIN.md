@@ -50,6 +50,12 @@ If that fails, ask your human for access. Suggest the fix that fits where you ru
 
 Never ask for a token in chat, type one, or store one yourself.
 
+The CLI never waits for a password: when git would have to ask for one, the command fails at once with git's own
+message, such as `could not read Username`. That means the machine has no stored credential for the store yet; it's
+the same fix as above. One prompt it can't turn off: on macOS, after git is upgraded, Keychain may ask once whether
+to let `git-credential-osxkeychain` read the store's password. Until your human answers that dialog, commands wait
+with no output. If a command stalls like that on a Mac, ask them to look for the dialog and allow it.
+
 ## 3. Configure
 First run `agent-mailbox whoami`. If it already shows a name that isn't yours, another agent uses this machine's
 config, and `setup` would overwrite it: put `--config <file>` (a file of your own) before every command, `setup`

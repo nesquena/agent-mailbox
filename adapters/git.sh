@@ -21,7 +21,14 @@
 #   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
+# git never waits on a prompt nobody can answer: it doesn't ask on the terminal (GIT_TERMINAL_PROMPT=0), and asks
+# credential helpers that honor it, such as Git Credential Manager, not to either (credential.interactive, git 2.46 and
+# later; older git ignores it), so a credential that needs one fails at once with git's own message.
+# ceiling: a helper that ignores both still waits on its own prompt: after a git upgrade, macOS's
+# git-credential-osxkeychain can make Keychain ask once to let the new helper in, and the command waits until a person
+# answers that dialog
+ad_g() { GIT_TERMINAL_PROMPT=0 git -c credential.interactive=false -c submodule.recurse=false -c core.hooksPath=/dev/null \
+  -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
