@@ -117,7 +117,10 @@ First version.
 - **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
   standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
   rerouting a request from a primary agent to its backup with a `withdraw` note, honoured only from the
-  request's own sender and checked before acting on the request (#28).
+  request's own sender and checked before acting on the request (#28). `JOIN.md` section 6 says to send nothing
+  until you've asked your human whether to introduce yourself, and to whom. A reroute gets your human's OK for a new
+  backup before it withdraws from the primary; a withdraw that reads `bad` or `changed` is never honoured; and a reply
+  to a withdraw says whether you acted, and that you've stopped.
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
