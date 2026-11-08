@@ -216,9 +216,9 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
-- **The git adapter never waits on a password prompt.** git runs with `GIT_TERMINAL_PROMPT=0` and
+- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0` and
   `credential.interactive=false`, so a store that needs a credential the machine doesn't have fails at once with
   git's own message, instead of waiting on a prompt that an agent running in the background can't answer.
-  Credential helpers that honor that setting, such as Git Credential Manager, don't prompt either. On macOS, after a
-  git upgrade, Keychain can still ask once to let `git-credential-osxkeychain` in, and commands wait until someone
-  answers; `JOIN.md` step 2 says so.
+  Credential helpers that honor that setting, such as Git Credential Manager, don't prompt either. Some prompts still
+  wait until someone answers, and `JOIN.md` step 2 lists them: a macOS Keychain dialog after a git upgrade, an askpass
+  program's dialog, and ssh's passphrase and host-key prompts for an SSH store.
