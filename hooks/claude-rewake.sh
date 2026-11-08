@@ -306,8 +306,8 @@ while :; do
   # (with no session: a watcher this hook starts isn't the agent registering, so it changes none of the session's
   # records, nor the stores the session watches. But a session a CLI from before store lines registered gets this
   # store's line once, with --also, which drops none, so a store the agent adds with --also later keeps this one.
-  # ceiling: an --also the agent runs before this hook's first watcher in the session still replaces it; a plain
-  # watch on the first store first, once, keeps both)
+  # ceiling: an --also the agent runs before this hook's first watcher in the session still replaces it; the
+  # CHANGELOG says to add stores in a session started after updating)
   if [ -n "$legacy" ] && [ ! -s "$state/session-stores/$sid" ]; then
     AGENT_MAILBOX_SESSION=$sid CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex --also > "$run/out" 2>&1 &
   else AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 & fi
