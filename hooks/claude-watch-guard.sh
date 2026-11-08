@@ -6,7 +6,8 @@
 # hook blocks a turn from ending while the session's watcher is down, and says how to re-arm it.
 #
 # It acts only in a session that has run `agent-mailbox watch`: that records the session's agent name under
-# <state>/sessions/<session id> and the watcher's pid under <state>/run/<name>.pid. A pid counts as alive only if
+# <state>/sessions/<session id> and the watcher's pid under <state>/run/<name>.pid (and <name>@<store id>.pid, for a
+# session on several stores, where each store's watcher counts for that store). A pid counts as alive only if
 # that process is still an agent-mailbox watcher, so a reused pid can't fool it. stop_hook_active (a stop that a
 # hook already continued) lets the stop through, so it never loops. It fails open: without jq, a session id, or a
 # record of a watcher, it allows the stop. It finds the records through the same state path the CLI uses
@@ -25,21 +26,18 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
-# what to check, as claude-rewake.sh reads it: each store line when there are several; else the session's one name and
-# config, from its store line or, before store lines, from the name and config `watch` recorded. As
-# "<store id or -> <name> <config>"
-lines=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
-  "$state/session-stores/$sid" 2>/dev/null)
-first=$(printf '%s\n' "$lines" | head -n 1)
-if [ -n "$first" ]; then name=$(printf '%s\n' "$first" | cut -d' ' -f2); conf=${first#* }; conf=${conf#* }
-else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
+# what to check, as claude-rewake.sh reads it: each of the session's stores (session-stores/<id>, a log `watch`
+# appends to: a line per store and name, its latest config or -, retired, counting) or, before store lines, the name
+# and config `watch` recorded; as "<store id or -> <name> <config>"
+list=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63 {
+    k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); if (!(k in cf)) o[++n] = k; cf[k] = c }
+  END { for (i = 1; i <= n; i++) if (cf[o[i]] != "-") print o[i] " " cf[o[i]] }' "$state/session-stores/$sid" 2>/dev/null)
+[ -n "$list" ] || list="- $(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid") $(cat "$state/session-configs/$sid" 2>/dev/null)"
+# pick <line>: set store, name, conf and the folder claude-rewake.sh keeps for it
+pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }
+  [ "$store" != - ] || store=""; dir="$state/rewake/$name/$sid${store:+@$store}"; }
+pick "$(printf '%s\n' "$list" | head -n 1)"
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-list=$lines; [ "$(printf '%s\n' "$lines" | grep -c .)" -ge 2 ] || list="- $name $conf"
-first=$(printf '%s\n' "$first" | cut -d' ' -f1,2)
-# pick <line>: set store, name, conf and the folder claude-rewake.sh keeps for it (the first store keeps the session's)
-pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name"}; conf=${conf# }; sub=""
-  [ "$store" != - ] || store=""; [ -z "$store" ] || [ "$store $name" = "$first" ] || sub="@$store"
-  dir="$state/rewake/$name/$sid$sub"; }
 # (on one of several stores, only a watcher on that store counts: its own pid file)
 alive() {
   set -- $(cat "$state/run/$name${store:+@$store}.pid" 2>/dev/null); pid=${1:-}

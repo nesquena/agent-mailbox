@@ -36,18 +36,20 @@ if command -v jq >/dev/null 2>&1; then key=$(printf '%s' "$input" | jq -r '.prom
 else key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
 [ -n "$key" ] || key="@$(date +%s)"
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
-# stores: this session's valid store lines
-stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63' \
-  "$state/session-stores/$sid" 2>/dev/null; }
-# the session's name and config: from its first store line (the first store it watched), else from the name and
-# config `watch` recorded before store lines; a run for one of several stores gets its own. The first store keeps the
-# session's own folder (below), so adding a store never moves its history; the others get one each
-store="" sub="" n=0
+# stores: this session's stores, as "<store id> <name> <config>": session-stores/<id> is a log `watch` appends to, a
+# line per store and name, its latest config (or -, retired) counting
+stores() { awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63 {
+    k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); if (!(k in cf)) o[++n] = k; cf[k] = c }
+  END { for (i = 1; i <= n; i++) if (cf[o[i]] != "-") print o[i] " " cf[o[i]] }' "$state/session-stores/$sid" 2>/dev/null; }
+# split <line>: its store, name and config (the config is the rest of the line, as it is)
+split() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }; }
+# the session's name and config: from its store line, else (before store lines) from the name and config `watch`
+# recorded; a run for one of several stores gets its own
+store="" n=0
 if [ "${1:-}" = --store ]; then store=${2:-} name=${3:-} conf=${4:-}
   printf '%s\n' "$store" | grep -Eq '^[A-Za-z0-9]{1,64}$' || exit 0
-  [ "$(stores | head -n 1 | cut -d' ' -f1,2)" = "$store $name" ] || sub="@$store"
 else n=$(stores | wc -l)
-  if [ "$n" -ge 1 ]; then l=$(stores | head -n 1); name=$(printf '%s\n' "$l" | cut -d' ' -f2); conf=${l#* }; conf=${conf#* }
+  if [ "$n" -ge 1 ]; then split "$(stores | head -n 1)"
   else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); fi
 fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
@@ -75,10 +77,11 @@ mine() {
 # ends the others, and everything any of them said is passed on. A run whose parent is gone (this one, killed) stops
 # itself, as below
 if [ "$n" -ge 2 ]; then
-  mkdir -p "$state/rewake" 2>/dev/null; each=$(mktemp -d "$state/rewake/.each.XXXXXX" 2>/dev/null) || exit 0
+  # (in the system's temporary folder, so one a killed hook leaves is cleared as other temporary files are)
+  each=$(mktemp -d 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
-  while read -r s n c; do i=$((i+1))
-    sh "$0" --store "$s" "$n" "$c" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
+  while IFS= read -r l; do i=$((i+1)); split "$l"
+    sh "$0" --store "$store" "$name" "$conf" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
   done < "$each/list"
   # (a run that's been waited for answers no more; one still running is stopped, then waited for)
   finish() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
@@ -93,11 +96,10 @@ if [ "$n" -ge 2 ]; then
     sleep 1 & wait $!
   done
 fi
-# this session's files: its lock, the mail it woke for, its last error (one folder per session, so two sessions
-# that use one name, against the protocol, don't share them; and one per store after the first, for a session on
-# several). ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is
-# stale. Retiring the first store's name makes the next store the first, whose folder changes once
-run="$state/rewake/$name/$sid$sub"; mkdir -p "$run" 2>/dev/null || exit 0
+# this session's files: its lock, the mail it woke for, its last error: a folder per session (so two sessions that use
+# one name, against the protocol, don't share them) and store, once `watch` has recorded the store
+# ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
+run="$state/rewake/$name/$sid${store:+@$store}"; mkdir -p "$run" 2>/dev/null || exit 0
 # this stop's key, for a hook already watching that may wake the session during this stop
 printf '%s\n' "$key" > "$run/key"
 mine && exit 0
@@ -289,9 +291,10 @@ while :; do
       here || exit 0
       note last
       rm -f "$run/error"
-      sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
+      # (said first, then recorded as woken for: a stop between the two wakes the session for it again, never not at all)
       c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
       { printf '%s\n' "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
+      sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"
       exit 2 ;;
     2)
       note last

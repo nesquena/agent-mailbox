@@ -159,14 +159,14 @@ SESSION="${AGENT_MAILBOX_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
 # a session id that could name another folder (`.`, `..`, or holding a /) is no session, as the Stop hook reads it
 case "$SESSION" in (.|..|*/*) SESSION= ;; esac
 session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
-# session_store <config>|-: record this store and name for this session in session-stores/<session id>, one line each
-# ("<store id> <name> <config>"), so the Claude Code hook can watch every store a session uses; or, with -, drop it
-# (replaced in place, so the first store a session watched stays first)
+# session_store <config>|-: record this store and name for this session, so the Claude Code hook can watch every store
+# a session uses; or, with -, that it's retired. session-stores/<session id> is a log: a line "<store id> <name>
+# <config>" is appended (an append can't lose another's) only when it changes what the last one for the store and name
+# says, and readers take the latest for each
 session_store() { t="$STATE/session-stores/$SESSION"; mkdir -p "$STATE/session-stores"
-  [ -f "$t" ] || : > "$t"
-  SS_S=$STORE_ID SS_N=$ME SS_L=$1 awk 'BEGIN { s = ENVIRON["SS_S"]; n = ENVIRON["SS_N"]; l = ENVIRON["SS_L"]; nl = s " " n " " l }
-    $1 == s && $2 == n { if (!d && l != "-") print nl; d = 1; next } { print } END { if (!d && l != "-") print nl }' \
-    "$t" > "$t.$$" && mv -f "$t.$$" "$t"; }
+  c=$(SS_K="$STORE_ID $ME" awk 'index($0, ENVIRON["SS_K"] " ") == 1 { c = substr($0, length(ENVIRON["SS_K"]) + 2) }
+    END { print c }' "$t" 2>/dev/null)
+  [ "$c" = "$1" ] || { [ "$1" = - ] && [ -z "$c" ]; } || printf '%s %s %s\n' "$STORE_ID" "$ME" "$1" >> "$t"; }
 ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
 KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
 

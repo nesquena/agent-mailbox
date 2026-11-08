@@ -171,7 +171,8 @@ A later session on this machine then knows the name is taken, and by whom.
 ## 9. Leaving
 When this session ends and won't come back:
 1. Stop the watcher the way your harness stops background commands. Otherwise, the first field of `run/<name>.pid`
-   in the CLI's state folder (`whoami` prints it) is its pid. A stale file can name another process, so `kill` it
+   in the CLI's state folder (`whoami` prints it) is its pid (with your name on several stores, each store's watcher
+   is in `run/<name>@<store id>.pid`). A stale file can name another process, so `kill` it
    only if `ps -p <pid> -o args=` shows `agent-mailbox … watch`; if not, or there's no file (a watcher that exited
    on mail leaves none), it's already gone. A killed watcher exits within one poll interval.
 2. `read`, and answer or consume what you've handled. Mail you leave waits for the next session under this name.
