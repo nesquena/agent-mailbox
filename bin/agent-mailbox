@@ -30,9 +30,10 @@
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
 #   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
 #                                       --version, exit 0 only if every sender's latest record releases it (else 5)
-#   watch [interval=120] [max=7000] [--except <file>]...
+#   watch [interval=120] [max=7000] [--except <file>]... [--also]
 #                                       wait for mail without spending model tokens; exits 0 with the mail listed,
-#                                       2 after max seconds (0 = no limit). Run it in the background.
+#                                       2 after max seconds (0 = no limit). Run it in the background. --also: in a
+#                                       Claude Code session, the plugin's hook watches this store too, not instead
 #   whoami | doctor                     show the resolved config | check this machine's setup
 #   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
@@ -159,6 +160,20 @@ SESSION="${AGENT_MAILBOX_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
 # a session id that could name another folder (`.`, `..`, or holding a /) is no session, as the Stop hook reads it
 case "$SESSION" in (.|..|*/*) SESSION= ;; esac
 session_name() { [ -n "$SESSION" ] && tr -d ' \n' 2>/dev/null < "$STATE/sessions/$SESSION"; }
+# session_store <config>|- [also]: record this store and name for this session, so the Claude Code hook watches it;
+# with -, that it's retired. Without also, it's the only one the session watches (any other store or name it watched
+# is dropped), as `watch` always did; with also (`watch --also`), it's added to them. session-stores/<session id> is a
+# log: a line "<store id> <name> <config>" (- for dropped) is appended, so an append can't lose another's, only when it
+# changes what the latest one for the store and name says; readers take the latest for each
+session_store() { t="$STATE/session-stores/$SESSION"; mkdir -p "$STATE/session-stores"
+  if [ "$1" != - ] && [ -z "${2:-}" ]; then
+    o=$(SS_K="$STORE_ID $ME" awk '{ k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); if (!(k in cf)) l[++n] = k; cf[k] = c }
+      END { for (i = 1; i <= n; i++) if (cf[l[i]] != "-" && l[i] != ENVIRON["SS_K"]) print l[i] " -" }' "$t" 2>/dev/null)
+    [ -z "$o" ] || printf '%s\n' "$o" >> "$t"
+  fi
+  c=$(SS_K="$STORE_ID $ME" awk 'index($0, ENVIRON["SS_K"] " ") == 1 { c = substr($0, length(ENVIRON["SS_K"]) + 2) }
+    END { print c }' "$t" 2>/dev/null)
+  [ "$c" = "$1" ] || { [ "$1" = - ] && [ -z "$c" ]; } || printf '%s %s %s\n' "$STORE_ID" "$ME" "$1" >> "$t"; }
 ME="${AS:-${AGENT_MAILBOX_NAME:-$(session_name || true)}}"; ME="${ME:-$(cfg name)}"
 KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$CONFIG_HOME/keys/$ME"
 
@@ -442,7 +457,10 @@ register|update)
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
-  if [ "$status" = retired ] && [ -n "$SESSION" ] && [ "$(session_name)" = "$ME" ]; then rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"; fi
+  if [ "$status" = retired ] && [ -n "$SESSION" ]; then
+    [ "$(session_name)" != "$ME" ] || rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"
+    session_store - 2>/dev/null || true
+  fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
   echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
@@ -698,10 +716,11 @@ holds)
     END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true makes holds tamper-proof" > "/dev/stderr"
           exit bad ? 5 : 0 }' ;;
 watch)
-  interval=120 max=7000 except="" pos=0
+  interval=120 max=7000 except="" pos=0 also=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
+      --also) also=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
     esac
@@ -724,10 +743,13 @@ watch)
     else case "$CONFIG" in (/*) c=$CONFIG ;; (*) c="$(pwd)/$CONFIG" ;; esac; fi
     printf '%s\n' "$c" > "$STATE/session-configs/$SESSION"
     echo "$ME" > "$STATE/sessions/$SESSION"
+    session_store "$c" "$also"
   fi
-  echo "$$ $ME $STORE_ID" > "$STATE/run/$ME.pid"
+  # (one for the name, and one for the name on this store, since one name can be in use on several stores)
+  for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
   # (removed only while it still names this watcher: another watcher for the name may have started since)
-  unmark() { [ "$(cut -d' ' -f1 "$STATE/run/$ME.pid" 2>/dev/null)" != $$ ] || rm -f "$STATE/run/$ME.pid"; }
+  unmark() { for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do
+    [ "$(cut -d' ' -f1 "$pf" 2>/dev/null)" != $$ ] || rm -f "$pf"; done; }
   trap unmark EXIT
   trap 'exit 130' INT TERM
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"

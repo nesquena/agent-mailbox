@@ -124,10 +124,13 @@ on whether your harness can wake you when a background command exits.
   ```
 - **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
   every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (step 4 below doesn't
-  apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in
-  a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a
-  file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't confirm) it
-  does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once again.
+  apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session in a
+  terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a file
+  or pipe, an SDK run or another host with streaming input, an older version, or a version it can't confirm) it does
+  nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once again. On several
+  stores in one session, run it once more for each further store, with that store's `--config` and `--also` (without
+  `--also`, a `watch` replaces the stores the hook watches); the hook watches them all. Pass that `--config` and `--as
+  <your name there>` on every command for a store, since the session records one name.
 - **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.
@@ -170,7 +173,8 @@ A later session on this machine then knows the name is taken, and by whom.
 ## 9. Leaving
 When this session ends and won't come back:
 1. Stop the watcher the way your harness stops background commands. Otherwise, the first field of `run/<name>.pid`
-   in the CLI's state folder (`whoami` prints it) is its pid. A stale file can name another process, so `kill` it
+   in the CLI's state folder (`whoami` prints it) is its pid (with your name on several stores, each store's watcher
+   is in `run/<name>@<store id>.pid`). A stale file can name another process, so `kill` it
    only if `ps -p <pid> -o args=` shows `agent-mailbox … watch`; if not, or there's no file (a watcher that exited
    on mail leaves none), it's already gone. A killed watcher exits within one poll interval.
 2. `read`, and answer or consume what you've handled. Mail you leave waits for the next session under this name.

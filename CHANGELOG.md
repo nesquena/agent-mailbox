@@ -203,3 +203,14 @@ First version.
   background: a session the app starts is woken on new mail like one in a terminal or on the web, instead of being
   asked to re-arm the watcher. A `claude` started from such a session's shell, `claude -p` included, still exits at
   once (#57).
+- **New:** in Claude Code, one session can be woken for mail on several stores. Run the watcher once more for each
+  further store in the session, with that store's `--config` and the new `--also` (`watch --also`); the plugin's Stop
+  hook then watches every store it was run on, each with its own lock and list of mail it already woke you for, and
+  its wake names the config to read with. The Stop guard asks for a re-arm for a store left unwatched, one store at
+  each turn end; with a different name on each store, pass `--as <name>` with each store's `--config`. A `watch`
+  without `--also` replaces the stores the hook watches, as before. When you update the plugin, update the CLI you run
+  too (`install.sh` from the new plugin folder, or pull your clone): a `watch` or retire by an older CLI isn't seen
+  once the hook has recorded your session's store. Add stores in a new session started after updating, not one resumed
+  with `--continue` or `--resume`: in a session that ran `watch` before, `--also` can replace that first store instead
+  of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can wake you
+  twice (#58).

@@ -6,7 +6,8 @@
 # hook blocks a turn from ending while the session's watcher is down, and says how to re-arm it.
 #
 # It acts only in a session that has run `agent-mailbox watch`: that records the session's agent name under
-# <state>/sessions/<session id> and the watcher's pid under <state>/run/<name>.pid. A pid counts as alive only if
+# <state>/sessions/<session id> and the watcher's pid under <state>/run/<name>.pid (and <name>@<store id>.pid, for a
+# session on several stores, where each store's watcher counts for that store). A pid counts as alive only if
 # that process is still an agent-mailbox watcher, so a reused pid can't fool it. stop_hook_active (a stop that a
 # hook already continued) lets the stop through, so it never loops. It fails open: without jq, a session id, or a
 # record of a watcher, it allows the stop. It finds the records through the same state path the CLI uses
@@ -15,7 +16,9 @@
 # config it ran with, under <state>/session-configs/<session id>, and both commands the hook prints carry
 # --config <that path>, even when it's the default: the default worked out here could differ from the agent's shell.
 # A record from before that (only the name) gets the commands without it. A session id that could name another
-# folder (empty, `.`, `..`, or holding a `/`) is refused, and the stop allowed.
+# folder (empty, `.`, `..`, or holding a `/`) is refused, and the stop allowed. A session that ran `watch` on several
+# stores (session-stores/<session id>, a line per store and name) needs each of them watched; the stop is blocked for
+# the first that isn't, with that store's name and config.
 command -v jq >/dev/null 2>&1 || exit 0
 input=$(cat)
 [ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)" = true ] && exit 0
@@ -23,16 +26,28 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 state="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
-name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid")
+# what to check, as claude-rewake.sh reads it: each of the session's stores (session-stores/<id>, a log `watch`
+# appends to: a line per store and name, its latest config or -, retired, counting) or, before store lines, the name
+# and config `watch` recorded; as "<store id or -> <name> <config>"
+list=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63 {
+    k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); if (!(k in cf)) o[++n] = k; cf[k] = c }
+  END { for (i = 1; i <= n; i++) if (cf[o[i]] != "-") print o[i] " " cf[o[i]] }' "$state/session-stores/$sid" 2>/dev/null)
+[ -n "$list" ] || list="- $(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid") $(cat "$state/session-configs/$sid" 2>/dev/null)"
+# pick <line>: set store, name, conf and the folder claude-rewake.sh keeps for it
+pick() { store=${1%% *}; r=${1#* }; name=${r%% *}; conf=${r#"$name" }
+  [ "$store" != - ] || store=""; dir="$state/rewake/$name/$sid${store:+@$store}"; }
+pick "$(printf '%s\n' "$list" | head -n 1)"
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
+# (for a store, only a watcher on that store counts: its own pid file, or the name's when it names the store, as an
+# older CLI's watcher writes only that)
 alive() {
-  pid=$(cut -d' ' -f1 "$state/run/$name.pid" 2>/dev/null)
+  set -- $(cat "$state/run/$name@$store.pid" 2>/dev/null || cat "$state/run/$name.pid" 2>/dev/null); pid=${1:-}
+  [ -z "$store" ] || [ "${3:-}" = "$store" ] || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   if [ -r "/proc/$pid/cmdline" ]; then args=$(tr '\0' ' ' < "/proc/$pid/cmdline"); else args=$(ps -p "$pid" -o args= 2>/dev/null); fi
   case "$args" in *agent-mailbox*watch*) return 0 ;; *) return 1 ;; esac
 }
-alive && exit 0
 # claude-rewake.sh, the watcher as an asyncRewake hook, starts at this same turn end: give it a moment (it, for this
 # session, or the watcher it starts, counts) before asking for a re-arm. Where it has declined (a Claude Code too old
 # for it or headless, or one whose version it can't find) it leaves a `declined` note, and this blocks at once
@@ -41,7 +56,7 @@ live() { kill -0 "$1" 2>/dev/null || return 1
   st=$(sed -n 's/.*) \([A-Za-z]\) .*/\1/p' "/proc/$1/stat" 2>/dev/null); [ -n "$st" ] || st=$(ps -o stat= -p "$1" 2>/dev/null)
   case "$st" in (Z*|' Z'*) return 1 ;; esac; }
 rewaking() {
-  set -- $(cat "$state/rewake/$name/$sid/pid" 2>/dev/null); rp=${1:-}
+  set -- $(cat "$dir/pid" 2>/dev/null); rp=${1:-}
   case "$rp" in ''|*[!0-9]*) return 1 ;; esac
   [ "${2:-}" = "$sid" ] || return 1
   [ -z "${3:-}" ] || live "$3" || return 1
@@ -53,13 +68,25 @@ rewaking() {
 # naming this stop's prompt id (or, from a Claude Code that sends none, the time); a `declined` note for this stop means
 # it isn't coming
 key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null); t0=$(date +%s)
-this() { n1=$(cat "$state/rewake/$name/$sid/$1" 2>/dev/null)
+this() { n1=$(cat "$dir/$1" 2>/dev/null)
   if [ -n "$key" ]; then [ "$n1" = "$key" ]; else case "$n1" in (@*[!0-9]*|@) return 1 ;; (@*) [ "${n1#@}" -ge $((t0 - 2)) ] ;; (*) return 1 ;; esac; fi; }
-# (3 s, or 15 s once that hook has said it's starting at this stop)
-n=0 lim=3 dec=""; while [ $n -lt $lim ]; do
-  this declined && { dec=1; break; }; rewaking && exit 0; this last && exit 0; ! this start || lim=15
-  sleep 1; alive && exit 0; n=$((n+1)); done
-[ -n "$dec" ] || ! this last || exit 0
+# A store is covered when its watcher runs, or its hook does or has woken the session at this stop; and once any
+# store's hook has woken it at this stop, every store is (that wake stopped the others' runs, and the next turn's end
+# starts them all again). The stop is blocked for the first store that isn't: at once when its hook declined, else
+# after the wait (3 s, or 15 s once a hook has said it's starting at this stop)
+n=0 lim=3; while :; do
+  miss="" dec="" woke=""; while IFS= read -r l; do pick "$l"; ! this last || woke=1; alive && continue
+    this declined && { miss=$l dec=1; break; }
+    rewaking || this last || { [ -n "$miss" ] || miss=$l; ! this start || lim=15; }; done <<LIST
+$list
+LIST
+  [ -n "$dec" ] || [ -z "$woke" ] || exit 0
+  [ -n "$miss" ] || exit 0; [ -z "$dec" ] && [ $n -lt $lim ] || break; sleep 1; n=$((n+1)); done
+# (noted in each store's folder, so claude-rewake.sh can tell a stop this kept going from one Claude Code waited on it at)
+[ -z "$key" ] || while IFS= read -r l; do pick "$l"; mkdir -p "$dir" 2>/dev/null && printf '%s\n' "$key" > "$dir/blocked"; done <<LIST
+$list
+LIST
+pick "$miss"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
@@ -69,9 +96,10 @@ cli=$(word "$cli")
 # newer CLI before an older one rewrote only the name, or by another watcher in the same session) can pair with a
 # newer name; the commands then name that config. Upgrade path: one record holding both, once no reader of the
 # name-only format is left.
-conf=$(cat "$state/session-configs/$sid" 2>/dev/null)
 [ -z "$conf" ] || cli="$cli --config $(word "$conf")"
 # ceiling: a backtick in the config or plugin path ends the backtick-quoted command early for the agent reading the
 # message, though the shell quoting stays valid; and jq prints a path that isn't valid UTF-8 with U+FFFD in place of
 # the bad bytes, so that command names another file and fails. Upgrade path: put each command in its own JSON field.
-jq -n --arg n "$name" --arg c "$cli" '{decision: "block", reason: ("The agent-mailbox watcher for \($n) is not running, so new mail would not wake this session. First run `\($c) --as \($n) read` and handle any mail (consume it, or pass --except for mail you are holding). Then re-arm it as a background command (in Claude Code, the Bash tool with run_in_background: true; never a shell & or nohup): `\($c) --as \($n) watch 120 0`. Re-arm it quietly: no message to your human about it, unless there is mail they need to know about, or the read or the watcher fails (exit 1): then tell them. If this session is ending for good, say so and stop again.")}'
+# (on several stores, the re-arm keeps the others: --also)
+also=""; [ "$(printf '%s\n' "$list" | grep -c .)" -lt 2 ] || also=" --also"
+jq -n --arg n "$name" --arg c "$cli" --arg a "$also" '{decision: "block", reason: ("The agent-mailbox watcher for \($n) is not running, so new mail would not wake this session. First run `\($c) --as \($n) read` and handle any mail (consume it, or pass --except for mail you are holding). Then re-arm it as a background command (in Claude Code, the Bash tool with run_in_background: true; never a shell & or nohup): `\($c) --as \($n) watch 120 0\($a)`. Re-arm it quietly: no message to your human about it, unless there is mail they need to know about, or the read or the watcher fails (exit 1): then tell them. If this session is ending for good, say so and stop again.")}'
