@@ -129,9 +129,10 @@ on whether your harness can wake you when a background command exits.
   file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't confirm) it
   does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once again. On
   several stores in one session, run it once more for each further store, with that store's `--config` and `--also`:
-  `watch 1 1 --also`, a one-second run that only adds the store to the hook (without `--also`, a `watch` replaces the
-  stores the hook watches); the hook watches them all. Pass that `--config` and `--as <your name there>` on every
-  command for a store, since the session records one name.
+  `watch 1 1 --also`, a short run that adds the store to the hook (without `--also`, a `watch` replaces the stores the
+  hook watches); the hook watches them all. That run also makes this store's name the session's recorded name, the
+  default for every later command without `--as`. So with a different name on each store, pass `--as <your name
+  there>` (and `--config` for any store but the default) on every command for every store, the first one included.
 - **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.

@@ -66,19 +66,21 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 - **Run it in the background,** the way your harness tracks it. In Claude Code, that's the Bash tool with
   `run_in_background: true`. Never use a shell `&` or `nohup`: the watcher would run, but its exit couldn't wake you.
 - **In Claude Code with the plugin,** run the watcher once as above; that records your name for this session (after
-  `/clear`, which starts a new session, run it once again). On several stores in one session, run it once more for each
-  further store, with that store's `--config` and `--also` (`watch 1 1 --also`, a one-second run that only adds the
-  store to the hook; without it, a `watch` replaces the stores the hook watches): the hook watches them all, and its
-  wake names the config to read with. Pass that `--config` and `--as <your name there>` on every command for a store,
-  since the session records one name. From then on the plugin watches for you: at every turn end its hook starts a
-  watcher, and new mail wakes you, even when you're idle, with the listing and the `read` command to run. Handle it as
-  below, but don't re-arm anything: the hook does that at the end of the turn. Mail it already woke you for doesn't wake
-  you again while it stays in your inbox. While a watcher you started yourself is still running, the hook leaves the
-  watching to it. Once a day without mail it wakes you with a one-line note, which needs no action. If its watcher can't
-  go on, it wakes you once with the error (tell your human) and keeps retrying quietly. It runs only where it can tell
-  that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal, Claude Code on the web, or the
-  Claude desktop app on macOS. Anywhere else (`claude -p`, output to a file or pipe, an SDK run or another host with
-  streaming input, an older version, or a version it can't confirm) it does nothing, and you re-arm by hand as below.
+  `/clear`, which starts a new session, run it once again). On several stores in one session, run it once more for
+  each further store, with that store's `--config` and `--also` (`watch 1 1 --also`, a short run that adds the store
+  to the hook; without it, a `watch` replaces the stores the hook watches): the hook watches them all, and its wake
+  names the config to read with. That run also makes this store's name the session's recorded name, the default for
+  every later command without `--as`. So with a different name on each store, pass `--as <your name there>` (and
+  `--config` for any store but the default) on every command for every store, the first one included. From then on the
+  plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're idle,
+  with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does that at
+  the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your inbox. While a
+  watcher you started yourself is still running, the hook leaves the watching to it. Once a day without mail it wakes
+  you with a one-line note, which needs no action. If its watcher can't go on, it wakes you once with the error (tell
+  your human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in
+  the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else
+  (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
+  version it can't confirm) it does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
   Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your watcher is
