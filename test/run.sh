@@ -325,12 +325,13 @@ mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
     elif [ "$(git -C "$C" rev-parse refs/remotes/origin/main)" = "$before" ]; then ok "a peek leaves refs/remotes/origin/main alone"
     else no "a peek moved refs/remotes/origin/main"; fi
 
-    # two agents sharing one checkout (--as): each commit carries its own name, and no command rewrites the checkout's
+    # two agents sharing one HOME (--as): each commit carries its own name, and no command rewrites the checkout's
     # git config (concurrent commands raced to lock it, and one could commit under the other's name)
-    for C in "$W/home-carol/.local/state/agent-mailbox/checkouts/"*; do :; done
+    as carol --as d1 list >/dev/null 2>&1; C=$(ls -d "$W/home-carol/.local/state/agent-mailbox/checkouts/"*-d1)
+    [ -d "$C/.git" ] || C="$W/no-clone-for-d1"
     git -C "$C" config user.name stale; git -C "$C" config user.email stale@example.invalid
     echo hi | as carol --as d1 send bob shared - >/dev/null 2>&1
-    expect "a commit from a shared checkout carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
+    expect "a commit from a shared HOME carries the acting agent's name" 0 "^d1 <d1@agent-mailbox\.invalid>$" \
       git --git-dir="$STORE" log -1 --format='%an <%ae>' main
     [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
@@ -542,6 +543,26 @@ exec "%s" "$@"
   env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
+
+  echo "== git: names sharing one HOME (a config each)"
+  T="$W/pername"; mkdir -p "$T"; git init -q --bare "$T/s.git"; PH="$W/home-pername"
+  pn() { n=$1; shift; HOME="$PH" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/$n.cfg" "$@"; }
+  for a in pn1 pn2 pn3 pn4; do pn $a setup --store "$T/s.git" --name $a >/dev/null; done
+  pn pn1 init >/dev/null; for a in pn1 pn2 pn3 pn4; do pn $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  # four names send at once, three times over
+  rm -f "$T/fail" "$T/err"
+  for r in 1 2 3; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
+      ( echo x | pn $a send $o "r$r" - >/dev/null 2>>"$T/err" || echo x >> "$T/fail" ) & done; wait; done
+  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[123]\.md$')
+  [ ! -s "$T/fail" ] && [ "$n" = 12 ] && ok "names sharing one HOME send at once: all 12 delivered" ||
+    no "names sharing one HOME: $(cat "$T/fail" 2>/dev/null | wc -l) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
+  [ "$(ls "$PH/.local/state/agent-mailbox/checkouts" | wc -l | tr -d ' ')" = 4 ] && ok "each name has a clone of its own" ||
+    no "names don't have a clone each" "$(ls "$PH/.local/state/agent-mailbox/checkouts")"
+  l3=$(pn pn3 list); r3=$?; l4=$(pn pn4 list); r4=$?
+  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && [ "$(pn pn2 list | grep -c -- '-r[123]\.md$')" = 3 ] &&
+    [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
+    no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
 
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"

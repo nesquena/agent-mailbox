@@ -11,7 +11,7 @@
 # - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
 #   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
 # - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
-#   environment, never in the clone's config, which agents sharing the clone (`--as`) would race to rewrite.
+#   environment, never in the clone's config, which commands sharing the clone would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
 #   files, so a link a writer plants can't redirect writes or wake a watcher.
 # - The store's own .gitattributes and .lfsconfig are inert here: .git/info/attributes, which outranks them, turns off
@@ -60,13 +60,15 @@ ad_open() {
   # but not GIT_CONFIG, which would send this clone's own config writes to another file
   # shellcheck disable=SC2046
   unset $(git rev-parse --local-env-vars | grep -v '^GIT_CONFIG_')
-  AD_DIR="$STATE/checkouts/$STORE_ID"
+  # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
+  AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
+  AD_DIR="$STATE/checkouts/$AD_ID"
   if [ ! -d "$AD_DIR/.git" ]; then
     mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
-    d=$AD_DIR AD_DIR="$STATE/checkouts/.$STORE_ID.$$"
+    d=$AD_DIR AD_DIR="$STATE/checkouts/.$AD_ID.$$"
     # clone only the mailbox branch; a store that doesn't have it yet is cloned without it. clone itself says which it
     # is (git's message), so nothing reads the store's name any other way than clone does; any other
     # failure is an error
@@ -127,9 +129,9 @@ ad_push() {
   n=0
   until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
     n=$((n+1))
-    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run any command to publish it, don't resend"; exit 4; }
+    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run a command with the same name to publish it, don't resend"; exit 4; }
     ad_jitter
-    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run any command, don't resend"; exit 4; }
+    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
   done
 }
 

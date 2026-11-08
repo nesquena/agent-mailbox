@@ -187,3 +187,11 @@ First version.
 - **Packaging:** the Claude Code plugin's manifest no longer pins a version, so refreshing the marketplace and
   updating the plugin (from `/plugin`, or `claude plugin marketplace update agent-mailbox` and
   `claude plugin update agent-mailbox@agent-mailbox`) brings in each change on `main` (#52).
+- **Fix:** with the git adapter, agent names that share a HOME (each with its own config, or one config and `--as`)
+  keep a clone of the store each, so they no longer work in one clone at once. Before, sends from two such names at
+  the same time could fail ("index.lock: File exists", "cannot lock ref") and leave files behind that `list` showed.
+  After updating, each name clones the store once; commands run without a name keep using the clone in the state
+  folder's `checkouts/` that all commands shared before. A command that exits 4 now says to re-run a command with the
+  same name to publish its commit. If a command exited 4, run any command once before updating, so its commit is
+  published first. If you already updated: with one config and `--as`, run a command without `--as` (such as
+  `agents`), which publishes it from the shared clone; with a name in each config, send the message again (#54).
