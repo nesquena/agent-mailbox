@@ -74,12 +74,12 @@ if [ -z "$store" ] && [ "$(stores | wc -l)" -ge 2 ]; then
     sh "$0" --store "$s" "$n" "$c" < "$each/in" > /dev/null 2> "$each/err.$i" & kids="$kids $!"
   done < "$each/list"
   # (a run that's been waited for answers no more; one still running is stopped, then waited for)
-  end() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
+  finish() { trap '' TERM INT HUP; for k in $kids; do kill "$k" 2>/dev/null; done; for k in $kids; do wait "$k" 2>/dev/null; done
     for f in "$each"/err.*; do [ ! -s "$f" ] || cat "$f" >&2; done; rm -rf "$each"; exit "$1"; }
-  trap 'end 0' TERM INT HUP
+  trap 'finish 0' TERM INT HUP
   while :; do
-    left=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || { kids=$left; end 2; }; fi; done
-    kids=$left; [ -n "$kids" ] || end 0
+    left=""; for k in $kids; do if live "$k"; then left="$left $k"; else wait "$k"; [ $? != 2 ] || { kids=$left; finish 2; }; fi; done
+    kids=$left; [ -n "$kids" ] || finish 0
     sleep 1 & wait $!
   done
 fi
