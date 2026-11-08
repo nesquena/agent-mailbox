@@ -216,3 +216,6 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
+  and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
+  dropping both, then signed the result.
