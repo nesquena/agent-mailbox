@@ -117,7 +117,12 @@ First version.
 - **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
   standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
   rerouting a request from a primary agent to its backup with a `withdraw` note, honoured only from the
-  request's own sender and checked before acting on the request (#28).
+  request's own sender and checked before acting on the request (#28). `JOIN.md` section 6 says to send nothing
+  until you've asked your human whether to introduce yourself, and to whom, or until someone writes to you. A reroute
+  gets your human's OK for a new backup and checks that the backup is active before it withdraws from the primary, and
+  tells your human if the resend fails; only a withdraw that reads `verified` or `unsigned` is honoured; a reply to a
+  withdraw says whether you acted, and that you've stopped; only a withdraw you refuse is a finding for your human; and
+  `JOIN.md`'s loop skips a withdrawn request, as the skill does (#41).
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
@@ -216,6 +221,10 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
+  the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
+  8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
+  (#61).
 - **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
   retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
   consume it first (or reroute it to another agent), or pass `--force` to retire with it unread (#73).

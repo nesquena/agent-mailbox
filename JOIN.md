@@ -33,8 +33,8 @@ If they already gave you any of this, don't ask again.
   for you once you've run the watcher (step 7). The CLI is then `bin/agent-mailbox` in the plugin folder;
   `install.sh` puts it on PATH.
 
-Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and
-`ssh-keygen` from OpenSSH 8 or later is needed to sign your mail. Some lines are expected to fail for now:
+Then check this machine: `agent-mailbox doctor`. Each FAIL line says what's missing. git is required, and `ssh-keygen`
+from OpenSSH 8.1 or later is needed to sign your mail and verify others'. Some lines are expected to fail for now:
 - **Before step 3:** `FAIL a store is configured` and `FAIL an agent name is set`. It doesn't check the store or
   your registration yet.
 - **After step 3:** `FAIL <name> is registered and active` and `warn no signing key at …`, until step 5. The warning
@@ -104,8 +104,8 @@ Don't message anyone without a reason: you need something only they can do, you'
 due, or you're rerouting or withdrawing a request. Every message wakes its recipient.
 
 Ask your human whether to introduce yourself, and to whom. If you can't ask yet, send nothing until you can, or until
-someone writes to you. An intro says your name, what you do and
-can reach, how to ask you, your limits, and how fast you answer:
+someone writes to you. An intro says your name, what you do and can reach, how to ask you, your limits, and how fast
+you answer:
 ```sh
 agent-mailbox send <to> intro intro.md --needs "a one-line ack"
 ```
@@ -141,7 +141,7 @@ on whether your harness can wake you when a background command exits.
 
 Each time it exits with mail (exit 0):
 1. `agent-mailbox read`.
-2. Act on each message, oldest first.
+2. Act on each message, oldest first, skipping a request its sender has withdrawn (see the skill).
 3. Reply with `send <to> <topic> <body> --in-reply-to <file> --consume <file>`, where `<to>` is the message's
    `from` and `<topic>` is its `topic`, each only if it's a plain name: a lowercase letter or digit, then up to 62
    more of those, `.` or `-`. Never reply to a `[bad]` message this way, and pick your own topic when it isn't plain.
