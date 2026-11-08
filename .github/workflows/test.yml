@@ -1,13 +1,23 @@
 name: test
 
 on:
+  # a change to prose alone (Markdown, docs/, LICENSE) runs no tests: the suite reads none of it. A change that also
+  # touches anything else runs them as before, and a manual run always does
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# a newer push to a pull request's branch, or a newer manual run on the same branch, cancels the run it supersedes;
+# each push to main gets a group of its own, so none is cancelled, pending or running
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -26,18 +36,18 @@ jobs:
           git config --global user.name test
           git config --global user.email test@example.invalid
           git config --global init.defaultBranch main
+      - name: Install dash and zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get -o Acquire::Retries=3 update -q && sudo apt-get -o Acquire::Retries=3 install -y -q dash zsh
       - name: Parse under every available shell
         run: |
           for s in sh dash bash zsh; do
-            command -v "$s" >/dev/null || { echo "$s not installed, skipped"; continue; }
+            command -v "$s" >/dev/null || { echo "$s not installed"; exit 1; }
             for f in bin/agent-mailbox adapters/git.sh adapters/dir.sh hooks/claude-watch-guard.sh hooks/claude-rewake.sh install.sh test/run.sh test/bench.sh; do
               "$s" -n "$f" || { echo "$s can't parse $f"; exit 1; }
             done
             echo "$s ok"
           done
-      - name: Install dash (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y -q dash
       - name: Test suite (default sh)
         run: REQUIRE_SSH=1 sh test/run.sh
       - name: Test suite (dash)
