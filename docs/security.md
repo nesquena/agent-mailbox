@@ -82,4 +82,4 @@ time this reader first pinned it. Concretely:
 
 ## Reporting a vulnerability
 Please report privately, through the repository's GitHub security advisory form ("Report a vulnerability" under
-the Security tab), not in a public issue.
+the Security tab), not in a public issue. [`SECURITY.md`](../SECURITY.md) says what to include.
