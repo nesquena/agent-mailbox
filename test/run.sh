@@ -365,7 +365,12 @@ case " $ADAPTERS " in *" git "*)
   [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only refs/heads/x/refs/heads/main | grep store.md)" ] &&
     ok "and the other ref is left alone" || no "init wrote to the ref that only ends in main"
   as nb1 register --kind t --about t --no-key >/dev/null
-  expect "watch reads the exact branch's tip" 2 "no mail" as nb1 watch 1 2
+  # the poll token is that branch's tip alone, not every ref ending in its name
+  C=$(ls -d "$W/home-nb1/.local/state/agent-mailbox/checkouts/"*-nb1)
+  tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
+  [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
+    no "the poll token isn't the exact branch's tip" "$tok"
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
