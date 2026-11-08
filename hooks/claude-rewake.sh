@@ -149,8 +149,9 @@ esac
 # the lock: checked and taken while holding a short mutex, so two hooks starting together, a stale lock between them,
 # can't both take it. The mutex is a file the shell creates with noclobber, an exclusive create (mkdir isn't exclusive
 # everywhere: some coreutils check, then create). One left by a hook that died while holding it goes after a minute,
-# and so does the folder an older version used
-claim() { ( set -C; echo $$ > "$run/claiming" ) 2>/dev/null; }
+# and so does the folder an older version used. ceiling: two hooks clearing the same stale one at once can both get
+# in (one removes the other's fresh claim); that needs a hook killed while holding it, then two starting together
+claim() { ( set -C; : > "$run/claiming" ) 2>/dev/null; }
 unclaim() { rm -f "$run/claiming"; }
 if ! claim; then
   [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] &&
