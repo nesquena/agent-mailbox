@@ -216,7 +216,11 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
+  the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
+  8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
+  (#61).
 - **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
   it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
   writer exits, and `send` took that for a link it couldn't follow; a path that ends at `/dev/fd/<n>` now names a
-  descriptor, as one through `/proc` does on Linux.
+  descriptor, as one through `/proc` does on Linux. (#63)

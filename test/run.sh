@@ -1,7 +1,7 @@
 #!/bin/sh
 # test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
 # gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
-# Needs git; the signature tests need ssh-keygen (OpenSSH 8+) and are skipped without it. Exit 0 when all pass.
+# Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run it with a specific shell to test that shell: `dash test/run.sh`, `bash test/run.sh`.
 set -u
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
