@@ -58,7 +58,8 @@ mail, the hook exits 2, which wakes the session with the listing. It also:
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
 - runs only one instance per session;
 - acts only where it can tell that Claude Code runs it in the background (a session in a terminal, Claude Code on
-  the web, or the Claude desktop app on macOS); a harness that would wait for the hook instead would hang at every turn end.
+  the web, or the Claude desktop app on macOS); a harness that would wait for the hook instead would hang at every
+  turn end.
 
 It's written in POSIX sh, so the same design fits any harness with a similar hook. If yours runs such a hook
 synchronously, don't start a long watch from it: use a quick `list` (approach 2) instead.

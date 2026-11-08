@@ -202,4 +202,4 @@ First version.
 - **New:** the Claude Code plugin's Stop hook also runs in the Claude desktop app on macOS, which runs it in the
   background: a session the app starts is woken on new mail like one in a terminal or on the web, instead of being
   asked to re-arm the watcher. A `claude` started from such a session's shell, `claude -p` included, still exits at
-  once.
+  once (#57).
