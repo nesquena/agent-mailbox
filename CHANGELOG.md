@@ -326,3 +326,6 @@ First version.
   turn only for its first sync, and `doctor` waits a few seconds, then says the store is busy. Adapters gain
   `ad_unlock` (a no-op for one without a clone). Update every copy of the CLI you run: one from before this doesn't
   wait its turn (#87).
+- **`send`'s path check is much faster on deep link chains:** it no longer runs `dirname` for every folder of every
+  hop, and after a link with a relative target it doesn't walk again the folders it already knows hold no links. A
+  chain of 20 links 300 folders deep went from about 29 s to under 1 s (#80).
