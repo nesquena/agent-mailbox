@@ -246,6 +246,12 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
       ssh-keygen -Y verify -f "$T/ka.allowed" -I ka -n agent-mailbox -s "$T/ka.rec.sig" < "$T/ka.rec" >/dev/null 2>&1 &&
         ok "and the record's signature covers them" || no "the updated record's signature doesn't verify"
     fi
+    # a field update manages appears once: a second copy, such as a key: planted after the agent's own, is dropped
+    printf '%s\n' '/^key: / && !d { print; print "key: ssh-ed25519 AAAAplanted"; d = 1; next }' '{ print }' > "$T/dupkey.awk"
+    tamper "awk -f '$T/dupkey.awk' mailbox/agents/ka.md > ka.tmp && mv ka.tmp mailbox/agents/ka.md"
+    as ka update --about once >/dev/null 2>&1; rec_of ka.md > "$T/ka.rec"
+    [ "$(grep -c '^key:' "$T/ka.rec")" = 1 ] && ! grep -q AAAAplanted "$T/ka.rec" &&
+      ok "and a second copy of a field it manages is dropped, not kept and signed" || no "update kept a planted second key line" "$(cat "$T/ka.rec")"
     # a record left with no key is republished as it is
     tamper "sed -i.bak 's|^key: .*|key: |' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
     expect "update republishes a record whose key was removed" 0 "update: ka \(active\)" as ka update --about x
