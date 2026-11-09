@@ -394,7 +394,7 @@ init)
   # another agent's init can win the race while this one publishes: the adapter then drops this one, and the store keeps
   # the winner's settings, which may differ
   [ "$(cat "$M/store.md" 2>/dev/null)" = "$ours" ] ||
-    die "another agent initialized the mailbox at '$ROOT/' first, so this init was dropped; its settings are in $ROOT/store.md (title: $(field title "$M/store.md"), require_signatures: $(field require_signatures "$M/store.md"))"
+    die "another agent initialized the mailbox at '$ROOT/' first, so this init was dropped; its settings are in $ROOT/store.md (title: $(field title "$M/store.md" | clean "$CAP"), require_signatures: $(field require_signatures "$M/store.md" | clean "$CAP"))"
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
