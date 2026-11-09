@@ -109,6 +109,8 @@ ad_open() {
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
+  # the store's branch tip as this clone last saw it, before this fetch moves it
+  pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH") || pre=""
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
@@ -119,13 +121,19 @@ ad_pull() {
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
   # an init this clone made while the store had no branch, and never published, is a commit with no parent. If the store
-  # has a branch now (another agent's init won the race), that commit can never rebase onto it: drop it, keeping
-  # anything committed after it. Only a root commit that is exactly an init is dropped
+  # has a branch now holding a mailbox in the same folder (another agent's init won the race), that commit can never
+  # rebase onto it: drop it, keeping anything committed after it. Only a root commit that is exactly an init is
+  # dropped, and only when this clone never saw a branch it shares history with: a clone that saw the store's old
+  # branch (one since reset and initialized again) is left to fail the rebase, as before, rather than publish its old
+  # history into the new mailbox. The mailbox folder is compared as git prints paths, without ./ parts
+  rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
   if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1 &&
+    { [ -z "$pre" ] || ! ad_git merge-base HEAD "$pre" >/dev/null 2>&1; } &&
+    ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null &&
     root=$(ad_git rev-list --max-parents=0 HEAD) && [ "$(printf '%s\n' "$root" | wc -l)" -eq 1 ] &&
     [ "$(ad_git log -1 --format=%s "$root")" = "mailbox: init" ] &&
     [ "$(ad_git diff-tree --root --no-commit-id --name-only -r "$root" | LC_ALL=C sort | tr '\n' ' ')" = \
-      "$ROOT/agents/.keep $ROOT/inbox/.keep $ROOT/store.md " ]; then
+      "${rr:+$rr/}agents/.keep ${rr:+$rr/}inbox/.keep ${rr:+$rr/}store.md " ]; then
     warn "the store was initialized by another agent first: dropping this clone's own unpublished init"
     if [ "$(ad_git rev-parse HEAD)" = "$root" ]; then ad_git reset -q --hard "origin/$BRANCH"
     else ad_git rebase -q --onto "origin/$BRANCH" "$root" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }; fi
