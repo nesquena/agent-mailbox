@@ -531,6 +531,132 @@ case " $ADAPTERS " in *" git "*)
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
 
+  echo "== git: commands under one name take turns in its clone"
+  T="$W/lock"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in lp lr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as lp init >/dev/null; for a in lp lr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  # two replies at once, each consuming what it answers, eight times over: nothing is lost
+  echo hi > "$T/m"; errs=""
+  for t in 1 2 3 4 5 6 7 8; do
+    as lr send lp q$t-a "$T/m" >/dev/null 2>&1; as lr send lp q$t-b "$T/m" >/dev/null 2>&1
+    fa=$(as lp list 2>/dev/null | grep -- "-lr-q$t-a\.md$"); fb=$(as lp list 2>/dev/null | grep -- "-lr-q$t-b\.md$")
+    as lp send lr re-$t-a "$T/m" --in-reply-to "$fa" --consume "$fa" > "$T/o1" 2>&1 & p1=$!
+    as lp send lr re-$t-b "$T/m" --in-reply-to "$fb" --consume "$fb" > "$T/o2" 2>&1 & p2=$!
+    wait $p1 || errs="$errs [$t-a: $(tail -n 1 "$T/o1")]"; wait $p2 || errs="$errs [$t-b: $(tail -n 1 "$T/o2")]"
+  done
+  [ -z "$errs" ] && ok "two replies under one name at once both work, eight times over" || no "two replies under one name at once both work, eight times over" "$errs"
+  [ "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/lr | grep -c '\.md$')" = 16 ] &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/lp | grep '\.md$')" ] &&
+    ok "every reply is in the store, and every message it answered is consumed" ||
+    no "every reply is in the store, and every message it answered is consumed" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  expect "and the clone agrees with the store" 3 "no mail" as lp list
+  # within <seconds> <description> <exit code> <pattern or -> <command...>: as expect, and the command must be done
+  # within that many seconds (one still running is stopped, and fails the test)
+  within() { ws=$1 d=$2 code=$3 pat=$4; shift 4; rm -f "$T/wrc"; ( "$@" > "$T/wo" 2>&1; echo $? > "$T/wrc" ) & wp=$!; n=0
+    while [ $n -lt "$ws" ] && [ ! -s "$T/wrc" ]; do sleep 1; n=$((n+1)); done
+    if [ ! -s "$T/wrc" ]; then pkill -P "$wp" 2>/dev/null; kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+      no "$d (still running after ${ws}s)" "$(cat "$T/wo")"; return; fi
+    wait "$wp" 2>/dev/null; rc=$(cat "$T/wrc"); out=$(cat "$T/wo")
+    [ "$rc" = "$code" ] || { no "$d (exit $rc, wanted $code)" "$out"; return; }
+    [ "$pat" = - ] || printf '%s\n' "$out" | grep -Eq -- "$pat" || { no "$d (output didn't match /$pat/)" "$out"; return; }; ok "$d"; }
+  # alp <VAR=value...> <args>: run the CLI as lp with that extra environment (env takes the leading assignments)
+  alp() { env HOME="$W/home-lp" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$@"; }
+  # a lock whose holder is gone, or whose pid is now another process's, is broken at once; a live holder, or one on
+  # another host, is waited for, then named
+  ck=$(ls -d "$W/home-lp/.local/state/agent-mailbox/checkouts/"*-lp); ld=$(ls -d "$W/home-lp/.local/state/agent-mailbox/locks/"*-lp)
+  lk="$ld/lock"; host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
+  AGENT_MAILBOX_LOCK_WAIT=3; export AGENT_MAILBOX_LOCK_WAIT
+  # started <pid>: the start the adapter records for a holder (its own ad_started)
+  started() { BRANCH=x sh -c '. "$1"; ad_started "$2"' x "$ROOTDIR/adapters/git.sh" "$1"; }
+  # (a dead holder, in the form a machine without ps writes: kill -0 decides)
+  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"
+  within 20 "a lock whose holder is gone is broken at once" 3 "no mail" as lp list
+  [ ! -e "$lk" ] && ok "and the command's own lock is gone once it's done" || no "a lock was left behind" "$(cat "$lk")"
+  sleep 120 & sp=$!; printf '%s %s %s %s\n' "$sp" "$(date +%s)" "$host" "Thu Jan 1 00:00:00 1970" > "$lk"
+  within 20 "a lock naming a pid now another process's is broken at once" 3 "no mail" as lp list
+  [ ! -e "$lk" ] && ok "and replaced" || no "a lock naming a reused pid was kept" "$(cat "$lk")"
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
+  within 30 "a live holder is waited for, then named, with how long it has held the lock" 1 "pid $sp\) has been working in this name's copy of the store for 5[0-9]s" as lp list
+  within 30 "and so it is by a waiter in another time zone and locale" 1 "pid $sp\)" alp TZ=Asia/Tokyo LC_ALL=fr_FR.UTF-8 "$SH" "$CLI" list
+  # and so it is when the boot's id can't be read (a cat that fails on it): the holder's start is its ticks alone
+  # (the real cat's path is written into the shim, found before the shim is on PATH)
+  mkdir -p "$T/nobid"; printf '%s\n' '#!/bin/sh' 'case "$*" in (*boot_id*) exit 1 ;; esac' "exec '$(command -v cat)' \"\$@\"" > "$T/nobid/cat"
+  chmod +x "$T/nobid/cat"
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(PATH="$T/nobid:$PATH" started "$sp")" > "$lk"
+  within 30 "and so it is when the boot's id can't be read" 1 "pid $sp\) has been working" alp PATH="$T/nobid:$PATH" "$SH" "$CLI" list
+  # (the lock again as a holder with the boot's id writes it, for the doctor test below)
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
+  # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing
+  within 30 "doctor says the store is busy while another command holds the lock" 0 "^busy the store wasn't checked" alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  # a holder on another host (or under this machine's earlier name) can't be checked: it's waited for, and the message
+  # says which file to delete if nothing is running there
+  printf '%s %s %s %s\n' "$dp" "$(( $(date +%s) - 10 ))" elsewhere.example "x" > "$lk"
+  within 30 "a holder on another host is waited for, and named with its host and the lock to delete" 1 \
+    "pid $dp on elsewhere\.example\).*if none is running on elsewhere\.example.*delete .*/locks/.*-lp/lock, then run this again" as lp list
+  rm -f "$lk"
+  # the start a lock records for its holder reads the same when read again later (on Linux, from /proc, with the boot's
+  # id: a clock step doesn't change it): a holder kept busy in a fetch is compared while it holds the lock
+  mkdir -p "$T/slow"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) sleep 4 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/slow/git"
+  chmod +x "$T/slow/git"; ( alp PATH="$T/slow:$PATH" REAL_GIT="$(command -v git)" "$SH" "$CLI" list >/dev/null 2>&1 ) & bp=$!; n=0
+  while [ $n -lt 40 ] && [ ! -s "$lk" ]; do sleep 0.2 2>/dev/null || sleep 1; n=$((n+1)); done
+  held=$(cat "$lk" 2>/dev/null); set -f; set -- $held; set +f; hp=${1:-}; [ $# -lt 4 ] || shift 3; hs="$*"; sleep 1
+  bid=""; [ ! -r /proc/sys/kernel/random/boot_id ] || bid=$(cat /proc/sys/kernel/random/boot_id)
+  [ -n "$hp" ] && [ -n "$hs" ] && [ "$hs" = "$(started "$hp")" ] && case "$hs" in (*"$bid") true ;; (*) false ;; esac &&
+    ok "the start a lock records for its holder reads the same again" || no "the start a lock records for its holder reads the same again" "lock: $held; now: $(started "$hp")"
+  wait "$bp" 2>/dev/null
+  # many takers at once, a quarter of them killed while they hold the lock: the dead holders' locks are broken, and no
+  # two live takers are ever inside together (a sleep on PATH that returns in 20 ms makes the waiters poll fast)
+  printf '#!/bin/sh\nexec /bin/sleep 0.02\n' > "$T/slow/sleep"; chmod +x "$T/slow/sleep"; LT="$T/takers"; mkdir -p "$LT"
+  printf '%s\n' 'BRANCH=main; . "$1"; LT=$2; die() { echo "$*" >> "$LT/dies"; exit 1; }' \
+    'STATE=$LT/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=300; ad_lock' 'case $(( $$ % 4 )) in (0) kill -9 $$ ;; esac' \
+    'if mkdir "$LT/in" 2>/dev/null; then /bin/sleep 0.05; rmdir "$LT/in"; else echo overlap >> "$LT/overlaps"; fi' > "$LT/taker"
+  : > "$LT/overlaps"; : > "$LT/dies"; i=0
+  ( PATH="$T/slow:$PATH"; while [ $i -lt 60 ]; do "$SH" "$LT/taker" "$ROOTDIR/adapters/git.sh" "$LT" 2>/dev/null & i=$((i+1)); done; wait ) 2>/dev/null
+  [ ! -s "$LT/overlaps" ] && [ ! -s "$LT/dies" ] && ok "sixty takers, a quarter killed holding the lock, are never two inside at once" ||
+    no "sixty takers, a quarter killed holding the lock, are never two inside at once" "overlaps: $(wc -l < "$LT/overlaps"); $(cat "$LT/dies")"
+  # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
+  # PATH notes a fetch that starts while another is running)
+  mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
+    '  if mkdir "$LOCKT/busy" 2>/dev/null; then "$REAL_GIT" "$@"; rc=$?; sleep 1; rmdir "$LOCKT/busy"; exit $rc; fi' \
+    '  echo overlap >> "$LOCKT/overlaps" ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/lsh/git"; chmod +x "$T/lsh/git"
+  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; : > "$T/overlaps"
+  for i in 1 2 3 4 5; do ( alp PATH="$T/lsh:$PATH" REAL_GIT="$(command -v git)" LOCKT="$T" AGENT_MAILBOX_LOCK_WAIT=60 "$SH" "$CLI" list > "$T/lw$i" 2>&1
+    echo $? > "$T/lw$i.rc" ) & done; wait
+  [ ! -s "$T/overlaps" ] && [ "$(cat "$T/lw1.rc" "$T/lw2.rc" "$T/lw3.rc" "$T/lw4.rc" "$T/lw5.rc" | tr -d '\n')" = 33333 ] &&
+    ok "five waiters on a dead holder's lock take turns, never two at once" ||
+    no "five waiters on a dead holder's lock take turns, never two at once" "overlaps: $(wc -l < "$T/overlaps"); exits: $(cat "$T/lw"*.rc | tr '\n' ' ')"
+  # a lock that can't be made, or a stale one that can't be removed, stops the command, saying so, instead of waiting
+  chmod a-w "$ld"
+  if (true > "$ld/probe") 2>/dev/null; then rm -f "$ld/probe"; chmod u+w "$ld"
+    sk "a lock that can't be made, or removed, stops the command (read-only folders don't stop this user)"
+  else
+    within 20 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
+    chmod u+w "$ld"; sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; chmod a-w "$ld"
+    within 20 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
+    chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+  fi
+  # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
+  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0
+  while [ $n -lt 30 ] && ! grep -q "^$wpid " "$W/home-lp/.local/state/agent-mailbox/run/lp.pid" 2>/dev/null; do sleep 1; n=$((n+1)); done
+  within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
+  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
+  # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, a consume never
+  # committed, a file it wrote but never added, and git's own lock on the index
+  mkdir -p "$ck/.git/rebase-merge"; : > "$ck/.git/rebase-merge/autostash"
+  expect "a rebase left half-removed doesn't stop the next command" 3 "no mail" as lp list
+  : > "$ck/.git/index.lock"; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
+  expect "nor does git's lock on the index, and a file written but never added isn't taken for mail" 3 "no mail" as lp list
+  # nor one the store's own .gitignore names
+  git clone -q "$T/store.git" "$T/gi" && printf '*-junk.md\n' > "$T/gi/mailbox/inbox/lp/.gitignore" &&
+    git -C "$T/gi" add mailbox/inbox/lp/.gitignore && git -C "$T/gi" -c user.name=s -c user.email=s@s commit -qm ignore &&
+    git -C "$T/gi" push -q origin HEAD:main
+  as lp list >/dev/null 2>&1; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
+  expect "nor is one the store's .gitignore names" 3 "no mail" as lp list
+  as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
+  expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
+
   echo "== git: a first init whose push failed is published by the next command"
   # the store's objects and refs are read-only for the init, so its fetches work and its push fails
   T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
