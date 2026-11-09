@@ -1536,13 +1536,20 @@ expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
 rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
   (*) ok "and none of the error's own text is in the notice" ;; esac
-# still failing with that same error at the day's limit, it wakes the session once more, naming the same commands.
-# (A 3 s limit, once more with 15 s only if the hook's own start used it up before the watcher first failed, as on a
-# loaded machine: then it says only "reached its daily limit")
-for m in 3 15; do r=$(RWMAX=$m fk 2>&1); rc=$?; case "$r" in (*"daily limit; it starts again"*) ;; (*) break ;; esac; done
+# still failing with the same error at the day's limit, it wakes the session once more, naming the same commands. The
+# watcher fails slowly (FAKEHANG: 4 s against a 2 s limit, as a fetch to a slow store might), so its failure comes in
+# after the limit and well before the watchdog's deadline; an instant failure would be followed by the hook's pause,
+# and the limit would pass during that instead. FAKEHANG's failure prints nothing, so that's the error recorded first,
+# and the usual one is recorded again after. (Once more with 15 s and 17 s only if the hook's own start, on a loaded
+# machine, used up the 2 s, when it says only "reached its daily limit")
+rm -f "$R1/error"; (RWMAX=60 fk FAKEHANG=0) >/dev/null 2>&1
+for m in 2:4 15:17; do r=$(RWMAX=${m%:*} fk FAKEHANG=${m#*:} 2>&1); rc=$?
+  case "$r" in (*"daily limit; it starts again"*) ;; (*) break ;; esac; done
 [ "$rc" = 2 ] && printf '%s\n' "$r" | grep -Eq "reached its daily limit, still failing \(exit 1; see why: .* --as rw agents, or the watcher's last output in .*/out'?\); it starts again at this turn's end\.$" &&
   ok "a watcher still failing at the day's limit says so, naming the command that shows why" ||
   no "a watcher still failing at the day's limit says so, naming the command that shows why" "exit $rc: $r"
+# (in a subshell: an assignment before a function call can outlive the call)
+rm -f "$R1/error"; (RWMAX=60 fk) >/dev/null 2>&1
 fk AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error with another count or time doesn't wake it again" ||
   no "the same error with another count or time doesn't wake it again" "$(cat "$T/bg.out")"
@@ -2273,7 +2280,7 @@ expect "after which the store's own setting applies" 0 "c#1 released by k3" as k
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
   'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
 gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
-expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '* -G*'
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*[[:space:]]-G*'
 expect "or the walk over every version fails" 1 "can't read this store's full, latest history" gf '*--reverse*'
 expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
