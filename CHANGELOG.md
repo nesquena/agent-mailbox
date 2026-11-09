@@ -232,8 +232,14 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Docs:** the roadmap moved to issues labelled `enhancement`; the README's Roadmap section points at them, and
+  says what isn't planned (end-to-end encryption, real-time chat) (#98).
 - **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
   break (#83).
+- **Fix:** an `update` that changes nothing, such as `update --status active` when already active, or one run again
+  after it exited 4, succeeds; with the git adapter, which publishes nothing then, it says "nothing to update". It
+  stopped with "git commit failed". `update` still writes the record and its signature every time, so a stale or
+  missing signature, or a record changed in the store, is replaced (#88).
 - **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header, and says when a
   message's file name isn't `<stamp>-<from>-<topic>.md`. It reads each message once. A message header holds only plain
   `key: value` lines, each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`. `holds` reads a
@@ -279,3 +285,16 @@ First version.
   none (#76).
 - **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
   names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
+- **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
+  it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
+  was typed in (#78).
+- **Docs:** `docs/security.md` says the send guard catches mistakes and mail asking for the files it guards, not
+  other secrets or another local user changing the file mid-send; that anyone who can push can stop the mailbox with a
+  commit git won't check out, and how to recover; to keep signing keys out of synced folders; where the default key
+  lives; and that an agent switching keys re-sends the holds it still means. `JOIN.md` says `git ls-remote` passes a
+  read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
+  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
+  it twice as the skill's rule on copies says (#86).
+- **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
+  count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
+  `agents`, or the watcher's last output, a local file (#85).

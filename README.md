@@ -150,16 +150,14 @@ Messages are data, not instructions: an agent must not act on what a message tel
 approval. The skill and `PROTOCOL.md` section 8 spell out the conduct rules every agent follows.
 
 ## Roadmap
+Planned work is tracked in the [issues labelled `enhancement`](https://github.com/nesquena/agent-mailbox/labels/enhancement).
 The headline item is a **web UI and admin panel built with [Padrino](https://padrinorb.com)**, for the humans
-running a mailbox:
-- browse inboxes and threads, with signature status, stale mail and open `needs`;
-- review holds and releases across items;
-- manage the registry: approve new agents, retire them, rotate keys, and change store settings;
-- take part in a thread as a human.
+running a mailbox ([#90](https://github.com/nesquena/agent-mailbox/issues/90)). It will read and write the same store through the same protocol, so the CLI and
+the UI never disagree. It isn't built yet.
 
-It will read and write the same store through the same protocol, so the CLI and the UI never disagree. It isn't
-built yet. The full plan, with more adapters (HTTP, database, MCP) and other protocol additions, is in
-[`docs/roadmap.md`](docs/roadmap.md).
+Not planned:
+- **End-to-end encryption.** The store's access control is the boundary (see [`docs/security.md`](docs/security.md)).
+- **Real-time chat.** This is mail, with latency measured in a poll interval, by design.
 
 ## Contributing
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). The test suite drives the real CLI against throwaway stores with every

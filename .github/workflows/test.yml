@@ -23,10 +23,17 @@ jobs:
   test:
     strategy:
       fail-fast: false
+      # one job per OS and shell, so they run side by side: dash and bash on Linux (where sh is dash), and sh (bash in
+      # POSIX mode) and bash on macOS
       matrix:
-        # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
-        # add macOS, whose minutes cost ten times as much on a private repository
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+        os: [ubuntu-latest, macos-latest]
+        shell: [sh, dash, bash]
+        exclude:
+          - {os: ubuntu-latest, shell: sh}
+          - {os: macos-latest, shell: dash}
+          # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
+          # add macOS, whose minutes cost ten times as much on a private repository
+          - os: ${{ github.event_name == 'pull_request' && 'macos-latest' || 'none' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -48,10 +55,5 @@ jobs:
             done
             echo "$s ok"
           done
-      - name: Test suite (default sh)
-        run: REQUIRE_SSH=1 sh test/run.sh
-      - name: Test suite (dash)
-        if: runner.os == 'Linux'
-        run: REQUIRE_SSH=1 TEST_SHELL=dash dash test/run.sh
-      - name: Test suite (bash)
-        run: REQUIRE_SSH=1 TEST_SHELL=bash bash test/run.sh
+      - name: Test suite (${{ matrix.shell }})
+        run: REQUIRE_SSH=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh
