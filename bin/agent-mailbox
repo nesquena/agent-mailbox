@@ -757,6 +757,8 @@ watch)
   case "$max" in ''|*[!0-9]*) die "max must be whole seconds (0 for no limit)" ;; esac
   [ "$interval" -ge 1 ] && [ ${#interval} -le 6 ] && [ ${#max} -le 9 ] || die "the interval or max is out of range"
   load_adapter; ad_sync; need_store
+  # (the watch itself only peeks and polls, which leave the clone alone, so other commands under this name go ahead)
+  ad_unlock
   need_active_me
   # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
   # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just

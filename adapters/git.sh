@@ -63,8 +63,9 @@ ad_open() {
   # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
+  mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
+  ad_lock
   if [ ! -d "$AD_DIR/.git" ]; then
-    mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
@@ -135,7 +136,49 @@ ad_push() {
   done
 }
 
+# ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
+# in its clone instead of working in it at once. The lock is a file beside the clone, created with noclobber, naming
+# its holder: "<pid> <epoch it took the lock> <the holder's start time, from ps>". A holder that's gone, or a pid now
+# another process's (its start time differs), is broken at once; a lock that can't be read is broken once it's a
+# minute old. A command waits for a live holder up to AGENT_MAILBOX_LOCK_WAIT seconds (120), then stops, naming it.
+# ceiling: two commands that find the same stale lock at once can both break it, one removing the other's new lock just
+# after it's taken, and then both work in the clone; that needs a command killed while holding it, then two starting
+# together within the moment between the second one's read and its removal
+ad_started() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+AD_LOCK="" AD_LOCKED=""
+ad_lock() {
+  AD_LOCK="$AD_DIR.lock"; AD_LOCKED="$$ $(date +%s) $(ad_started $$)"
+  lw=${AGENT_MAILBOX_LOCK_WAIT:-120}; case "$lw" in (''|*[!0-9]*) lw=120 ;; esac; [ "${#lw}" -le 5 ] || lw=120
+  t0=$(date +%s)
+  until (set -C; printf '%s\n' "$AD_LOCKED" > "$AD_LOCK") 2>/dev/null; do
+    held=$(cat "$AD_LOCK" 2>/dev/null); hp=${held%% *} rest=${held#* }; he=${rest%% *} hs=${rest#* }
+    case "$hp$he" in
+      (''|*[!0-9]*) [ -z "$(find "$AD_LOCK" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
+      (*) stale=""; kill -0 "$hp" 2>/dev/null && [ "$(ad_started "$hp")" = "$hs" ] || stale=1 ;;
+    esac
+    if [ -n "${stale:-}" ]; then
+      # (removed only while it still holds what was found stale, so a lock another command has just taken stays)
+      [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$held" ] || rm -f "$AD_LOCK"; stale=""; continue
+    fi
+    [ $(( $(date +%s) - t0 )) -lt "$lw" ] || { AD_LOCK=""
+      case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
+      die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again"; }
+    sleep 1
+  done
+  trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
+}
+# ad_unlock: release the lock, if this command still holds it
+ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
+
 ad_sync() {
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: a rebase it
+  # was in, git's own lock on the index, and changes it never committed (a message written but not added, a consumed
+  # one removed but not committed). Commits it made but couldn't push are kept, and published below
+  if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
+    ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
+  rm -f "$AD_DIR/.git/index.lock"
+  if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
+  ad_git clean -fdq -- "$ROOT" 2>/dev/null
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push
   if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then

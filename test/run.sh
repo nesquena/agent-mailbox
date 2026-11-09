@@ -404,6 +404,45 @@ case " $ADAPTERS " in *" git "*)
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
+  echo "== git: commands under one name take turns in its clone"
+  T="$W/lock"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in lp lr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as lp init >/dev/null; for a in lp lr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  # two replies at once, each consuming what it answers, eight times over: nothing is lost
+  echo hi > "$T/m"; errs=""
+  for t in 1 2 3 4 5 6 7 8; do
+    as lr send lp q$t-a "$T/m" >/dev/null 2>&1; as lr send lp q$t-b "$T/m" >/dev/null 2>&1
+    fa=$(as lp list 2>/dev/null | grep -- "-lr-q$t-a\.md$"); fb=$(as lp list 2>/dev/null | grep -- "-lr-q$t-b\.md$")
+    as lp send lr re-$t-a "$T/m" --in-reply-to "$fa" --consume "$fa" > "$T/o1" 2>&1 & p1=$!
+    as lp send lr re-$t-b "$T/m" --in-reply-to "$fb" --consume "$fb" > "$T/o2" 2>&1 & p2=$!
+    wait $p1 || errs="$errs [$t-a: $(tail -n 1 "$T/o1")]"; wait $p2 || errs="$errs [$t-b: $(tail -n 1 "$T/o2")]"
+  done
+  [ -z "$errs" ] && ok "two replies under one name at once both work, eight times over" || no "two replies under one name at once both work, eight times over" "$errs"
+  [ "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/lr | grep -c '\.md$')" = 16 ] &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/lp | grep '\.md$')" ] &&
+    ok "every reply is in the store, and every message it answered is consumed" ||
+    no "every reply is in the store, and every message it answered is consumed" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  expect "and the clone agrees with the store" 3 "no mail" as lp list
+  # a lock whose holder is gone, or whose pid is now another process's, is broken at once; a live holder is waited
+  # for, then named
+  ck=$(ls -d "$W/home-lp/.local/state/agent-mailbox/checkouts/"*-lp); AGENT_MAILBOX_LOCK_WAIT=3; export AGENT_MAILBOX_LOCK_WAIT
+  started() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s\n' "$dp" "$(date +%s)" "Thu Jan  1 00:00:00 1970" > "$ck.lock"
+  expect "a lock whose holder is gone is broken at once" 3 "no mail" as lp list
+  [ ! -e "$ck.lock" ] && ok "and the command's own lock is gone once it's done" || no "a lock was left behind" "$(cat "$ck.lock")"
+  sleep 30 & sp=$!; printf '%s %s %s\n' "$sp" "$(date +%s)" "Thu Jan  1 00:00:00 1970" > "$ck.lock"
+  expect "a lock naming a pid now another process's is broken at once" 3 "no mail" as lp list
+  [ ! -e "$ck.lock" ] && ok "and replaced" || no "a lock naming a reused pid was kept" "$(cat "$ck.lock")"
+  printf '%s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$(started "$sp")" > "$ck.lock"
+  expect "a live holder is waited for, then named, with how long it has held the lock" 1 "pid $sp\) has been working in this name's copy of the store for 5[0-9]s" as lp list
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null; rm -f "$ck.lock"; unset AGENT_MAILBOX_LOCK_WAIT
+  # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, and a consume
+  # never committed
+  mkdir -p "$ck/.git/rebase-merge"; : > "$ck/.git/rebase-merge/autostash"
+  expect "a rebase left half-removed doesn't stop the next command" 3 "no mail" as lp list
+  as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
+  expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
+
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

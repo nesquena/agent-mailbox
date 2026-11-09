@@ -9,6 +9,8 @@ ad_open() {
   [ -d "$AD_DIR" ] || mkdir -p "$AD_DIR" || die "can't create the store folder $AD_DIR"
 }
 ad_sync() { :; }
+# no clone of its own to guard: each write is a rename into place
+ad_unlock() { :; }
 # writes already landed in place (the CLI writes each file to a temp name, then renames it), so there's nothing
 # to publish. ceiling: no lock, so two writers can race on the same new file name; use git for many writers.
 ad_commit() { :; }
