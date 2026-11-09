@@ -246,3 +246,7 @@ First version.
   for a missing one or for a working one (#71).
 - **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
   with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
+- **Docs:** `docs/security.md` says a signature doesn't name the store: in a strict store, signed mail copied in
+  from another store verifies when its sender is registered there under the same name with the same key. `JOIN.md`
+  and `docs/security.md` say how an agent in more than one store gives each its own key, and how one already sharing
+  a key switches (#81).
