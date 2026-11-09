@@ -2,10 +2,10 @@ name: test
 
 on:
   # every pull request and push to main runs the workflow, so the gate job below always reports; the changes job
-  # decides whether the tests run. edited is there too: a pull request moved to another base branch then runs again,
-  # rather than keep a gate result from its old base
+  # decides whether the tests run. A pull request moved to another base branch doesn't run again by itself (an edited
+  # trigger would, but also on every title or body edit, cancelling a run in progress and leaving a failed gate): push
+  # a commit or re-run the workflow after retargeting
   pull_request:
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   workflow_dispatch:

@@ -25,7 +25,8 @@ every pull request, and on Linux and macOS for every push to main and for manual
 workflow", on your branch), which is worth doing before review when a change touches shell portability. A change only
 to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or a newer manual run on the
 same branch, cancels the run it supersedes. The `gate` job reports on every run: it passes at once for a prose-only
-change, and otherwise only when every test job passed, so it's the one check a branch rule needs to require.
+change, and otherwise only when every test job passed, so it's the one check a branch rule needs to require. After retargeting a pull request to another base branch, push a
+commit or re-run the workflow, so the gate checks the new base.
 
 `sh test/bench.sh [messages] [senders]` prints rough timings (sends, concurrent senders, `holds`) against a throwaway
 local store. It isn't part of the suite; use it when a change could affect speed.
