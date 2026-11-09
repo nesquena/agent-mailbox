@@ -2086,6 +2086,13 @@ refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/co
 # where a link kept in ~/.ssh leads, named directly: the file one leads to, and a file under the folder one leads to
 refused "or the file a link in ~/.ssh leads to, named directly" "$T/ssh-config"
 refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
+# at any hop of the walk: a link inside that folder, named there; and a folder link written with a trailing / that
+# leads through another link
+mkdir -p "$T/dot2/inner" "$T/vault2" "$T/realdir2"; echo s > "$T/vault2/k"; echo s > "$T/realdir2/f"
+ln -s "$T/vault2/k" "$T/dot2/inner/k"; ln -s "$T/dot2/inner" "$H/.ssh/inner.d"
+refused "or a link inside the folder a link in ~/.ssh leads to, named there" "$T/dot2/inner/k"
+ln -s "$T/realdir2" "$T/dlink2"; ln -s "$T/dlink2/" "$H/.ssh/trail"
+refused "or a file under a folder a link in ~/.ssh leads to through a trailing / and another link" "$T/realdir2/f"
 # the CLI's config file by another name: a hard link to it
 ln "$C/config" "$T/hl-config" && refused "or a hard link to the CLI's config file" "$T/hl-config"
 # the account's own ~/.ssh when HOME is elsewhere, as it is here: its known_hosts, if it has one
@@ -2177,6 +2184,10 @@ refused "or a relative link under a folder link, read from where it really sits"
 printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here, and so is its END PRIVATE KEY line.\nPuTTY files end with a Private-MAC: line.\n' > "$T/prose.md"
 printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me\n-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n' > "$T/pub.md"
 echo "notes" > "$H/.ssh-notes.md"
+# a link in ~/.ssh to a folder that holds ~/.ssh itself is skipped: it would stop every send
+ln -s "$H" "$H/.ssh/up"; echo ok > "$H/ok-under-home.md"
+expect "a link in ~/.ssh to the home folder doesn't stop an ordinary send" 0 "^sent " as sec1 send sec2 up-ok "$H/ok-under-home.md"
+rm -f "$H/.ssh/up"
 expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
 expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
 expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"
