@@ -1,13 +1,13 @@
 name: test
 
 on:
-  # a change to prose alone (Markdown, docs/, LICENSE) runs no tests: the suite reads none of it. A change that also
-  # touches anything else runs them as before, and a manual run always does
+  # every pull request and push to main runs the workflow, so the gate job below always reports; the changes job
+  # decides whether the tests run. A pull request moved to another base branch doesn't run again by itself (an edited
+  # trigger would, but also on every title or body edit, cancelling a run in progress and leaving a failed gate). After
+  # retargeting, push a commit, or close and reopen the pull request: a re-run checks the old base again
   pull_request:
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   push:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
 
 permissions:
@@ -20,13 +20,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # a change to prose alone (Markdown files, docs/, LICENSE) runs no tests: the suite reads none of it. A change that
+  # also touches anything else runs them, and so does a manual run, a new branch, or a diff git can't compute. Renames
+  # count as both paths (--no-renames), so moving code to a prose path still runs them
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            (pull_request) base=$PR_BASE head=$PR_HEAD; base=$(git merge-base "$base" "$head" 2>/dev/null) || base="" ;;
+            (push) base=$PUSH_BEFORE head=$PUSH_AFTER ;;
+            (*) base="" head="" ;;
+          esac
+          code=true
+          case "$base" in (''|*[!0]*) ;; (*) base="" ;; esac
+          if [ -n "$base" ] && files=$(git diff --no-renames --name-only "$base" "$head" --) && [ -n "$files" ]; then
+            code=false
+            while IFS= read -r f; do
+              case "$f" in (*.md|docs/*|LICENSE) ;; (*) code=true; break ;; esac
+            done <<EOF
+          $files
+          EOF
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "changes beyond prose: $code"
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
+      # one job per OS and shell, so they run side by side: dash and bash on Linux (where sh is dash), and sh (bash in
+      # POSIX mode) and bash on macOS
       matrix:
-        # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
-        # add macOS, whose minutes cost ten times as much on a private repository
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
+        os: [ubuntu-latest, macos-latest]
+        shell: [sh, dash, bash]
+        exclude:
+          - {os: ubuntu-latest, shell: sh}
+          - {os: macos-latest, shell: dash}
+          # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
+          # add macOS, whose minutes cost ten times as much on a private repository
+          - os: ${{ github.event_name == 'pull_request' && 'macos-latest' || 'none' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -48,13 +95,24 @@ jobs:
             done
             echo "$s ok"
           done
-      # (on Linux, /bin/sh is dash, so the dash step below already runs the suite under it; macOS's sh is bash in POSIX
-      # mode, which no other step covers)
-      - name: Test suite (default sh)
-        if: runner.os != 'Linux'
-        run: REQUIRE_SSH=1 sh test/run.sh
-      - name: Test suite (dash)
-        if: runner.os == 'Linux'
-        run: REQUIRE_SSH=1 TEST_SHELL=dash dash test/run.sh
-      - name: Test suite (bash)
-        run: REQUIRE_SSH=1 TEST_SHELL=bash bash test/run.sh
+      - name: Test suite (${{ matrix.shell }})
+        run: REQUIRE_SSH=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh
+
+  # the one check a branch rule requires: it passes at once for a prose-only change, and otherwise only when every test
+  # job passed
+  gate:
+    if: always()
+    needs: [changes, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          TESTS: ${{ needs.test.result }}
+        run: |
+          [ "$CHANGES" = success ] || { echo "the changes job didn't succeed ($CHANGES)"; exit 1; }
+          # (only an explicit false passes without the tests: anything else waits for them)
+          if [ "$CODE" = false ]; then echo "prose only: no tests to wait for"; exit 0; fi
+          [ "$TESTS" = success ] || { echo "the tests didn't all pass ($TESTS)"; exit 1; }
+          echo "every test job passed"

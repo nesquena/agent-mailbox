@@ -117,6 +117,8 @@ ad_open() {
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
+  # whether this clone had seen the store's branch before this fetch, and where it was then
+  seen="" pre=""; ! ad_remote_has_branch || { seen=1; pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH"); }
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
@@ -126,6 +128,33 @@ ad_pull() {
       return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
+  # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
+  rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
+  taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+  # the commit `init` made in this same command (AD_INIT), when the branch now has a mailbox in its folder, is a race
+  # lost just now: init saw no mailbox there, and its own sync published anything left before, so that commit is all
+  # this clone holds unpublished. It's dropped, and init reports the winner
+  if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
+    [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ]; then
+    ad_git reset -q --hard "origin/$BRANCH"; return 0
+  fi
+  # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
+  # it, so nothing it holds is published into that mailbox, when it had seen the store's branch before (one since
+  # reset, deleted or re-created) or the branch now has a mailbox in its own folder (another agent's init took it). A
+  # clone that never saw the branch, whose mailbox folder the branch doesn't have (a mailbox in another folder of the
+  # same branch), is rebased and published as before. It returns 3, so a push retrying doesn't add "don't resend"
+  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1; then
+    if [ -n "$seen" ] || [ -n "$taken" ]; then
+      # (what goes with the clone: its commits the store never had, past where it last saw the store's branch)
+      if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..HEAD"); else un=$(ad_git rev-list --count HEAD); fi
+      lost=""; [ "${un:-0}" = 0 ] || lost=" (its $un unpublished commit(s) go with it: send again what they held)"
+      printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s%s and run this again\n" "$AD_DIR" "$lost"
+      # (the fetch moved the tracking ref to the store's new tip: it goes back to where it was, so a command run again
+      # counts from the same point, not from a tip this clone shares nothing with)
+      if [ -n "$pre" ]; then ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre"; else ad_git update-ref -d "refs/remotes/origin/$BRANCH"; fi
+      return 3
+    fi
+  fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
   else
@@ -139,7 +168,10 @@ ad_push() {
     n=$((n+1))
     [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run a command with the same name to publish it, don't resend"; exit 4; }
     ad_jitter
-    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
+    rerr=$(ad_pull); pr=$?
+    # (a clone whose history the store doesn't share: its own message says what to do, and what goes with the clone)
+    [ "$pr" != 3 ] || die "$(printf '%s\n' "$rerr" | ad_gist)"
+    [ "$pr" = 0 ] || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
   done
   # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
   # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
@@ -170,6 +202,10 @@ ad_commit() {
   [ -n "$keep" ] || return 0
   # shellcheck disable=SC2086
   ad_git add -A -f -- $keep || die "git add failed"
+  # nothing staged (the files came out as they were: an ed25519 signature of the same bytes is the same bytes) is
+  # nothing to publish, not a failure; AD_UNCHANGED tells the caller
+  # shellcheck disable=SC2086
+  AD_UNCHANGED=""; if ad_git diff --cached --quiet -- $keep; then AD_UNCHANGED=1; return 0; fi
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
   ad_push

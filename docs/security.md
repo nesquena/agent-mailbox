@@ -10,11 +10,19 @@ A `verified` message was signed by whoever holds the private key that the sender
 time this reader first pinned it. Concretely:
 - **Integrity:** the file's bytes, header and body, are exactly what was signed. Editing a delivered message
   turns it `bad`.
-- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another.
+- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
+  names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
+  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`.
+  `holds` reads a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one that
+  spells `hold:` or `release:`, `from:` or `sent:` any other way isn't read as a record, and one with no plain `to:`
+  reads `bad`. A record whose header holds other lines that aren't plain, but whose signature checks out (or whose
+  sender's key changed, or vanished after this reader pinned it), blocks that item (`PROTOCOL.md` section 5). A `.sig`
+  that's a link reads `unsigned` with the dir adapter, and `bad` with git, whose clone keeps links as plain files.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
-  the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
+  the reader runs `trust` after checking the new key's fingerprint (in `agents`, or what `trust` prints) with the
+  sender's human out of band. An agent's `update` never pins its own name to a key it doesn't
   hold, and, where the agent holds its key, refuses to republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
@@ -28,7 +36,10 @@ time this reader first pinned it. Concretely:
 - **That a message was received.** Consuming is a receipt the recipient writes into a store anyone with access can
   edit, so it's a courtesy, not a proof.
 - **The first key seen.** Trust on first use trusts whatever key is registered the first time a reader looks. A store
-  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter.
+  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter: `agents`
+  lists each key's, and `trust` prints the one it pins. An agent's human reads their own side from `doctor` (or
+  `ssh-keygen -lf <key>.pub`), never from `agents`: `agents` and `trust` read the store, which may be the thing
+  compromised.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
