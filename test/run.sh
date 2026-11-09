@@ -81,6 +81,9 @@ for AD in $ADAPTERS; do
   expect "send delivers" 0 "^sent mailbox/inbox/bob/" as alice send bob review-1 "$T/body" --needs "a yes or no" --context proj-x
   expect "list shows it to the recipient" 0 "alice-review-1.md" as bob list
   expect "the sender's own inbox is empty" 3 "no mail" as alice list
+  # a name with no record here is more likely the wrong name than no mail
+  expect "list under a name that isn't registered says so" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody list
+  expect "and so does read" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody read
   if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
@@ -169,6 +172,17 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
     ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
+  # an inbox file name with a line break in it is skipped, whole: nothing in the folder a command runs from is listed
+  mkdir -p "$T/proj"; echo "PROJECT ONLY" > "$T/proj/notes.md"
+  tamper 'echo x > "mailbox/inbox/alice/x
+notes.md"'
+  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1)
+    case $out in (*"PROJECT ONLY"*|*notes.md*) no "$c lists a file outside the inbox" "$out" ;;
+      (*) ok "$c skips a file name with a line break in it" ;; esac; done
+  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1)
+  printf '%s\n' "$out" | grep -qx 'notes.md' && no "watch lists part of a file name" "$out" ||
+    ok "and so does watch"
+  tamper 'rm -f mailbox/inbox/alice/x*'
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins
@@ -420,6 +434,27 @@ case " $ADAPTERS " in *" git "*)
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
+
+  echo "== git: a first init whose push failed is published by the next command"
+  # the store's objects and refs are read-only for the init, so its fetches work and its push fails
+  T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi1 setup --store "$T/store.git" --name fi1 >/dev/null
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "a first init whose push failed is published (read-only folders don't stop this user)"
+  else
+    expect "init whose push fails says it's written locally" 4 "written locally, not published" as fi1 init
+    chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    expect "the next command publishes it" 0 "publishing 1 commit\\(s\\) left from an earlier command" as fi1 agents
+    expect "and the store now has the mailbox" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  fi
+  # an init that was published is never published again: the branch it pushed, deleted from the store before this clone's
+  # next command, reads as deleted
+  T="$W/firstinit2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi2 setup --store "$T/store.git" --name fi2 >/dev/null; as fi2 init >/dev/null
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main
+  expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
+  [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -1484,6 +1519,7 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+expect "a retired name with an empty inbox still lists no mail" 3 "no mail for h2" as h2 list
 expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name" \
   env HOME="$W/home-h2" "$SH" "$CLI" doctor
 # a newcomer who picked that retired name is told it may not be theirs; with a key of its own that isn't the record's,
@@ -2131,6 +2167,10 @@ pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14a\ncontext: g
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14b\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v2\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14b.md"
 expect "releases of different versions at the same time conflict" 5 "item#14 has releases from u2 sent at the same time.*send one release again" as u1 holds "item#14" --version v2
 expect "for either version" 5 "item#14 has releases from u2 sent at the same time" as u1 holds "item#14" --version v1
+# and two at the same time whose versions differ only as text (3.1 and 3.10) conflict too
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19a\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19a.md"
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19b\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.10\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19b.md"
+for v in 3.1 3.10; do expect "same-time releases of 3.1 and 3.10 conflict (--version $v)" 5 "item#19 has releases from u2 sent at the same time" as u1 holds "item#19" --version "$v"; done
 # 9. merges don't multiply what holds reads: one hold file under several merges is one row of history
 echo h | as u2 send u1 h-15 - --hold "item#15 v1" >/dev/null
 for n in 1 2 3; do (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD~1) &&
@@ -2171,6 +2211,12 @@ r2=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$')
 [ -n "$r1" ] && [ -n "$r2" ] && [ "${r1##*/}" != "${r2##*/}" ] && ok "a consumed message's file name isn't reused in the same second" ||
   no "a consumed message's file name was reused" "first: $r1, then: $r2"
 as u1 consume "${r2##*/}" >/dev/null 2>&1
+# items and versions are compared as strings: a release of 3.1 isn't one of 3.10, 3.100 or 03.1, and item 1.5 isn't 1.50
+echo r | as u2 send u1 num-1 - --release "deploy:num 3.1" >/dev/null 2>&1
+expect "a release of version 3.1 counts for 3.1" 0 "deploy:num released by u2 at 3\.1 " as u1 holds "deploy:num" --version 3.1
+for v in 3.10 3.100 03.1; do expect "but not for $v" 5 "released by u2 at 3\.1, not $v" as u1 holds "deploy:num" --version "$v"; done
+sleep 1; echo r | as u2 send u1 num-2 - --release "1.5 abc" >/dev/null 2>&1
+expect "and a release for item 1.5 isn't one for item 1.50" 5 "nothing recorded for 1\.50" as u1 holds "1.50" --version abc
 T="$W/rules"
 # 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
@@ -2212,6 +2258,9 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+# on a file system that ignores case, a protected folder named in another case is the same folder
+if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$H/.SSH/config"
+else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
 refused "or a link to such a file" "$T/via-dir.md"
 refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"
