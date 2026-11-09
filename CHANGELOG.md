@@ -276,3 +276,5 @@ First version.
 - **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
   it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
   was typed in (#78).
+- **Fix:** the Claude Code hook's watchdog sleeps only until its deadline, so a watcher that hangs (a fetch over a
+  dead connection) ends at the deadline, not up to 15 s past it.

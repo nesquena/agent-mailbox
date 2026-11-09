@@ -1128,7 +1128,7 @@ wait "$bg"; rc=$?
 case "$rc $(cat "$T/bg.out")" in (*"can't go on"*"HTTP 404"*) ok "but a different error does" ;; (*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;; esac
 rm -f "$R1/error"
 # a watch that hangs (a fetch over a dead connection) can't run the hook past the day: at its deadline (here the 2 s
-# limit, an interval and 15 s, checked every 15 s) the session hears the daily note, and nothing it started lingers
+# limit, an interval and 15 s: 18 s after it starts) the session hears the daily note, and nothing it started lingers
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
@@ -1139,6 +1139,8 @@ if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's dea
 else wait "$bg"; rc=$?
   case "$rc $(cat "$T/bg.out")" in ("2 "*"daily limit"*) ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
     (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "exit $rc: $(cat "$T/bg.out")" ;; esac
+  # (the deadline is 18 s out: a watchdog that slept its 15 s past it would end at 30)
+  [ "$n" -le 22 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 18s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly

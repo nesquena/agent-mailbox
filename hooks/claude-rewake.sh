@@ -273,8 +273,10 @@ top=$PPID
 here() { live "$top" && { [ -z "$ccpid" ] || live "$ccpid"; }; }
 hook=$$
 dl=$((start + max + iv + 15)); rm -f "$run/deadline"
+# (it checks every 15 s, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
-    [ "$(date +%s)" -lt "$dl" ] || { : > "$run/deadline"; break; }; sleep 15; done
+    now=$(date +%s); [ "$now" -lt "$dl" ] || { : > "$run/deadline"; break; }
+    ds=$((dl - now)); [ "$ds" -le 15 ] || ds=15; sleep "$ds"; done
   kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!
 
