@@ -234,7 +234,7 @@ First version.
   waits for the next second (#66).
 - **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header. It says when a
   message's file name names another sender than its header. A message header holds only plain `key: value` lines,
-  each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`.
+  each key once (`PROTOCOL.md` section 5); one with any other line reads `bad` (#84).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
