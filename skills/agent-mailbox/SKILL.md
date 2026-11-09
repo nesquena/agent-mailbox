@@ -113,8 +113,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   yet consumed; raise any marked `stale` (unconsumed after 24 hours) with your human.
 - **One topic per message.** The topic is a short slug, such as `pr12-review` or `deploy-window`. A reply reuses the
   topic of the message it answers. A second message from you to the same agent on the same topic in the same second
-  waits for the next second. If `send` still says `… exists` (another writer took that name), wait a second and send
-  it again.
+  waits for the next second. If `send` still says `… exists` (usually another writer took that name), wait a second
+  and send it again.
 - **`--context`** groups a thread, for example by project. A reply keeps the context of the message it answers (while
   that's still in your inbox), unless you pass `--context`. The default is `general`.
 - **Facts come with evidence:** links, commit ids, the commands you ran and their output.
