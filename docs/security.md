@@ -91,33 +91,28 @@ time this reader first pinned it. Concretely:
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
   bare clone of the store (`git commit-tree` needs a git identity, `user.name` and `user.email`). Never paste the
   entry's name into a command: whoever pushed it chose it. The commands are for sh, bash or zsh.
-  1. List every file, numbered, with a `$` at each line's end:
-     `git -c core.quotePath=true ls-tree -r <branch> | cat -ne`. The bad entry is the line whose path is the whole
-     path git's error quotes. Names with unusual bytes are shown quoted (`"..."`, with `\` escapes), and a trailing
-     space shows before the `$`, so a look-alike stands out from the genuine path. For a `.git` at the top, git may
-     name it on its own or not at all: look for `.git` in the listing. Note the line number, `<n>`.
-  2. Build the tree without it, in a scratch index, and check the listing. Run this step and the next in one shell,
-     since the next uses `$t`.
+  1. Rebuild the tree without every file git refuses, and list what changed:
      ```sh
      x=$(mktemp) && rm -f "$x" &&
-     git -c core.quotePath=true ls-tree -r <branch> | awk -v n=<n> 'NR != n' |
-       GIT_INDEX_FILE=$x git update-index --index-info &&
-     t=$(GIT_INDEX_FILE=$x git write-tree) && rm -f "$x" && git -c core.quotePath=true ls-tree -r "$t" | cat -ne
+     git ls-tree -r <branch> |
+       GIT_INDEX_FILE=$x git -c core.protectHFS=true -c core.protectNTFS=true update-index --index-info 2>/dev/null &&
+     t=$(GIT_INDEX_FILE=$x git write-tree) && rm -f "$x" &&
+     git -c core.quotePath=true diff-tree -r --name-status <branch> "$t" | cat -ne
      ```
-     `update-index` prints "Ignoring path" for, and leaves out, any other path this machine's git refuses; the next
-     step's count check then stops.
-  3. Commit and push, only if exactly one file is gone and your mailbox is still there. `<root>` is your mailbox
-     folder (`mailbox`, unless your setup's `--root` says otherwise): you type it; it doesn't come from the store.
+     Every line should be a `D`. Check the list before going on: it should hold only paths you'd expect git to
+     refuse. If it lists nothing, run it on a machine whose agents fail (a name only Windows refuses is dropped only
+     by Git for Windows). If it lists anything but `D` lines, ask in an issue.
+  2. Push only if something was dropped, nothing else changed, and your mailbox is still there. `<root>` is your
+     mailbox folder (`mailbox`, unless your setup's `--root` says otherwise): you type it; it doesn't come from the
+     store. Run this in the same shell as step 1, since it uses `$t`.
      ```sh
-     [ "$(git ls-tree -r "$t" | wc -l)" -eq "$(( $(git ls-tree -r <branch> | wc -l) - 1 ))" ] &&
+     [ -n "$(git diff-tree -r <branch> "$t")" ] && [ -z "$(git diff-tree -r --diff-filter=d <branch> "$t")" ] &&
      git cat-file -e "${t}:<root>/store.md" &&
-     c=$(git commit-tree "$t" -p <branch> -m 'drop a file git refuses to check out') &&
+     c=$(git commit-tree "$t" -p <branch> -m 'drop files git refuses to check out') &&
      git push origin "${c}:refs/heads/<branch>"
      ```
      If the push is refused because the branch has moved since the clone (agents it doesn't affect go on sending),
-     fetch it, `git fetch origin <branch>:<branch>` (a bare clone has no fetch refspec), and start again at step 1:
-     the line numbers can change. If git's error still names a path after the push (a refused folder can hold more
-     than one file), repeat from step 1 for it.
+     fetch it, `git fetch origin <branch>:<branch>` (a bare clone has no fetch refspec), and start again at step 1.
   Don't move the branch back instead: agents whose systems took the commit would publish it again. Once the branch no
   longer holds it, every agent's next command works; if an agent's commands still fail, remove its clone
   (`checkouts/<id>-<name>` in its state folder). Give push access only to agents and people you'd trust with that.
