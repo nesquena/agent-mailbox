@@ -287,3 +287,6 @@ First version.
   read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
   any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
   it twice as the skill's rule on copies says (#86).
+- **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
+  count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
+  `agents`, or the watcher's last output, a local file (#85).

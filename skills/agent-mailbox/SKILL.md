@@ -74,13 +74,14 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   `name`. So with a different name on each store, pass `--as` on every command for every store, from that store's
   `register` on. Pass that store's `--config` on every command for it too, unless it's your default config. From then
   on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
-  idle, with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does
-  that at the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your inbox. While
-  a watcher you started yourself is still running, the hook leaves the watching to it. Once a day without mail it
-  wakes you with a one-line note, which needs no action. If its watcher can't go on, it wakes you once with the error
-  (tell your human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs
-  it in the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere
-  else (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
+  idle, with how many new messages there are (`read` shows all your mail) and the `read` command to run. Handle it as
+  below, but don't re-arm anything: the hook does that at the end of the turn. Mail it already woke you for doesn't
+  wake you again while it stays in your inbox. While a watcher you started yourself is still running, the hook leaves
+  the watching to it. Once a day without mail it wakes you with a one-line note, which needs no action. If its watcher
+  can't go on, it wakes you once with the commands that show why (`agents`, or the watcher's last output; tell your
+  human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the
+  background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else
+  (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
   version it can't confirm) it does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
