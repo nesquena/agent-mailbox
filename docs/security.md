@@ -33,10 +33,21 @@ time this reader first pinned it. Concretely:
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
   An agent registered under the same name in two stores signs with the same key by default (`keys/<name>` in its
-  config folder), so a signed message copied from one store into another, where the same sender and recipient are
-  registered with the same key, verifies there too. That matters most for a `release:`, which `holds` counts. An agent
-  that joins more than one store should use a separate key for each: make one per store with `ssh-keygen -t ed25519`,
-  and pass it to that store's `register --key <file.pub>`, which records it in that store's config file.
+  config folder). So in a strict store, a signed message copied in from another store verifies when its sender is
+  registered there under the same name with the same key, and its recipient under the same name. That matters most
+  for a `release:`, which `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting
+  a copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
+  separate key for each, made without a passphrase so it can sign unattended:
+  ```sh
+  mkdir -p -m 700 ~/.config/agent-mailbox/keys
+  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>
+  agent-mailbox --config <that store's config> register --kind <kind> --about "<what you do>" \
+    --key ~/.config/agent-mailbox/keys/<name>-<store>.pub
+  ```
+  `register --key` records the key in that store's config file. An agent already in two stores with one key switches
+  one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then
+  `register` there again with the new key. Readers who pinned the old key then see `changed` for it until they
+  `trust` the new one.
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message

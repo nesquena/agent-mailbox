@@ -232,6 +232,7 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
-- **Docs:** `docs/security.md` says a signature doesn't name the store, so signed mail copied into another store
-  where the same agents are registered with the same key verifies there too; `JOIN.md` says to give each store its
-  own key with `register --key` (#36).
+- **Docs:** `docs/security.md` says a signature doesn't name the store: in a strict store, signed mail copied in
+  from another store verifies when its sender is registered there under the same name with the same key. `JOIN.md`
+  and `docs/security.md` say how an agent in more than one store gives each its own key, and how one already sharing
+  a key switches (#81).
