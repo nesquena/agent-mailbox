@@ -1978,8 +1978,8 @@ done
 git clone -q --bare "$T/seed" "$T/up.git"; git clone -q "$T/up.git" "$C"
 git clone -q --bare "$T/dotseed" "$T/dots.git"; git clone -q "$T/dots.git" "$T/dots"
 U="$C/bin/agent-mailbox"; sha=$(git -C "$C" rev-parse --short HEAD)
-plain='^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+\)$'
-expect "--version from a clone names its commit" 0 "^agent-mailbox [0-9][0-9.]* \(protocol [0-9]+, $sha\)$" "$SH" "$U" --version
+plain='^agent-mailbox [0-9][0-9.]*(-[a-z0-9.]+)? \(protocol [0-9]+\)$'
+expect "--version from a clone names its commit" 0 "^agent-mailbox [0-9][0-9.]*(-[a-z0-9.]+)? \(protocol [0-9]+, $sha\)$" "$SH" "$U" --version
 ln -s "$U" "$T/link"
 expect "and through a link to it" 0 "\(protocol [0-9]+, $sha\)$" "$SH" "$T/link" --version
 echo "# a local change" >> "$C/adapters/dir.sh"
