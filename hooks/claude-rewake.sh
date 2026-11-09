@@ -240,6 +240,8 @@ set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
 note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
+# cmd: the CLI, with this store's config when it has its own, and this name, quoted for a shell
+cmd() { c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"; printf '%s --as %s' "$c" "$name"; }
 child="" dog=""
 # the interval (1 s to an hour) and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by
 # an interval and a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear
@@ -319,8 +321,9 @@ while :; do
       note last
       rm -f "$run/error"
       # (said first, then recorded as woken for: a stop between the two wakes the session for it again, never not at all)
-      c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"
-      { printf '%s\n' "agent-mailbox: new mail for $name. Read it: $c --as $name read"; cat "$run/out"; } >&2
+      # (the store's own text, file names included, never goes into the notice: it's read as mail, by `read`)
+      nm=$(sed -n '2,$p' "$run/out" | grep -c .); [ "$nm" = 1 ] && m="1 message" || m="$nm messages"
+      printf '%s\n' "agent-mailbox: new mail for $name ($m). Read it: $(cmd) read" >&2
       # (a run for one of several stores leaves it pending, for the hook that started it to add once it has passed the
       # wake on)
       if [ -n "$kid" ]; then sed -n '2,$s#.*/##p' "$run/out" > "$run/pending"; else sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"; fi
@@ -334,17 +337,18 @@ while :; do
   # a signal ended the watcher (the system, or someone stopping it) while this hook and its session go on: start it
   # again after an interval, quietly; and it can't go on: say so once per distinct error, then retry quietly
   here || exit 0
-  # (printable text only, for the session; compared without its counts and times, so a try count or a time in it
-  # isn't a new error, while an exit code or an HTTP status still is)
+  # (the error is compared without its counts and times, so a try count or a time in it isn't a new error, while an
+  # exit code or an HTTP status still is. Its text comes from the store or its host, so it never goes into the notice:
+  # the notice names the command that shows it)
   err="exit $rc: $(tail -n 3 "$run/out" | tr '\n' ' ' | LC_ALL=C tr -c '[:print:]' '?')"
   ek=$(printf '%s' "$err" | sed -E 's/[0-9]+([.:][0-9]+)* ?(tries|try|ms|milliseconds?|seconds?|s|minutes?|m)([^A-Za-z]|$)/N \2\3/g')
   if [ "$rc" -le 128 ] && [ "$ek" != "$(cat "$run/error" 2>/dev/null)" ]; then
     printf '%s' "$ek" > "$run/error"; note last
-    printf '%s\n' "agent-mailbox: the watcher for $name can't go on ($err). It keeps retrying quietly; tell your human." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name can't go on (exit $rc). See why: $(cmd) doctor. It keeps retrying quietly; tell your human." >&2
     exit 2
   fi
   [ $(( $(date +%s) - start )) -lt "$max" ] || { note last
-    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing ($err); it starts again at this turn's end." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing (exit $rc; see why: $(cmd) doctor); it starts again at this turn's end." >&2
     exit 2; }
   sleep "$iv" & child=$!; wait "$child"; child=""
 done
