@@ -789,15 +789,24 @@ doctor)
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
   chk "the branch name is valid" 'branch_ok "$BRANCH"' "set it with setup --branch${AGENT_MAILBOX_BRANCH:+ and unset AGENT_MAILBOX_BRANCH}: a name git accepts, of letters, digits, '.', '_', '-' and '/'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
+  sok=""
   if [ -n "$STORE" ]; then
-    ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
-      { echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; }
+    if ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1; then echo "ok   the store is reachable and initialized"; sok=1
+    else echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; fi
   fi
-  # a name with a record that isn't active (retired) comes back with update, not register, which would refuse it
-  [ -z "$ME" ] || [ -z "$STORE" ] || case $( load_adapter >/dev/null 2>&1 || exit
-      if active "$ME"; then echo ok; elif [ -f "$(record "$ME")" ]; then echo inactive; fi ) in
+  # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
+  # record isn't active (retired) comes back with update, not register, which would refuse it; but only its own agent
+  # should, so the hint says so: by key when the record's key and this agent's can be compared, otherwise in words
+  [ -z "$ME" ] || [ -z "$sok" ] || case $( load_adapter >/dev/null 2>&1 || exit
+      if active "$ME"; then echo ok
+      elif [ -f "$(record "$ME")" ]; then
+        rk=$(field key "$(record "$ME")"); mk=""; [ -z "$rk" ] || [ ! -f "$KEY" ] || mk=$(own_pub)
+        if [ -n "$rk" ] && [ -n "$mk" ]; then [ "$rk" = "$mk" ] && echo mine || echo other; else echo retired; fi
+      fi ) in
     (ok) echo "ok   $ME is registered and active" ;;
-    (inactive) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
+    (mine) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
+    (other) echo "FAIL $ME is registered and active: it's another agent's retired name here (its key isn't yours); pick another name"; ok=1 ;;
+    (retired) echo "FAIL $ME is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name"; ok=1 ;;
     (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
   esac
   [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }

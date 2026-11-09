@@ -518,6 +518,9 @@ exec "%s" "$@"
   # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
   expect "doctor on a branch the store doesn't have says it isn't initialized, and where to see why" 1 "FAIL the store is reachable and initialized: run agents to see why" \
     env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
+  out=$(env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor 2>&1)
+  case "$out" in (*"registered and active"*) no "doctor gave a name hint from a store it couldn't read" "$out" ;;
+    (*) ok "and gives no hint about the name, from a store it couldn't read" ;; esac
   expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
   [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
     ok "and the new branch holds only its own mailbox" || no "the new branch carries other files" "$(git --git-dir="$S" ls-tree -r --name-only other)"
@@ -1374,8 +1377,26 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
-expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here; run update --status active" \
+expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name" \
   env HOME="$W/home-h2" "$SH" "$CLI" doctor
+# a newcomer who picked that retired name is told it may not be theirs; with a key of its own that isn't the record's,
+# that it isn't
+as h2b setup --store "$T/store" --adapter dir --name h2 >/dev/null
+expect "a newcomer under a retired name isn't simply told to take it back" 1 "it's retired here: if it's yours.*if not, pick another name" \
+  env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+if [ -n "$SSH" ]; then
+  mkdir -p "$W/home-h2b/.config/agent-mailbox/keys"; ssh-keygen -q -t ed25519 -N '' -f "$W/home-h2b/.config/agent-mailbox/keys/h2"
+  tamper_dir() { (cd "$T/store" && sh -c "$1"); }
+  hk=$(cut -d' ' -f1,2 "$W/home-h2b/.config/agent-mailbox/keys/h2.pub")
+  ssh-keygen -q -t ed25519 -N '' -f "$T/h2-other"; ok_k=$(cut -d' ' -f1,2 "$T/h2-other.pub")
+  tamper_dir "sed -i.bak 's|^key: .*|key: $ok_k|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key isn't the record's is told it's another agent's" 1 "another agent's retired name here.*pick another name" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: $hk|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key is the record's is told to come back" 1 "it's retired here; run update --status active to come back" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: |' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+else sk "doctor tells a retired name apart by key (no ssh-keygen -Y)"; fi
 
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
