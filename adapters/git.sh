@@ -151,13 +151,25 @@ ad_push() {
 # ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
 # in its clone instead of working in it at once. The lock is a file in the state folder's locks/<clone id>/ (where no
 # clone name can reach it), created with noclobber, naming its holder: "<pid> <epoch it took the lock> <host> <the
-# holder's start time, from ps in UTC and the C locale>". A holder on this host that's gone, or a pid now another
-# process's (its start time differs), is broken at once; a lock that can't be read is broken once it's a minute old; a
-# holder on another host (a state folder shared between machines) can't be checked, so it's waited for. Breaking a
-# lock takes a guard file first, so two waiters never both break it. A command waits up to AGENT_MAILBOX_LOCK_WAIT
-# seconds (120), then stops, naming the holder.
+# holder's start, from ad_started>". A holder on this host that's gone, or a pid now another process's (its start
+# differs), is broken at once; a lock that can't be read is broken once it's a minute old; a holder on another host (a
+# state folder shared between machines, or this one's name since changed) can't be checked, so it's waited for, and the
+# message says which file to delete if nothing is running there. Breaking a lock takes a guard file first, so two
+# waiters never both break it. A command waits up to AGENT_MAILBOX_LOCK_WAIT seconds (120), then stops, naming the
+# holder.
 # ceiling: a breaker killed while holding the guard leaves it; it's taken as abandoned, and removed, once a minute old
-ad_started() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+# ad_started <pid>: when that process started, in a form that reads the same every time. Where /proc has it (Linux), its
+# start in clock ticks since boot (field 22 of /proc/<pid>/stat, counted after the name's closing parenthesis, since a
+# name can hold spaces) and the boot's id: a clock step moves ps's start time for every process, but not these, and a
+# lock from an earlier boot reads as another process's. Elsewhere, ps's start time, in UTC and the C locale
+ad_started() {
+  if [ -r "/proc/$1/stat" ]; then
+    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0; st=${st##*')'}
+    set -f; set -- $st; set +f; [ $# -ge 20 ] || return 0
+    eval "st=\${20}"; printf '%s %s\n' "$st" "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"; return 0
+  fi
+  LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
+}
 AD_LOCK="" AD_LOCKED=""
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
@@ -188,14 +200,17 @@ ad_lock() {
         fi
         rm -f "$ld/break"; continue
       fi
-      # (still no guard there, so the folder can't be written: the stale lock can't be removed either)
-      [ -e "$ld/break" ] || die "can't remove the stale lock $lk"
+      # (still no guard there, and the folder can't be written: the stale lock can't be removed either. One that can
+      # be is only another waiter's guard, come and gone: wait, and try again)
+      [ -e "$ld/break" ] || [ -w "$ld" ] || die "can't remove the stale lock $lk"
       [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
     fi
     [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
       case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
-      on=""; [ -z "$hh" ] || [ "$hh" = "$host" ] || on=" on $hh"
-      die "another agent-mailbox command (pid ${hp:-unknown}$on) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again"; }
+      if [ -n "$hh" ] && [ "$hh" != "$host" ]; then
+        die "another agent-mailbox command (pid ${hp:-unknown} on $hh) has been working in this name's copy of the store$age: if none is running on $hh (or this machine's name has changed), delete $lk, then run this again"
+      fi
+      die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again (its lock: $lk)"; }
     sleep 1
   done
   AD_LOCK=$lk AD_LOCKED=$mine
@@ -212,7 +227,8 @@ ad_sync() {
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
   rm -f "$AD_DIR/.git/index.lock"
   if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
-  ad_git clean -fdq -- "$ROOT" 2>/dev/null
+  # (-x: files the store's own .gitignore names are debris too)
+  ad_git clean -fdqx -- "$ROOT" 2>/dev/null
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)

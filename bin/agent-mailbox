@@ -847,8 +847,13 @@ doctor)
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   sok=""
   if [ -n "$STORE" ]; then
-    if ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1; then echo "ok   the store is reachable and initialized"; sok=1
-    else echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; fi
+    # (another command working in this name's copy of the store is waited for a few seconds, then said to be busy)
+    if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
+    then echo "ok   the store is reachable and initialized"; sok=1
+    else case $derr in
+      (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
+      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
+    fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
   # record isn't active (retired) comes back with update, not register, which would refuse it; but only its own agent
