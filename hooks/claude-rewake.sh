@@ -2,9 +2,10 @@
 # claude-rewake.sh: the session's mailbox watcher, run as a Claude Code Stop hook with "asyncRewake": true
 # (hooks/hooks.json). Claude Code starts it in the background at every turn end, and an asyncRewake hook that exits 2
 # wakes the session, even an idle one, with what it printed on stderr. So nothing has to be re-armed by hand:
-# - new mail: it exits 2 with the listing;
-# - a watcher that can't go on (the store unreachable, the name retired): it exits 2 with the error, once per
-#   distinct error, then keeps retrying quietly, so the session hears once and still wakes when mail comes;
+# - new mail: it exits 2 with how many new messages there are and the read command (never the store's own text, file
+#   names included);
+# - a watcher that can't go on (the store unreachable, the name retired): it exits 2 naming the commands that show why,
+#   once per distinct error, then keeps retrying quietly, so the session hears once and still wakes when mail comes;
 # - just before the hook's timeout (a day) it exits 2 with a one-line note, so a session that saw no turn all day
 #   is woken once and its turn end starts a new watcher; otherwise the watcher would stop without a word;
 # - stopped (Claude Code ends the session, or the hook is killed): it exits 0, silently.
@@ -321,12 +322,14 @@ while :; do
       note last
       rm -f "$run/error"
       # (said first, then recorded as woken for: a stop between the two wakes the session for it again, never not at all)
-      # (the store's own text, file names included, never goes into the notice: it's read as mail, by `read`)
-      nm=$(sed -n '2,$p' "$run/out" | grep -c .); [ "$nm" = 1 ] && m="1 message" || m="$nm messages"
+      # the new files: the lines after watch's "mail for <name>:" (its output also holds any warning it printed first).
+      # The store's own text, file names included, never goes into the notice: it's read as mail, by `read`
+      new=$(sed -n "/^mail for $name:\$/,\${/^mail for /d;s#.*/##p;}" "$run/out")
+      nm=$(printf '%s\n' "$new" | grep -c .); [ "$nm" = 1 ] && m="1 new message" || m="$nm new messages"
       printf '%s\n' "agent-mailbox: new mail for $name ($m). Read it: $(cmd) read" >&2
       # (a run for one of several stores leaves it pending, for the hook that started it to add once it has passed the
       # wake on)
-      if [ -n "$kid" ]; then sed -n '2,$s#.*/##p' "$run/out" > "$run/pending"; else sed -n '2,$s#.*/##p' "$run/out" >> "$run/woke"; fi
+      if [ -n "$kid" ]; then printf '%s\n' "$new" > "$run/pending"; else printf '%s\n' "$new" >> "$run/woke"; fi
       exit 2 ;;
     2)
       note last
@@ -344,11 +347,11 @@ while :; do
   ek=$(printf '%s' "$err" | sed -E 's/[0-9]+([.:][0-9]+)* ?(tries|try|ms|milliseconds?|seconds?|s|minutes?|m)([^A-Za-z]|$)/N \2\3/g')
   if [ "$rc" -le 128 ] && [ "$ek" != "$(cat "$run/error" 2>/dev/null)" ]; then
     printf '%s' "$ek" > "$run/error"; note last
-    printf '%s\n' "agent-mailbox: the watcher for $name can't go on (exit $rc). See why: $(cmd) doctor. It keeps retrying quietly; tell your human." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name can't go on (exit $rc). See why: $(cmd) doctor, or the watcher's last output in $(word "$run/out"). It keeps retrying quietly; tell your human." >&2
     exit 2
   fi
   [ $(( $(date +%s) - start )) -lt "$max" ] || { note last
-    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing (exit $rc; see why: $(cmd) doctor); it starts again at this turn's end." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing (exit $rc; see why: $(cmd) doctor, or the watcher's last output in $(word "$run/out")); it starts again at this turn's end." >&2
     exit 2; }
   sleep "$iv" & child=$!; wait "$child"; child=""
 done

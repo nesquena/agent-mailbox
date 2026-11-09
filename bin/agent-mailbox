@@ -11,7 +11,7 @@
 #                                       create the mailbox layout in an empty store (once per store)
 #   register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]
 #                                       add yourself to the registry; generates a signing key unless --no-key
-#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired]
+#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired [--force]]
 #                                       change your own registry record
 #   agents                              list registered agents
 #   trust <name>                        accept <name>'s current key after it changed (re-pins it)
@@ -88,8 +88,14 @@ hops() {
       [ ! -L "$hd" ] || (hops "$hd" $((hl + 1)) 1) || return 1
       hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
     # the end must be the very file named, or a link was read as a name other than the one stored (macOS's readlink
-    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file
-    if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || [ "$rp" -ef "$h1" ]; return; fi
+    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file.
+    # So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor; and on macOS a stat of it fails
+    # now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one hop, isn't compared either.
+    # Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see the file behind a
+    # descriptor, so a secret file redirected to stdin is caught only by the private-key check on the body's text (as
+    # before: comparing /dev/fd/<n> with /dev/stdin never refused one)
+    if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || { [ "$h1" = /dev/stdin ] && [ "$n" -eq 1 ] &&
+      [ "$rd" = /dev/fd ] && case $(basename "$rp") in (''|*[!0-9]*) false ;; esac; } || [ "$rp" -ef "$h1" ]; return; fi
     rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
     # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
     # aren't walked again; but not under /proc, where self names the subshell phys ran in
@@ -393,9 +399,9 @@ init)
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
-  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey=""
+  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey="" force=""
   while [ $# -gt 0 ]; do
-    case "$1" in --no-key) nokey=1; shift; continue ;; esac
+    case "$1" in --no-key) nokey=1; shift; continue ;; --force) [ "$cmd" = update ] || unknown "$1"; force=1; shift; continue ;; esac
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
                  --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
@@ -410,6 +416,15 @@ register|update)
     watchv="${watchv:-$(field watch "$rec")}"; status="${status:-$(field status "$rec")}"
   fi
   case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
+  # an agent retires once its inbox is empty (PROTOCOL.md section 4): mail still waiting would no longer wake it.
+  # --force retires anyway, leaving that mail unread
+  if [ "$cmd" = update ] && [ "$status" = retired ] && [ "$(field status "$rec")" != retired ] && [ -z "$force" ]; then
+    left=$(inbox_files "$ME" | while IFS= read -r p; do basename "$p"; done)
+    if [ -n "$left" ]; then nl=$(printf '%s\n' "$left" | grep -c .)
+      shown=$(printf '%s\n' "$left" | head -n 5 | tr '\n' ' '); [ "$nl" -le 5 ] || shown="$shown(and $((nl - 5)) more) "
+      die "your inbox still holds $nl message(s): $shown- read and consume them first (sending on to another agent, as new mail, any that are its job), or pass --force to retire with them unread"
+    fi
+  fi
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
   pub="" own=""
   if [ "$cmd" = update ]; then
@@ -440,7 +455,7 @@ register|update)
       pub=$(own_pub)
     else
       require_sigs && die "this store requires signatures, and ssh-keygen (OpenSSH 8.1+) isn't available here"
-      warn "ssh-keygen not found: registering without a signing key (mail from you will be unsigned)"
+      warn "ssh-keygen -Y (OpenSSH 8.1+) isn't available: registering without a signing key (mail from you will be unsigned)"
     fi
   fi
   [ -z "$pub" ] || matches "$KEY_RE" "$pub" || die "that doesn't look like an SSH public key"
@@ -594,7 +609,7 @@ send)
 }" "${release:+release: $release
 }" "$text")
   if [ -n "$signer" ]; then put_signed "$f" "$msg" "$rk"; paths="$paths $(rel "$f") $(rel "$f").sig"
-  else warn "sending unsigned (no key at $KEY, ssh-keygen missing, its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
+  else warn "sending unsigned (no key at $KEY, no ssh-keygen -Y (OpenSSH 8.1+), its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -816,12 +831,28 @@ doctor)
   chk "the mailbox folder (root) is valid" root_ok "set it with setup --root: letters, digits, '.', '_' and '-'; no part '..' or '.git' in any case, or starting with '-'"
   chk "the branch name is valid" 'branch_ok "$BRANCH"' "set it with setup --branch${AGENT_MAILBOX_BRANCH:+ and unset AGENT_MAILBOX_BRANCH}: a name git accepts, of letters, digits, '.', '_', '-' and '/'"
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
+  sok=""
   if [ -n "$STORE" ]; then
-    ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1 && echo "ok   the store is reachable and initialized" ||
-      { echo "FAIL the store is reachable and initialized"; ok=1; }
+    if ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1; then echo "ok   the store is reachable and initialized"; sok=1
+    else echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; fi
   fi
-  [ -z "$ME" ] || [ -z "$STORE" ] || { ( load_adapter >/dev/null 2>&1 && active "$ME" ) && echo "ok   $ME is registered and active" ||
-      { echo "FAIL $ME is registered and active: run register"; ok=1; }; }
+  # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
+  # record isn't active (retired) comes back with update, not register, which would refuse it; but only its own agent
+  # should, so the hint says so: by key when the record's key and this agent's can be compared, otherwise in words
+  [ -z "$ME" ] || [ -z "$sok" ] || case $( load_adapter >/dev/null 2>&1 || exit
+      if active "$ME"; then echo ok
+      elif [ -f "$(record "$ME")" ]; then
+        rk=$(field key "$(record "$ME")"); mk=""; [ -z "$rk" ] || [ ! -f "$KEY" ] || mk=$(own_pub)
+        if [ -n "$rk" ] && [ -n "$mk" ]; then [ "$rk" = "$mk" ] && echo mine || echo other
+        elif [ -n "$rk" ] && [ -f "$KEY" ]; then echo nopub; else echo retired; fi
+      fi ) in
+    (ok) echo "ok   $ME is registered and active" ;;
+    (mine) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
+    (other) echo "FAIL $ME is registered and active: it's another agent's retired name here (its key isn't yours); pick another name"; ok=1 ;;
+    (retired) echo "FAIL $ME is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name"; ok=1 ;;
+    (nopub) echo "FAIL $ME is registered and active: it's retired here: if it's yours, restore your key's public half ('ssh-keygen -y -f $KEY > $KEY.pub'), then run update --status active; if not, pick another name"; ok=1 ;;
+    (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
+  esac
   [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;

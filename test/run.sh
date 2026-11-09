@@ -347,6 +347,23 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
       failpeek all bob watch 1 30
 
+    # git's own prompts are off: every git call the adapter makes runs with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never.
+    # A local store asks for no credential, so this checks what git is given, through a git on PATH that logs each call.
+    # Both are unset first, so a value from the environment the suite runs in can't stand in for the adapter's own
+    mkdir -p "$W/gitlog"; printf '%s\n' '#!/bin/sh' \
+      'printf "%s %s|%s\n" "${GIT_TERMINAL_PROMPT-unset}" "${GCM_INTERACTIVE-unset}" "$*" >> "$GITLOG"' \
+      'exec "$REAL_GIT" "$@"' > "$W/gitlog/git"; chmod +x "$W/gitlog/git"
+    gitlog() { (unset GIT_TERMINAL_PROMPT GCM_INTERACTIVE; REAL_GIT=$real_git GITLOG="$T/gitlog" PATH="$W/gitlog:$PATH"
+      export REAL_GIT GITLOG PATH; as "$@"); }
+    rm -f "$T/gitlog"; as np setup --store "$STORE" --name np >/dev/null
+    gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
+    # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
+    calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
+    for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
+    bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
+    [ -n "$calls" ] && [ -z "$bad" ] && ok "every git call the adapter makes runs with git's own prompts off" ||
+      no "a git call could wait on git's own prompt" "$bad"
+
     # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
     # from the value it read, so a peek moving it too made a concurrent send fail
     for C in "$W/home-bob/.local/state/agent-mailbox/checkouts/"*; do :; done
@@ -566,8 +583,11 @@ exec "%s" "$@"
   [ -z "$(git -C "$C" for-each-ref --format='%(refname)' | grep big)" ] && ok "a new checkout fetches only the mailbox branch" ||
     no "a new checkout fetched another branch" "$(git -C "$C" for-each-ref --format='%(refname)')"
   # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
-  expect "doctor on a branch the store doesn't have says it isn't initialized" 1 "FAIL the store is reachable and initialized" \
+  expect "doctor on a branch the store doesn't have says it isn't initialized, and where to see why" 1 "FAIL the store is reachable and initialized: run agents to see why" \
     env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
+  out=$(env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor 2>&1)
+  case "$out" in (*"registered and active"*) no "doctor gave a name hint from a store it couldn't read" "$out" ;;
+    (*) ok "and gives no hint about the name, from a store it couldn't read" ;; esac
   expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
   [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
     ok "and the new branch holds only its own mailbox" || no "the new branch carries other files" "$(git --git-dir="$S" ls-tree -r --name-only other)"
@@ -950,7 +970,7 @@ a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$
   else sk "a native Claude Code is told by asking it (the stand-in didn't build)"; fi
 else sk "a native Claude Code is told by asking it (no C compiler)"; fi
 r=$(rewake r1); rc=$?
-case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 message). Read it: "*"--as rw read") ok "new mail wakes the session with a count and the read command" ;;
+case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--as rw read") ok "new mail wakes the session with a count and the read command" ;;
   (*) no "new mail wakes the session with a count and the read command" "$rc $r" ;; esac
 # (the notice holds none of the store's text, file names included: they're read as mail)
 case "$r" in (*rw-1*) no "the notice names no file" "$r" ;; (*) ok "the notice names no file" ;; esac
@@ -966,7 +986,7 @@ expect "a plugin path with a backslash prints a read command that works" 0 "rw-b
 expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
 r=$(rewake r1); rc=$?
-case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
+case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
     no "new mail beside old wakes it with only the new" "$(cat "$R1/woke")" ;;
   (*) no "new mail beside old wakes it with only the new" "$rc $r" ;; esac
 as rw consume "$(as rw list | grep rw-1)" >/dev/null
@@ -1057,14 +1077,14 @@ rm -f "$R1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session, naming the command that shows why" 2 \
-  "can't go on \(exit 1\)\. See why: .* --as rw doctor\. It keeps retrying quietly; tell your human\.$" rewake r1
+  "can't go on \(exit 1\)\. See why: .* --as rw doctor, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
 # the same error again doesn't wake it: the hook keeps retrying, quietly, and wakes for mail once it can go on
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error again doesn't wake it" ||
   no "the same error again doesn't wake it" "$(cat "$T/bg.out")"
 mv "$RC.off" "$RC"; echo hi | as rx send rw rw-3 - >/dev/null 2>&1
 wait "$bg"; rc=$?
-case "$rc $(cat "$T/bg.out")" in ("2 agent-mailbox: new mail for rw (1 message)."*) grep -q rw-3 "$R1/woke" &&
+case "$rc $(cat "$T/bg.out")" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-3 "$R1/woke" &&
     ok "once it can go on, new mail wakes it, without a restart" || no "once it can go on, new mail wakes it, without a restart" "$(cat "$R1/woke")" ;;
   (*) no "once it can go on, new mail wakes it, without a restart" "exit $rc: $(cat "$T/bg.out")" ;; esac
 expect "and the error is forgotten" 1 - test -e "$R1/error"
@@ -1072,6 +1092,7 @@ expect "and the error is forgotten" 1 - test -e "$R1/error"
 # stand-in CLI fails its watch with the text in FAKEERR, {} replaced by a count that rises at every try
 P2="$T/plug2"; mkdir -p "$P2/hooks" "$P2/bin"; cp "$P/hooks/claude-rewake.sh" "$P2/hooks/"
 printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${FAKEHANG:-}" ] || { sh -c "sleep $FAKEHANG; :"; exit 1; }' \
+  '[ -z "${FAKEMAIL:-}" ] || { echo "agent-mailbox: publishing 2 commit(s) left from an earlier command" >&2; printf "mail for rw:\nmailbox/inbox/rw/%s\n" "$FAKEMAIL"; exit 0; }' \
   'n=$(cat "$FAKEN" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKEN"' \
   'sed "s/{}/$n/g" "$FAKEERR" >&2; exit 1' > "$P2/bin/agent-mailbox"; chmod +x "$P2/bin/agent-mailbox"
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
@@ -1088,6 +1109,11 @@ wait "$bg"; rc=$?
 case "$rc $(cat "$T/bg.out")" in (*"HTTP 404"*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;;
   ("2 "*"can't go on"*) ok "but a different error does" ;; (*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;; esac
 rm -f "$R1/error"
+# a warning watch prints before its listing (a commit left from an earlier command, published) isn't counted as mail
+r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md); rc=$?
+case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20260101T000000Z-rx-fm.md &&
+    ok "a warning watch prints before its listing isn't counted as mail" || no "a warning watch prints before its listing isn't counted as mail" "not recorded" ;;
+  (*) no "a warning watch prints before its listing isn't counted as mail" "$rc $r" ;; esac
 # a watch that hangs (a fetch over a dead connection) can't run the hook past the day: at its deadline (here the 2 s
 # limit, an interval and 15 s, checked every 15 s) the session hears the daily note, and nothing it started lingers
 # (its length, 99 then this run's pid, tells this run's hang from another's)
@@ -1232,7 +1258,7 @@ n=0 lost=""; while [ $n -lt 10 ]; do rm -f "$RS/session-stores/r8"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
 r=$(rewake r9); rc=$?
-case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 message). Read it: "*"--config "*second*" --as rw read")
+case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--config "*second*" --as rw read")
   ok "mail on the second store wakes the session with that store's read command" ;;
   (*) no "mail on the second store wakes the session with that store's read command" "$rc $r" ;; esac
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
@@ -1242,7 +1268,7 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
 r=$(rewake r9); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
-  ("2 agent-mailbox: new mail for rw (1 message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
+  ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail on the first store wakes it, and mail it woke for on the other doesn't" ||
     no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$(cat "$RS/rewake/rw/r9@$S1/woke")" ;;
   (*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;; esac
@@ -1371,9 +1397,10 @@ if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >
       no "and the other store's mail still wakes it" "$(cat "$RS/rewake/rw/r9@$S1/woke")" ;; (*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;; esac
 else no "and the other store's mail still wakes it" "it didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 mv "$C2.off" "$C2"
-# retiring the name on one store records it so, and the hook then watches only the other
+# retiring the name on one store records it so, and the hook then watches only the other (--force: mail sent above is
+# still waiting there, and this is about the session's list, not the inbox)
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired >/dev/null 2>&1
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired --force >/dev/null 2>&1
 expect "retiring the name on one store records it in the session's list" 0 - test "$(tail -n 1 "$RS/session-stores/r9")" = "$S2 rw -"
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
@@ -1440,11 +1467,43 @@ expect "a session id holding a / names no other session's record" 0 "^name: *h2$
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=../session-configs/sr AGENT_MAILBOX_NAME=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
 cmp -s "$W/sr-config-before" "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" &&
   ok "and no other session's watch rewrites its config record" || no "another session's watch rewrote sr's config record"
+# an agent retires once its inbox is empty: with mail waiting, update refuses, naming it, unless --force
+echo x | as h1 send h2 waiting-1 - >/dev/null 2>&1
+expect "retiring with mail still waiting is refused, naming it" 1 "still holds .*-h1-waiting-1\.md.*--force" as h2 update --status retired
+expect "and the record stays active" 0 "^h2 .*active" as h1 agents
+expect "--force retires anyway" 0 "update: h2 \(retired\)" as h2 update --status retired --force
+expect "and the agent comes back with update" 0 "update: h2 \(active\)" as h2 update --status active
+expect "--force is for update only" 1 "unknown option --force" as h2 register --kind t --about t --force
+# past five waiting messages, it names five and counts the rest
+for i in 2 3 4 5 6 7; do echo x | as h1 send h2 "waiting-$i" - >/dev/null 2>&1; done
+expect "past five, it names five and counts the rest" 1 "still holds [0-9]+ message\\(s\\): .*\\(and [0-9]+ more\\)" as h2 update --status retired
 for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
+expect "with the inbox empty, retiring works" 0 "update: h2 \\(retired\\)" as h2 update --status retired
+as h2 update --status active >/dev/null 2>&1
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name" \
+  env HOME="$W/home-h2" "$SH" "$CLI" doctor
+# a newcomer who picked that retired name is told it may not be theirs; with a key of its own that isn't the record's,
+# that it isn't
+as h2b setup --store "$T/store" --adapter dir --name h2 >/dev/null
+expect "a newcomer under a retired name isn't simply told to take it back" 1 "it's retired here: if it's yours.*if not, pick another name" \
+  env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+if [ -n "$SSH" ]; then
+  mkdir -p "$W/home-h2b/.config/agent-mailbox/keys"; ssh-keygen -q -t ed25519 -N '' -f "$W/home-h2b/.config/agent-mailbox/keys/h2"
+  tamper_dir() { (cd "$T/store" && sh -c "$1"); }
+  hk=$(cut -d' ' -f1,2 "$W/home-h2b/.config/agent-mailbox/keys/h2.pub")
+  ssh-keygen -q -t ed25519 -N '' -f "$T/h2-other"; ok_k=$(cut -d' ' -f1,2 "$T/h2-other.pub")
+  tamper_dir "sed -i.bak 's|^key: .*|key: $ok_k|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key isn't the record's is told it's another agent's" 1 "another agent's retired name here.*pick another name" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: $hk|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key is the record's is told to come back" 1 "it's retired here; run update --status active to come back" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: |' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+else sk "doctor tells a retired name apart by key (no ssh-keygen -Y)"; fi
 
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
@@ -1483,6 +1542,20 @@ if command -v perl >/dev/null 2>&1; then
     close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
   expect "and its text is the body" 0 "^from a socket$" block i2 sock
 else sk "a socket on stdin sends (no perl)"; fi
+# on macOS, /dev/stdin leads to /dev/fd/0, and a stat of that fails now and then while a pipe's writer exits (EBADF).
+# A sandbox that denies that stat makes it fail every time; the body is still read from fd 0, so the send goes through
+if [ "$(uname -s)" = Darwin ] && command -v sandbox-exec >/dev/null 2>&1 &&
+   printf '%s\n' '(version 1)' '(allow default)' '(deny file-read-metadata (regex #"^/dev/fd/[0-9]+$"))' > "$T/nofd.sb" &&
+   echo x | sandbox-exec -f "$T/nofd.sb" /bin/sh -c '! [ /dev/fd/0 -ef /dev/stdin ] && [ "$(cat)" = x ]' 2>/dev/null; then
+  expect "a pipe on stdin sends when /dev/fd/0 can't be stat'ed" 0 "^sent" \
+    sh -c "echo 'from a pipe' | HOME='$W/home-i1' sandbox-exec -f '$T/nofd.sb' '$SH' '$CLI' send i2 nofd -"
+  expect "and its text is the body" 0 "^from a pipe$" block i2 nofd
+else sk "a pipe on stdin sends when /dev/fd/0 can't be stat'ed (macOS with sandbox-exec only)"; fi
+# the walk's earlier hops still count when it ends at /dev/fd/<n>: a link in the config folder that leads to stdin
+ln -s /dev/stdin "$W/home-i1/.config/agent-mailbox/to-stdin"
+expect "a config-folder link to /dev/stdin is refused" 1 "refusing to send" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 link-stdin '$W/home-i1/.config/agent-mailbox/to-stdin' < '$T/b'"
+rm -f "$W/home-i1/.config/agent-mailbox/to-stdin"
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
 # the name record is advisory: a send whose record can't be written warns, and still sends
@@ -2199,6 +2272,21 @@ mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
 " "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
 n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
   env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
+# a decoy folder link named as readlink shows the real one, leading to /dev/fd: the end it reaches isn't exempt from
+# the same-file check (only /dev/stdin's own link to fd/<n> is). macOS only: elsewhere /dev/stdin leads through /proc
+if [ "$(uname -s)" = Darwin ]; then
+  mkdir -p "$T/dfd/real"; ln -s "$H/.ssh/config" "$T/dfd/real/9"; ln -s "$T/dfd/real" "$T/dfd/d
+"; ln -s /dev/fd "$T/dfd/d?"; ln -s "$T/dfd/d
+/9" "$T/dfd/notes.md"
+  n=$((n+1)); expect "or a chain whose shown name leads into /dev/fd" 1 "refusing to send" \
+    env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/dfd/notes.md"
+else sk "a chain whose shown name leads into /dev/fd is refused (macOS only)"; fi
+# stdin's link shown as a digit-named file that isn't in /dev/fd isn't exempt either
+mkdir -p "$T/lierl" "$T/decoy"; echo decoy > "$T/decoy/7"
+printf '#!/bin/sh\ncase "$1" in (/dev/stdin) echo "%s/decoy/7" ;; (*) exec "%s" "$@" ;; esac\n' "$T" "$(command -v readlink)" > "$T/lierl/readlink"
+chmod +x "$T/lierl/readlink"
+n=$((n+1)); expect "or stdin whose link is shown as a digit-named file outside /dev/fd" 1 "can't be followed" \
+  sh -c "echo hi | env PATH='$T/lierl:$PATH' HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
@@ -2227,5 +2315,8 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+# install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
+  env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]

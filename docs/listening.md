@@ -53,11 +53,12 @@ start the watcher again whenever it ends, or let a hook do it, as below.
 
 **Example: the Claude Code plugin** (`hooks/claude-rewake.sh`) runs this loop for the agent. A Stop hook that
 Claude Code starts in the background at every turn end (`asyncRewake`) runs `watch`. When `watch` exits with
-mail, the hook exits 2, which wakes the session with a count of new messages and the `read` command. Its notices
-never repeat the store's or its host's text (file names and errors included): that's read as mail, by `read`, or
-shown by `doctor`. It also:
+mail, the hook exits 2, which wakes the session with a count of the new messages (`read` shows all the mail waiting)
+and the `read` command. Its notices never repeat the store's or its host's text (file names and errors included):
+mail is read by `read`, and an error by the commands a notice names. It also:
 - keeps a list of the mail it already woke the session for, passing it as `--except`;
-- reports an error once, naming the `doctor` command that shows it, then retries quietly;
+- reports an error once, naming the commands that show why (`doctor`, or the watcher's last output, a local file),
+  then retries quietly;
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
 - runs only one instance per session;
 - acts only where it can tell that Claude Code runs it in the background (a session in a terminal, Claude Code on
