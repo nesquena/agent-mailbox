@@ -232,6 +232,8 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
+  break (#83).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
@@ -267,6 +269,8 @@ First version.
   isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
   name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
   none (#76).
+- **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
+  names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
 - **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
   (remove the clone it names and run the command again), when it saw the store's branch before it was reset or
   re-created, or when its unpublished init is for a folder another agent's init has since taken. Nothing it holds is
