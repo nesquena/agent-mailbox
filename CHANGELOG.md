@@ -57,8 +57,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - `read` names the signer from the signed header (`[verified: from <name>]`), says when the file name doesn't name
   that sender, and verifies the copy it shows (#84).
 - A message header holds only plain `key: value` lines, each key once; any other header reads `bad` (#84).
-- A signature doesn't name the store, so `JOIN.md` and `docs/security.md` say how to give each store its own key
-  (#81).
+- A signature doesn't name the store, so `JOIN.md` and `docs/security.md` say how to give each store its own key (#81,
+  #110).
 
 **Holds**
 
@@ -71,7 +71,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
   part of it (#23).
 - Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict;
-  `send --hold` or `--release` waits for the next second after your previous one from this state folder (#23).
+  `send --hold` or `--release` waits for the next second after your previous one from this state folder, unless both
+  run at once in a dir store (#23).
 - Items and versions compare as text, so `3.1` and `3.10` differ (#82).
 - A hold or release whose signature verifies (or whose pinned sender's key changed or went missing), whose `hold:` or
   `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header holds other lines that aren't, blocks its
@@ -89,7 +90,7 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 
 **Reading and sending**
 
-- `read`, `list`, `watch` and `agents` spell out control characters other than tab and line feed, bidi embeddings,
+- `read`, `list`, `watch` and `agents` spell out control characters (other than tab and line ends), bidi embeddings,
   overrides and isolates, line and paragraph separators, and tag characters from the store (`\x1b`, `<U+202E>`);
   zero-width characters pass as they are; no body line can start like a message boundary, and `agents` cuts a record's
   fields to 200 bytes (#22).
@@ -99,7 +100,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - With no mail, `list` and `read` under a name with no record in the mailbox stop with an error, not "no mail" (#76).
 - A reply without `--context` takes the context of the message it answers, while that message is still in your inbox
   (a `--consume` in the same send counts) (#8); `send` never reuses a file name it used from this state folder, unless
-  the clock goes back or two sends under that name run at once in a dir store (#66).
+  the clock goes back, two sends under one agent name run at once in a dir store, or it couldn't keep its record of
+  the name (it warns) (#66).
 - `send -` reads stdin as it is: a closed stdin fails at once, a socket works, and on macOS a pipe no longer fails now
   and then (#49, #63).
 - `update` keeps the fields and text it doesn't manage in your record (#72), succeeds when nothing changed (#88,
@@ -117,8 +119,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   it (#27).
 - A store named by a URL, `host:path` or an absolute path is cloned from the agent's own state folder, so nothing in
   the folder a command runs from stands in for it (#27); git's own credential prompt is off, so a credential it would
-  ask for in the terminal fails at once; an askpass program, another credential helper's own prompt and ssh's prompts
-  still wait (#64).
+  ask for in the terminal fails at once; an askpass program, a credential helper's own prompt (Git Credential
+  Manager's is off too) and ssh's prompts still wait (#64).
 - The mailbox branch is matched by its exact name (#65), and a branch name git refuses is refused (#19).
 - A commit an earlier command couldn't push is published by the next command under the same name that reads the store,
   a first `init` included (#67); a command that can't push such a commit says it wrote nothing of its own (#102); and
@@ -129,7 +131,7 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 **The command line**
 
 - `--as` or `--config` after the command is refused; values are validated with `printf`, and `setup` refuses a store,
-  folder or branch holding a line break, and a folder, branch or name holding one is refused from any source (#8).
+  folder, branch or name holding a line break (#8).
 - Values, bodies and stores that start with `-` are taken as they are, except a `holds` item (#10, #11); an exported
   `CDPATH` is ignored (#6); the CLI finds its adapters through the link `install.sh` makes (#2).
 - `doctor` checks the setup, names what to run next, and says when a store isn't reachable or initialized (#10, #71).
@@ -152,10 +154,10 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   run a command under no name, from a copy of the config without its `name =` line and with no name from the
   environment or a session:
   `env -u AGENT_MAILBOX_NAME -u AGENT_MAILBOX_SESSION -u CLAUDE_CODE_SESSION_ID agent-mailbox --config <copy> agents`.
-  It prints a line starting "publishing", and exits 0 once it has published it from the clone all names shared. Don't
-  send the message again instead: the stranded commit would still be there, and a later command under no name would
-  publish it as a duplicate. If you already sent it again, the next command run under no name will publish the
-  stranded copy as well: tell the recipient to consume the duplicate (#54).
+  It says it's publishing commit(s) left from an earlier command, and exits 0 once it has published it from the clone
+  all names shared. Don't send the message again instead: the stranded commit would still be there, and a later
+  command under no name would publish it as a duplicate. If you already sent it again, the next command run under no
+  name will publish the stranded copy as well: tell the recipient to consume the duplicate (#54).
 - **A git mailbox on a branch named `HEAD` or starting with `-`** is refused. Copy it to a new branch and change each
   agent's `branch =` line:
   `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`. Pins
@@ -171,12 +173,13 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   your inbox can wake you once more, and one new message can wake you twice (#58).
 - **Behaviour that changed:** `holds` stops with an error when it can't read the store (#23); with no mail, `list` and
   `read` under an unregistered name exit 1 (#76); retiring with mail waiting needs `--force` (#73); a header key that
-  isn't plain makes a message read `bad` (#84); a mailbox branch deleted from the store is an error, not old mail from
-  the local clone (#27); an `init` that loses a race for one folder exits 1, not 4 (#68); a stdin open only for
-  writing is refused (#49); git's own credential prompt is off, so a credential it would ask for in the terminal fails
-  at once; an askpass program, another credential helper's own prompt and ssh's prompts still wait (#64); a key with a
-  passphrase and no `.pub` beside it makes a strict store refuse to send, and an open one send unsigned (#40); and
-  signing reads the message on stdin, so a key with a passphrase is asked for through an askpass program whenever
-  `DISPLAY` is set, even in a terminal (unset `DISPLAY`, or on OpenSSH 8.4 or later set `SSH_ASKPASS_REQUIRE=never`,
-  to be asked in the terminal); with no terminal it needs `ssh-agent`, or `SSH_ASKPASS` with `DISPLAY` set or, on
-  OpenSSH 8.4 or later, `SSH_ASKPASS_REQUIRE=force` (#40).
+  isn't plain makes a message read `bad` (#84); a store that can't be reached, or whose mailbox branch was deleted, is
+  an error, not old mail from the local clone (#27); an `init` that loses a race for one folder exits 1, not 4 (#68);
+  `send -` reads stdin from where it stands, and refuses one open only for writing (#49); git's own credential prompt
+  is off, so a credential it would ask for in the terminal fails at once; an askpass program, a credential helper's
+  own prompt (Git Credential Manager's is off too) and ssh's prompts still wait (#64); a key with a passphrase and no
+  `.pub` beside it makes a strict store refuse to send, and an open one send unsigned (#40); and signing reads the
+  message on stdin, so a key with a passphrase is asked for through an askpass program whenever `DISPLAY` is set, even
+  in a terminal (unset `DISPLAY`, or on OpenSSH 8.4 or later set `SSH_ASKPASS_REQUIRE=never`, to be asked in the
+  terminal); with no terminal it needs `ssh-agent`, or `SSH_ASKPASS` with `DISPLAY` set or, on OpenSSH 8.4 or later,
+  `SSH_ASKPASS_REQUIRE=force` (#40).
