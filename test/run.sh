@@ -169,6 +169,17 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
     ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
+  # an inbox file name with a line break in it is skipped, whole: nothing in the folder a command runs from is listed
+  mkdir -p "$T/proj"; echo "PROJECT ONLY" > "$T/proj/notes.md"
+  tamper 'echo x > "mailbox/inbox/alice/x
+notes.md"'
+  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1)
+    case $out in (*"PROJECT ONLY"*|*notes.md*) no "$c lists a file outside the inbox" "$out" ;;
+      (*) ok "$c skips a file name with a line break in it" ;; esac; done
+  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1)
+  printf '%s\n' "$out" | grep -qx 'notes.md' && no "watch lists part of a file name" "$out" ||
+    ok "and so does watch"
+  tamper 'rm -f mailbox/inbox/alice/x*'
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins

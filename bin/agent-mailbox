@@ -271,8 +271,9 @@ active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = act
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
+# (names are listed one per line, so a name with a line break in it is skipped)
 inbox_files() { [ -d "$M/inbox/$1" ] || return 0
-  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
+  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" | sort | while IFS= read -r p; do
     basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done; }
 # no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
 # so a link a writer plants in a shared store can't redirect writes outside it
