@@ -2236,6 +2236,7 @@ if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$
 else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
 # where a link kept in ~/.ssh leads, named directly: the file one leads to, and a file under the folder one leads to
 refused "or the file a link in ~/.ssh leads to, named directly" "$T/ssh-config"
+ln "$T/ssh-config" "$T/hl-ssh-config" && refused "or a hard link to the file a link in ~/.ssh leads to" "$T/hl-ssh-config"
 refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
 # at any hop of the walk: a link inside that folder, named there; and a folder link written with a trailing / that
 # leads through another link

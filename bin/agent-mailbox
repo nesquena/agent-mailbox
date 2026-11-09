@@ -310,11 +310,12 @@ rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${
 # SF empty), by path or as a file (a hard link, or a name in another case on a file system that ignores case); or its
 # path can't be followed to the end (SF is -). Then `send` won't mail it out, however it's asked to.
 # ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine.
-# It follows symbolic links only: another name for a protected file by a hard link, or through a bind mount, is caught
-# only for the config file and key (by -ef). The state folder's links aren't followed out: the CLI keeps none there
+# Another name for a protected file by a hard link, or through a bind mount, is caught (by -ef) for the config file and
+# key, and for the file a link kept in ~/.ssh or the config folder leads to, but not for a file inside a protected
+# folder. The state folder's links aren't followed out: the CLI keeps none there
 secret_file() {
   # a path hops can't follow to the end counts as secret: refuse rather than guess
-  SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"; end=$(real "$1") || end=""
+  SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"
   # the account's own home, from its login name (a name that's safe to expand with ~), when HOME isn't it
   ah=""; an=$(id -un 2>/dev/null) && matches '^[A-Za-z0-9._][A-Za-z0-9._-]*$' "$an" && eval "ah=~$an" &&
     case "$ah" in (/*) [ "$ah" != "${HOME:-}" ] || ah="" ;; (*) ah="" ;; esac
@@ -327,11 +328,12 @@ secret_file() {
     # protected folder itself (~ or /) is skipped, since every file under it would be refused; and only links kept in
     # those folders count, not a link inside the folder one leads to, when its own target is named directly
     [ "$SF" != "$STATE" ] || continue
-    lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do if [ -d "$l" ]; then phys "$l"; else real "$l"; fi; done)
+    # (a link whose target is the body itself, as a file, by another name, a hard link say, counts by the body's own path)
+    lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do
+      if [ -d "$l" ]; then phys "$l"; elif [ "$1" -ef "$l" ]; then real "$1"; else real "$l"; fi; done)
     while IFS= read -r lt; do
-      case "$lt" in (''|/) continue ;; esac; case "$sd/" in ("$lt"/*) continue ;; esac
+      case "$sd/" in ("$lt"/*) continue ;; esac
       case "$sp" in (*"$NL$lt$NL"*|*"$NL$lt/"*) SF="$lt, where a link in $SF leads"; return 0 ;; esac
-      case "$end" in ("$lt"|"$lt"/*) SF="$lt, where a link in $SF leads"; return 0 ;; esac
     done <<EOF_LINKS
 $lts
 EOF_LINKS
