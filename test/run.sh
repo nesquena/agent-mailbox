@@ -2397,6 +2397,42 @@ refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/co
 # on a file system that ignores case, a protected folder named in another case is the same folder
 if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$H/.SSH/config"
 else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
+# where a link kept in ~/.ssh leads, named directly: the file one leads to, and a file under the folder one leads to
+refused "or the file a link in ~/.ssh leads to, named directly" "$T/ssh-config"
+ln "$T/ssh-config" "$T/hl-ssh-config" && refused "or a hard link to the file a link in ~/.ssh leads to" "$T/hl-ssh-config"
+# a link to / in ~/.ssh leads to every file, so it's skipped: an ordinary file reached through a link to / still sends
+ln -s / "$H/.ssh/root"; ln -s / "$T/rootln"; echo ok > "$T/ok.md"
+expect "a link to / in ~/.ssh doesn't refuse an ordinary file reached through a link to /" 0 "^sent " as sec1 send sec2 rootok "$T/rootln$T/ok.md"
+rm -f "$H/.ssh/root" "$T/rootln"; as sec2 consume "$(as sec2 list | grep -- '-sec1-rootok\.md$' | sed 's#.*/##')" >/dev/null 2>&1
+# a link in ~/.ssh whose path has a line break can't be checked: every send is refused, naming the folder. So it is
+# when the line break is in a folder's name on the way
+ln -s "$T/ok.md" "$H/.ssh/odd
+name"
+expect "a link in ~/.ssh whose name has a line break refuses a send, saying so" 1 "holds a link whose path has a line break" as sec1 send sec2 nlok "$T/ok.md"
+rm -f "$H/.ssh/odd
+name"
+mkdir "$H/.ssh/nl
+dir" && ln -s "$T/ok.md" "$H/.ssh/nl
+dir/cfg"
+expect "and so does one inside a folder whose name has a line break" 1 "holds a link whose path has a line break" as sec1 send sec2 nlok2 "$T/ok.md"
+rm -rf "$H/.ssh/nl
+dir"
+refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
+# at any hop of the walk: a link inside that folder, named there; and a folder link written with a trailing / that
+# leads through another link
+mkdir -p "$T/dot2/inner" "$T/vault2" "$T/realdir2"; echo s > "$T/vault2/k"; echo s > "$T/realdir2/f"
+ln -s "$T/vault2/k" "$T/dot2/inner/k"; ln -s "$T/dot2/inner" "$H/.ssh/inner.d"
+refused "or a link inside the folder a link in ~/.ssh leads to, named there" "$T/dot2/inner/k"
+ln -s "$T/realdir2" "$T/dlink2"; ln -s "$T/dlink2/" "$H/.ssh/trail"
+refused "or a file under a folder a link in ~/.ssh leads to through a trailing / and another link" "$T/realdir2/f"
+# the CLI's config file by another name: a hard link to it
+ln "$C/config" "$T/hl-config" && refused "or a hard link to the CLI's config file" "$T/hl-config"
+# the account's own ~/.ssh when HOME is elsewhere, as it is here: its known_hosts, if it has one
+an=$(id -un 2>/dev/null); ah=""
+case "$an" in (''|*[!A-Za-z0-9._-]*|[-]*) ;; (*) eval "ah=~$an" ;; esac
+if [ -n "$ah" ] && [ "$ah" != "$H" ] && [ -f "$ah/.ssh/known_hosts" ]; then
+  refused "or a file in the account's own ~/.ssh, when HOME is elsewhere" "$ah/.ssh/known_hosts"
+else sk "a file in the account's own ~/.ssh is refused (the account has no ~/.ssh/known_hosts here)"; fi
 refused "or a link to such a file" "$T/via-dir.md"
 refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"
@@ -2409,7 +2445,12 @@ refused "or a file in its state folder" "$S/note"
 refused "or one named with a leading //" "/$H/.ssh/id_ed25519"
 # only where /dev/stdin is a link through /proc (Linux) can send see which file was redirected in
 case $(readlink /dev/stdin 2>/dev/null) in
-  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI" ;;
+  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI"
+    expect "or a hard link to a ~/.ssh link's target, redirected to stdin" 1 "refusing to send" \
+      in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir-hl - < "$4"' x "$H" "$SH" "$CLI" "$T/hl-ssh-config"
+    ln "$T/ssh-config" "$T/hl-del"
+    expect "or a deleted hard link to a ~/.ssh link's target, named as /dev/fd/3" 1 "refusing to send" \
+      sh -c '{ rm "$1"; HOME="$2" "$3" "$4" send sec2 sec-fd-del /dev/fd/3; } 3< "$1"' x "$T/hl-del" "$H" "$SH" "$CLI" ;;
   (*) sk "or one redirected to stdin (/dev/stdin isn't a link through /proc here)" ;;
 esac
 for f in own own.pub; do
@@ -2480,6 +2521,10 @@ refused "or a relative link under a folder link, read from where it really sits"
 printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here, and so is its END PRIVATE KEY line.\nPuTTY files end with a Private-MAC: line.\n' > "$T/prose.md"
 printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me\n-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n' > "$T/pub.md"
 echo "notes" > "$H/.ssh-notes.md"
+# a link in ~/.ssh to a folder that holds ~/.ssh itself is skipped: it would stop every send
+ln -s "$H" "$H/.ssh/up"; echo ok > "$H/ok-under-home.md"
+expect "a link in ~/.ssh to the home folder doesn't stop an ordinary send" 0 "^sent " as sec1 send sec2 up-ok "$H/ok-under-home.md"
+rm -f "$H/.ssh/up"
 expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"
 expect "a body with public keys sends" 0 "^sent " as sec1 send sec2 pub "$T/pub.md"
 expect "a file beside ~/.ssh sends" 0 "^sent " as sec1 send sec2 beside "$H/.ssh-notes.md"

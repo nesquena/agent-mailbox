@@ -97,8 +97,10 @@ hops() {
     # So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor; and on macOS a stat of it fails
     # now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one hop, isn't compared either.
     # Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see the file behind a
-    # descriptor, so a secret file redirected to stdin is caught only by the private-key check on the body's text (as
-    # before: comparing /dev/fd/<n> with /dev/stdin never refused one)
+    # descriptor, so a secret file redirected to stdin, or named as /dev/fd/<n>, is caught only by the private-key check
+    # on the body's text (as before: comparing /dev/fd/<n> with /dev/stdin never refused a secret). $PWD names the
+    # folder the command runs in: sh, dash and bash keep an inherited PWD only when it's that same folder, so
+    # $PWD/<file> and <file> are one file
     if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || { [ "$h1" = /dev/stdin ] && [ "$n" -eq 1 ] &&
       [ "$rd" = /dev/fd ] && case $(basename "$rp") in (''|*[!0-9]*) false ;; esac; } || [ "$rp" -ef "$h1" ]; return; fi
     rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
@@ -305,19 +307,51 @@ no_link() {
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
 rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
-# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh or this CLI's config or state folder
-# (set in SF), or the file is its config file or signing key (either half; SF empty), or its path can't be followed
-# to the end (SF is -), so `send` won't mail it out
-# however it's asked to.
-# ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine
+# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh (this HOME's, or the account's own
+# when HOME is elsewhere) or this CLI's config or state folder, or is (or is under) where a link kept in ~/.ssh or the
+# config folder leads (set in SF); or the file is the same file as the CLI's config file or signing key (either half;
+# SF empty), by path or as a file (a hard link, or a name in another case on a file system that ignores case); or its
+# path can't be followed to the end (SF is -), or a folder whose links are checked holds one whose path has a line break
+# (SF is !<folder>). Then `send` won't mail it out, however it's asked to.
+# ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine.
+# Another name for a protected file by a hard link, or through a bind mount, is caught (by -ef) for the config file and
+# key, and for the file a link kept in ~/.ssh or the config folder leads to, but not for a file inside a protected
+# folder. The state folder's links aren't followed out: the CLI keeps none there
 secret_file() {
   # a path hops can't follow to the end counts as secret: refuse rather than guess
   SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"
-  for SF in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
+  # (the body as a file, found here: inside the find pipeline below, a body named /dev/stdin would be find's pipe)
+  bf=$(real "$1") || bf=$1
+  # the account's own home, from its login name (a name that's safe to expand with ~), when HOME isn't it
+  ah=""; an=$(id -un 2>/dev/null) && matches '^[A-Za-z0-9._][A-Za-z0-9._-]*$' "$an" && eval "ah=~$an" &&
+    case "$ah" in (/*) [ "$ah" != "${HOME:-}" ] || ah="" ;; (*) ah="" ;; esac
+  for SF in "${HOME:+$HOME/.ssh}" "${ah:+$ah/.ssh}" "$CONFIG_HOME" "$STATE"; do
     [ -n "$SF" ] && sd=$(phys "$SF") || continue
     case "$sp" in (*"$NL${sd%/}"/*) return 0 ;; esac
+    # where a link kept in ~/.ssh or the config folder leads (a ~/.ssh/config from a dotfiles folder, say): that file,
+    # or anything under that folder, named directly, at any hop of the walk. A link to a folder is resolved as a folder,
+    # whatever its target says (a trailing /, a .., a link on the way). ceiling: a link to a folder that holds the
+    # protected folder itself (~ or /) is skipped, since every file under it would be refused; and only links kept in
+    # those folders count, not a link inside the folder one leads to, when its own target is named directly
+    [ "$SF" != "$STATE" ] || continue
+    # (the links are read one per line, so a link whose path holds a line break, in its own name or a folder's on the
+    # way, can't be checked: refuse, naming the folder)
+    [ -z "$(find "$sd" -type l -path "*$NL*" 2>/dev/null)" ] || { SF="!$SF"; return 0; }
+    # (a link whose target is the body itself, as a file, by another name, a hard link say, counts by the body's own path)
+    lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do
+      if [ -d "$l" ]; then phys "$l"; elif [ "$1" -ef "$l" ] || [ "$bf" -ef "$l" ]; then printf '%s\n' "$bf"; else real "$l"; fi; done)
+    while IFS= read -r lt; do
+      # (a link to / leads to every file: hops shows a hop that is / itself as //, which it would match)
+      case "$lt" in (/) continue ;; esac; case "$sd/" in ("$lt"/*) continue ;; esac
+      case "$sp" in (*"$NL$lt$NL"*|*"$NL$lt/"*) SF="$lt, where a link in $SF leads"; return 0 ;; esac
+    done <<EOF_LINKS
+$lts
+EOF_LINKS
   done; SF=""
-  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] && rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac; done
+  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] || continue
+    rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac
+    [ ! -e "$sk" ] || [ ! "$1" -ef "$sk" ] || return 0
+  done
   return 1
 }
 
@@ -574,6 +608,7 @@ send)
       h="; to forward a message, copy its text into a new file first"
     w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
     [ "$SF" != - ] || w="a path whose links can't be followed to the end"
+    case $SF in ("!"*) w="unchecked: ${SF#!} holds a link whose path has a line break (rename it)" ;; esac
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
   fi
   # stdin itself is read as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
