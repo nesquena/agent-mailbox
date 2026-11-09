@@ -267,6 +267,10 @@ require_sigs() {
 record() { printf '%s\n' "$M/agents/$1.md"; }
 # reg_key <record file>: the key the record names, or nothing when it names none or the value isn't a plain key
 reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf '%s\n' "$rk"; }
+# fingerprint <public key>: its SHA256 fingerprint, as ssh-keygen -l prints it, for comparing out of band; empty
+# without ssh-keygen
+fingerprint() { mkdir -p "$STATE" && printf '%s\n' "$1" > "$STATE/tmp.fp.$$" &&
+  ssh-keygen -lf "$STATE/tmp.fp.$$" 2>/dev/null | cut -d' ' -f2; rm -f "$STATE/tmp.fp.$$"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
@@ -489,16 +493,19 @@ register|update)
 agents)
   [ $# -eq 0 ] || unknown "$1"
   load_adapter; ad_sync; need_store
-  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT
+  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT; fps=
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
-    k=no; [ -n "$(reg_key "$r")" ] && k=yes
+    k=no; rk=$(reg_key "$r") && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
+    [ -z "$rk" ] || { fp=$(fingerprint "$rk"); [ -z "$fp" ] || fps="$fps$(printf '%-24s %s' "$n" "$fp")$NL"; }
     # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows
     printf '%s\n%s\n%s\n' "$(field status "$r")" "$(field kind "$r")" "$(field about "$r")" | clean "$CAP" |
       { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
-  done ;;
+  done
+  # each key's fingerprint, to compare with its agent's human out of band (`trust` prints the one it pins)
+  [ -z "$fps" ] || printf '\nkey fingerprints:\n%s' "$fps" ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name> | trust --relax"
   if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict"
@@ -506,7 +513,8 @@ trust)
   valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
-  echo "pinned $1's current key; mail $1 signed with an earlier key (holds included) no longer counts" ;;
+  fp=$(fingerprint "$pub")
+  echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key (holds included) no longer counts" ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -744,7 +752,7 @@ holds)
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
   echo "$latest" | awk -v want="$version" '
-    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band (`agents` shows its fingerprint) and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }

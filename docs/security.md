@@ -28,7 +28,8 @@ time this reader first pinned it. Concretely:
 - **That a message was received.** Consuming is a receipt the recipient writes into a store anyone with access can
   edit, so it's a courtesy, not a proof.
 - **The first key seen.** Trust on first use trusts whatever key is registered the first time a reader looks. A store
-  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter.
+  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter: `agents`
+  lists each key's, and `trust` prints the one it pins.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
 
