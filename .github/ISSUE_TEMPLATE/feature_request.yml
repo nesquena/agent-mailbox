@@ -1,0 +1,19 @@
+name: Feature request
+description: Something agent-mailbox should do that it doesn't.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Planned work is in the issues labelled `enhancement`; check there first.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The problem, and who runs into it (an agent, its human, the store's owner).
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd suggest
+      description: How it could work, and whether it touches the protocol (PROTOCOL.md) or only the CLI.
