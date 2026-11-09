@@ -158,6 +158,16 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
   [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900 17 y2000)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
+  # the day count follows the 400-year rule as the date check does: 2000-02-28 and 2000-03-01 are two days apart, with
+  # 2000-02-29 between them (in a common year they'd be one); the age mask above can't see a one-day error
+  pm 20200101T000020Z-alice-y2kfeb28.md alice bob 2000-02-28T00:00:00Z none
+  pm 20200101T000021Z-alice-y2kmar1.md alice bob 2000-03-01T00:00:00Z none
+  tamper "cp '$T/ps/bob/20200101T000020Z-alice-y2kfeb28.md' '$T/ps/bob/20200101T000021Z-alice-y2kmar1.md' mailbox/inbox/bob/"
+  out=$(as alice sent bob 2>&1)
+  d28=$(printf '%s\n' "$out" | sed -n 's/.*-alice-y2kfeb28\.md to bob age \([0-9]*\)d\([0-9]*\)h.*/\1 \2/p')
+  d01=$(printf '%s\n' "$out" | sed -n 's/.*-alice-y2kmar1\.md to bob age \([0-9]*\)d\([0-9]*\)h.*/\1 \2/p')
+  [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
+    ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
@@ -233,6 +243,25 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     tamper "rm -f mailbox/agents/ka.md mailbox/agents/ka.md.sig $m $m.sig"
     expect "registering again restores the record" 0 "register: ka \(active\), signing key" as ka register --kind t --about t
     expect "then update works" 0 "update: ka \(active\)" as ka update --about back
+    # update keeps what it doesn't manage (PROTOCOL.md section 2): other header lines, and the text below the header
+    printf '%s\n' 'NR == 2 { print "x-example: 1" }' '{ print }' 'END { print "notes below the header" }' > "$T/addx.awk"
+    tamper "awk -f '$T/addx.awk' mailbox/agents/ka.md > ka.tmp && mv ka.tmp mailbox/agents/ka.md"
+    rec_of() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:mailbox/agents/$1"; else cat "$STORE/mailbox/agents/$1"; fi; }
+    expect "update with fields it doesn't manage in the record works" 0 "update: ka \(active\)" as ka update --about kept
+    rec_of ka.md > "$T/ka.rec"
+    grep -qx 'x-example: 1' "$T/ka.rec" && grep -qx 'notes below the header' "$T/ka.rec" && grep -qx 'about: kept' "$T/ka.rec" &&
+      ok "and keeps the record's other header lines and its body" || no "update dropped what it doesn't manage" "$(cat "$T/ka.rec")"
+    if [ -n "$SSH" ]; then
+      rec_of ka.md.sig > "$T/ka.rec.sig"; printf 'ka %s\n' "$(sed -n 's/^key: //p' "$T/ka.rec")" > "$T/ka.allowed"
+      ssh-keygen -Y verify -f "$T/ka.allowed" -I ka -n agent-mailbox -s "$T/ka.rec.sig" < "$T/ka.rec" >/dev/null 2>&1 &&
+        ok "and the record's signature covers them" || no "the updated record's signature doesn't verify"
+    fi
+    # a field update manages appears once: a second copy, such as a key: planted after the agent's own, is dropped
+    printf '%s\n' '/^key: / && !d { print; print "key: ssh-ed25519 AAAAplanted"; d = 1; next }' '{ print }' > "$T/dupkey.awk"
+    tamper "awk -f '$T/dupkey.awk' mailbox/agents/ka.md > ka.tmp && mv ka.tmp mailbox/agents/ka.md"
+    as ka update --about once >/dev/null 2>&1; rec_of ka.md > "$T/ka.rec"
+    [ "$(grep -c '^key:' "$T/ka.rec")" = 1 ] && ! grep -q AAAAplanted "$T/ka.rec" &&
+      ok "and a second copy of a field it manages is dropped, not kept and signed" || no "update kept a planted second key line" "$(cat "$T/ka.rec")"
     # a record left with no key is republished as it is
     tamper "sed -i.bak 's|^key: .*|key: |' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
     expect "update republishes a record whose key was removed" 0 "update: ka \(active\)" as ka update --about x
@@ -1324,9 +1353,10 @@ if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >
     ("2 "*rx-3.md*) ok "and the other store's mail still wakes it" ;; (*) no "and the other store's mail still wakes it" "$rc $(cat "$T/bg.out")" ;; esac
 else no "and the other store's mail still wakes it" "it didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 mv "$C2.off" "$C2"
-# retiring the name on one store records it so, and the hook then watches only the other
+# retiring the name on one store records it so, and the hook then watches only the other (--force: mail sent above is
+# still waiting there, and this is about the session's list, not the inbox)
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= AGENT_MAILBOX_NAME= \
-  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired >/dev/null 2>&1
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_SESSION=r9 "$SH" "$CLI" --config "$C2" update --status retired --force >/dev/null 2>&1
 expect "retiring the name on one store records it in the session's list" 0 - test "$(tail -n 1 "$RS/session-stores/r9")" = "$S2 rw -"
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
@@ -1393,7 +1423,19 @@ expect "a session id holding a / names no other session's record" 0 "^name: *h2$
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=../session-configs/sr AGENT_MAILBOX_NAME=h2 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
 cmp -s "$W/sr-config-before" "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" &&
   ok "and no other session's watch rewrites its config record" || no "another session's watch rewrote sr's config record"
+# an agent retires once its inbox is empty: with mail waiting, update refuses, naming it, unless --force
+echo x | as h1 send h2 waiting-1 - >/dev/null 2>&1
+expect "retiring with mail still waiting is refused, naming it" 1 "still holds .*-h1-waiting-1\.md.*--force" as h2 update --status retired
+expect "and the record stays active" 0 "^h2 .*active" as h1 agents
+expect "--force retires anyway" 0 "update: h2 \(retired\)" as h2 update --status retired --force
+expect "and the agent comes back with update" 0 "update: h2 \(active\)" as h2 update --status active
+expect "--force is for update only" 1 "unknown option --force" as h2 register --kind t --about t --force
+# past five waiting messages, it names five and counts the rest
+for i in 2 3 4 5 6 7; do echo x | as h1 send h2 "waiting-$i" - >/dev/null 2>&1; done
+expect "past five, it names five and counts the rest" 1 "still holds [0-9]+ message\\(s\\): .*\\(and [0-9]+ more\\)" as h2 update --status retired
 for m in $(as h2 list 2>/dev/null | grep '\.md$'); do as h2 consume "$(basename "$m")" >/dev/null 2>&1; done
+expect "with the inbox empty, retiring works" 0 "update: h2 \\(retired\\)" as h2 update --status retired
+as h2 update --status active >/dev/null 2>&1
 HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired >/dev/null
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
