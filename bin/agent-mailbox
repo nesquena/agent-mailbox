@@ -48,6 +48,9 @@ PROTOCOL=1
 NS=agent-mailbox
 # (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
 AD_LEFTOVER=
+# (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
+# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
@@ -554,7 +557,7 @@ register|update)
   else put "$rec" "$record_text"; fi
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
-  ad_commit "mailbox: $ME ${cmd}s" $paths
+  AD_UNCHANGED=; ad_commit "mailbox: $ME ${cmd}s" $paths
   # (the record and its signature are always written again, so a stale or missing one is replaced; when they come out
   # as they were, the adapter publishes nothing and says so, and so does update, below)
   unchanged=""; [ "$cmd" != update ] || unchanged=${AD_UNCHANGED:-}
@@ -565,7 +568,8 @@ register|update)
   fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
-  if [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
+  if [ -n "$unchanged" ] && [ -n "$AD_PUBLISHED" ]; then echo "update: nothing new to update for $ME ($status): the earlier change is now published"
+  elif [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
   else echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}"; fi ;;
 agents)
   [ $# -eq 0 ] || unknown "$1"

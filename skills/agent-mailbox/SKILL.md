@@ -81,11 +81,12 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   below, but don't re-arm anything: the hook does that at the end of the turn. Mail it already woke you for doesn't
   wake you again while it stays in your inbox. While a watcher you started yourself is still running, the hook leaves
   the watching to it. Once a day without mail it wakes you with a one-line note, which needs no action. If its watcher
-  can't go on, it wakes you once with the commands that show why (`agents`, or the watcher's last output; tell your
-  human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the
-  background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else
-  (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
-  version it can't confirm) it does nothing, and you re-arm by hand as below.
+  can't go on, it wakes you once with the commands that show why (`agents`, or the watcher's last output, which the
+  next watch overwrites, so read it now; tell your human) and keeps retrying quietly. It runs only where it can tell
+  that Claude Code (2.1.69 or later) runs it in the background: a session in a terminal, Claude Code on the web, or
+  the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a file or pipe, an SDK run or another host
+  with streaming input, an older version, or a version it can't confirm) it does nothing, and you re-arm by hand as
+  below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
   Exit 4 means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push):

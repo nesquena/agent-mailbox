@@ -77,6 +77,11 @@ for AD in $ADAPTERS; do
   # always written again, so a broken signature or record is replaced, not kept
   if [ "$AD" = git ]; then expect "an update that changes nothing says so, and succeeds" 0 "^update: nothing to update for alice \(active\)$" as alice update --status active
   else expect "an update that changes nothing succeeds" 0 "^update: alice \(active\)" as alice update --status active; fi
+  # an AD_UNCHANGED or AD_PUBLISHED from the environment changes nothing: a real change still says what it wrote
+  for ab in "test agent A2" "test agent A"; do
+    expect "an AD_UNCHANGED in the environment doesn't make a real change read as nothing ($ab)" 0 "^update: alice \(active\)" \
+      env AD_UNCHANGED=1 AD_PUBLISHED=1 HOME="$W/home-alice" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+        CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about "$ab"; done
   if [ -n "$SSH" ]; then
     sf() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:$1"; else cat "$STORE/$1"; fi; }
     printf 'alice %s\n' "$(cut -d' ' -f1,2 "$W/home-alice/.config/agent-mailbox/keys/alice.pub")" > "$T/al.allowed"
@@ -585,6 +590,13 @@ case " $ADAPTERS " in *" git "*)
   chmod +x "$T/nobid/cat"
   printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(PATH="$T/nobid:$PATH" started "$sp")" > "$lk"
   within 30 "and so it is when the boot's id can't be read" 1 "pid $sp\) has been working" alp PATH="$T/nobid:$PATH" "$SH" "$CLI" list
+  # a holder and a waiter that disagree on whether the boot's id can be read (one in a sandbox that hides it) still
+  # agree on the ticks: the live holder is waited for, either way round (only where /proc has the start)
+  if [ -r "/proc/$sp/stat" ]; then
+    within 30 "a holder without the boot's id is waited for by a waiter with it" 1 "pid $sp\) has been working" as lp list
+    printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
+    within 30 "and one with it by a waiter without it" 1 "pid $sp\) has been working" alp PATH="$T/nobid:$PATH" "$SH" "$CLI" list
+  else sk "a holder and a waiter that disagree on the boot's id (no /proc here)"; fi
   # (the lock again as a holder with the boot's id writes it, for the doctor test below)
   printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
   # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing
@@ -809,6 +821,15 @@ case " $ADAPTERS " in *" git "*)
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
   expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
+  # an update run again after its exit 4: its sync publishes the earlier change, and it says so, not just "nothing"
+  T="$W/left3"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
+  as xq4 init >/dev/null; as xq4 register --kind t --about t --no-key >/dev/null 2>&1
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "an update the store won't take exits 4" 4 "written locally, not published" fast xq4 update --about again
+  rm -f "$T/store.git/hooks/pre-receive"
+  expect "run again, it says the earlier change is now published" 0 \
+    "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
