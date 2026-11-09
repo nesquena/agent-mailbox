@@ -91,13 +91,17 @@ time this reader first pinned it. Concretely:
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
   bare clone of the store (`git commit-tree` needs a git identity, `user.name` and `user.email`). Never paste the
   entry's name into a command: whoever pushed it chose it. For an entry at the top of the tree:
-  1. List the entries, numbered: `git ls-tree <branch> | cat -n`, and note the bad entry's line number, `<n>`.
-  2. Build the tree without it, and check the listing before going on (it must hold everything else):
+  1. List the entries, numbered: `git -c core.quotePath=true ls-tree <branch> | cat -n`, and note the bad entry's line
+     number, `<n>`.
+  2. Build the tree without it, and check the listing before going on: it must hold everything but the bad entry,
+     which must be gone. Run this step and the next in one shell, since the next uses `$t`.
      ```sh
-     t=$(git ls-tree <branch> | awk -v n=<n> 'NR != n' | git mktree) && git ls-tree "$t"
+     t=$(git -c core.quotePath=true ls-tree <branch> | awk -v n=<n> 'NR != n' | git mktree) &&
+     git -c core.quotePath=true ls-tree "$t"
      ```
-  3. Commit it and push:
+  3. Commit it and push, only if the tree has exactly one entry fewer:
      ```sh
+     [ "$(git ls-tree "$t" | wc -l)" -eq "$(( $(git ls-tree <branch> | wc -l) - 1 ))" ] &&
      c=$(git commit-tree "$t" -p <branch> -m 'drop a top-level entry git refuses to check out') &&
      git push origin "${c}:refs/heads/<branch>"
      ```
