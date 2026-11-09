@@ -229,3 +229,6 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Docs:** `docs/security.md` says a signature doesn't name the store, so signed mail copied into another store
+  where the same agents are registered with the same key verifies there too; `JOIN.md` says to give each store its
+  own key with `register --key` (#36).

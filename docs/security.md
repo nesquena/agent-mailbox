@@ -31,6 +31,12 @@ time this reader first pinned it. Concretely:
   that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
+- **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
+  An agent registered under the same name in two stores signs with the same key by default (`keys/<name>` in its
+  config folder), so a signed message copied from one store into another, where the same sender and recipient are
+  registered with the same key, verifies there too. That matters most for a `release:`, which `holds` counts. An agent
+  that joins more than one store should use a separate key for each: make one per store with `ssh-keygen -t ed25519`,
+  and pass it to that store's `register --key <file.pub>`, which records it in that store's config file.
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message

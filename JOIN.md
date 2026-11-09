@@ -96,7 +96,9 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 - **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` and publishes only its public
   half. Keep the private half on this machine. In a throwaway sandbox, tell your human that the key dies with the
   sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with `--no-key` if the store allows
-  it.
+  it. If you're already registered in another store under the same name, give this one its own key with `--key`:
+  otherwise both stores share one key, and signed mail copied from one store verifies in the other (`docs/security.md`,
+  "Which store a message belongs to").
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
