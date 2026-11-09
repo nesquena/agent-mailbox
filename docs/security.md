@@ -10,11 +10,19 @@ A `verified` message was signed by whoever holds the private key that the sender
 time this reader first pinned it. Concretely:
 - **Integrity:** the file's bytes, header and body, are exactly what was signed. Editing a delivered message
   turns it `bad`.
-- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another.
+- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
+  names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
+  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`.
+  `holds` reads a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one that
+  spells `hold:` or `release:`, `from:` or `sent:` any other way isn't read as a record, and one with no plain `to:`
+  reads `bad`. A record whose header holds other lines that aren't plain, but whose signature checks out (or whose
+  sender's key changed, or vanished after this reader pinned it), blocks that item (`PROTOCOL.md` section 5). A `.sig`
+  that's a link reads `unsigned` with the dir adapter, and `bad` with git, whose clone keeps links as plain files.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
-  the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
+  the reader runs `trust` after checking the new key's fingerprint (in `agents`, or what `trust` prints) with the
+  sender's human out of band. An agent's `update` never pins its own name to a key it doesn't
   hold, and, where the agent holds its key, refuses to republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
@@ -28,7 +36,10 @@ time this reader first pinned it. Concretely:
 - **That a message was received.** Consuming is a receipt the recipient writes into a store anyone with access can
   edit, so it's a courtesy, not a proof.
 - **The first key seen.** Trust on first use trusts whatever key is registered the first time a reader looks. A store
-  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter.
+  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter: `agents`
+  lists each key's, and `trust` prints the one it pins. An agent's human reads their own side from `doctor` (or
+  `ssh-keygen -lf <key>.pub`), never from `agents`: `agents` and `trust` read the store, which may be the thing
+  compromised.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
@@ -52,15 +63,23 @@ time this reader first pinned it. Concretely:
   registered with the new key, re-send any hold it still means, before readers trust it.
 
 ## Operating rules
-- **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message
-  or a chat. The CLI creates keys mode 600 in a mode 700 folder. As a backstop, `send` refuses a body file in
-  `~/.ssh` or the CLI's config or state folder (as named, or at any link on the way to it), the CLI's config file or
-  signing key, a path it can't follow to the end (a name holding a newline, or folder links nested more than 8
-  deep), and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or
-  a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the obvious cases, not a
+- **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message or
+  a chat. The CLI creates keys mode 600 in a mode 700 folder. As a backstop, `send` refuses a body file in `~/.ssh`
+  (the account's own too, when `HOME` points elsewhere) or the CLI's config or state folder (as named, or at any
+  symlink on the way to it); the file a symlink kept in `~/.ssh` or the config folder leads to, by any name for that
+  file, hard links included, or a file under the folder one leads to (a link to a folder holding `~/.ssh` itself, such
+  as `~` or `/`, is skipped, since it would refuse every file); the CLI's config file or signing key, by any name for
+  that file, hard links included; a path it can't follow to the end (a name holding a newline, or folder links nested
+  more than 8 deep), and any file at all while a link in `~/.ssh` or the config folder has a line break in its path;
+  and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY
+  key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the obvious cases, not a
   guarantee: it catches a mistake, or mail asking an agent to send one of those files, not any other secret (a cloud
   credentials file or a `.env` file passes), and not another user of the same machine who can write to the folder a
-  body is in, and so change the file between `send`'s check and its read.
+  body is in, and so change the file between `send`'s check and its read. For files inside a protected folder, or
+  under a folder a link leads to, it follows symlinks, not hard links (or a hard link to one) or bind mounts; on macOS
+  and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path, where only the private-key
+  check applies; and a hard link to a protected file, deleted and then fed on stdin, isn't caught. It catches
+  mistakes, not deliberate evasion.
 - **Keys in a synced folder:** the CLI makes keys in its config folder (`agent-mailbox/keys/` under
   `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use), as do the per-store keys above. If that folder
   is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it does:

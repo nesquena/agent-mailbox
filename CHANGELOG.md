@@ -221,6 +221,12 @@ First version.
   switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
   instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
   wake you twice (#58).
+- **`send` refuses more ways to name a secret:** the file a symlink kept in `~/.ssh` or the CLI's config folder leads
+  to (a `~/.ssh/config` managed from a dotfiles folder, say), by its path or as the same file (`docs/security.md`
+  lists the limits); every file under a folder one leads to (to send one of those, copy it somewhere else first); the
+  CLI's config file or signing key by any name for that file, such as a hard link; and a file in the account's own
+  `~/.ssh` when `HOME` points elsewhere. While a link in one of those folders has a line break in its path, `send`
+  refuses every file, saying so, until it's renamed (#79).
 - **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
@@ -240,15 +246,15 @@ First version.
   after it exited 4, succeeds; with the git adapter, which publishes nothing then, it says "nothing to update". It
   stopped with "git commit failed". `update` still writes the record and its signature every time, so a stale or
   missing signature, or a record changed in the store, is replaced (#88).
-- **Fix:** with the git adapter, commands under one name take turns in its clone of the store. Two at once (say, two
-  replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
-  it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it; a
-  lock left by a command that's gone is broken at once; a lock from another machine name (a state folder shared
-  between machines, or this one renamed) is waited for, and the message says which file to delete if nothing is
-  running there; and what a command cut off part-way leaves in the clone is cleared at the next one. `watch` takes its
-  turn only for its first sync, and `doctor` waits a few seconds, then says the store is busy. Adapters gain
-  `ad_unlock` (a no-op for one without a clone). Update every copy of the CLI you run: one from before this doesn't
-  wait its turn (#87).
+- **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header, and says when a
+  message's file name isn't `<stamp>-<from>-<topic>.md`. It reads each message once. A message header holds only plain
+  `key: value` lines, each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`. `holds` reads a
+  record by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one whose header holds other
+  lines that aren't plain, but whose signature checks out, blocks that item. A `.sig` that's a link reads `unsigned`
+  with the dir adapter (in `read`, `verify`, exit 6, and `holds`), and `bad` with git. A client that writes an
+  uppercase or otherwise non-plain header key now reads `bad`; a hold or release it signs blocks its item when its
+  `hold:` or `release:`, `from:`, `to:` and `sent:` lines are plain; when `hold:` or `release:`, `from:` or `sent:`
+  isn't, it isn't read as a record, and when `to:` isn't, it reads `bad` (#84).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
@@ -299,3 +305,24 @@ First version.
 - **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
   count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
   `agents`, or the watcher's last output, a local file (#85).
+- **Key fingerprints to compare out of band:** `agents` lists each registered key's SHA256 fingerprint, `trust`
+  prints the one it pins, `doctor` shows this agent's own (read from this machine, not the store), and `holds`, on a
+  changed key, says where to find it. A key ssh-keygen can't read is said so (#97).
+- **Fix:** the Claude Code hook's watchdog sleeps only until its deadline, so a watcher that hangs (a fetch over a
+  dead connection) ends at the deadline, not up to 15 s past it (#103).
+- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
+  (remove the clone it names, sending again what its unpublished commits held, and run the command again), when it
+  saw the store's branch before it was reset or re-created, or when its unpublished init is for a folder another
+  agent's init has since taken. Nothing it holds is published into the store; before, some of these cases republished
+  stale history into the new mailbox, and others failed with git's own rebase error. An `init` that loses a race for
+  one folder, on a new branch or one that already exists, fails saying so, with the winner's title and
+  `require_signatures`, instead of exit 4. Mailboxes in other folders of the same branch are published as before (#68).
+- **Fix:** with the git adapter, commands under one name take turns in its clone of the store. Two at once (say, two
+  replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
+  it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it; a
+  lock left by a command that's gone is broken at once; a lock from another machine name (a state folder shared
+  between machines, or this one renamed) is waited for, and the message says which file to delete if nothing is
+  running there; and what a command cut off part-way leaves in the clone is cleared at the next one. `watch` takes its
+  turn only for its first sync, and `doctor` waits a few seconds, then says the store is busy. Adapters gain
+  `ad_unlock` (a no-op for one without a clone). Update every copy of the CLI you run: one from before this doesn't
+  wait its turn (#87).
