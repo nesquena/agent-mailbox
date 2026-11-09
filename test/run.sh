@@ -158,6 +158,16 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
   [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900 17 y2000)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
+  # the day count follows the 400-year rule as the date check does: 2000-02-28 and 2000-03-01 are two days apart, with
+  # 2000-02-29 between them (in a common year they'd be one); the age mask above can't see a one-day error
+  pm 20200101T000020Z-alice-y2kfeb28.md alice bob 2000-02-28T00:00:00Z none
+  pm 20200101T000021Z-alice-y2kmar1.md alice bob 2000-03-01T00:00:00Z none
+  tamper "cp '$T/ps/bob/20200101T000020Z-alice-y2kfeb28.md' '$T/ps/bob/20200101T000021Z-alice-y2kmar1.md' mailbox/inbox/bob/"
+  out=$(as alice sent bob 2>&1)
+  d28=$(printf '%s\n' "$out" | sed -n 's/.*-alice-y2kfeb28\.md to bob age \([0-9]*\)d\([0-9]*\)h.*/\1 \2/p')
+  d01=$(printf '%s\n' "$out" | sed -n 's/.*-alice-y2kmar1\.md to bob age \([0-9]*\)d\([0-9]*\)h.*/\1 \2/p')
+  [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
+    ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
@@ -356,6 +366,24 @@ case " $ADAPTERS " in *" git "*)
   expect "init on a branch with a / in its name" 0 initialized as e2 init
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
+
+  echo "== git: the mailbox branch is matched by its exact name"
+  # ls-remote matches a pattern against the end of ref names: a store whose only ref is x/refs/heads/main has no main
+  T="$W/nested"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email s@s && git config user.name s &&
+    echo other > other.txt && git add other.txt && git commit -qm other && git push -q origin HEAD:refs/heads/x/refs/heads/main)
+  as nb1 setup --store "$T/store.git" --name nb1 >/dev/null
+  expect "init on a store with only a ref ending in refs/heads/main" 0 initialized as nb1 init
+  expect "the mailbox is on main itself" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only refs/heads/x/refs/heads/main | grep store.md)" ] &&
+    ok "and the other ref is left alone" || no "init wrote to the ref that only ends in main"
+  as nb1 register --kind t --about t --no-key >/dev/null
+  # the poll token is that branch's tip alone, not every ref ending in its name
+  C=$(ls -d "$W/home-nb1/.local/state/agent-mailbox/checkouts/"*-nb1)
+  tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
+  [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
+    no "the poll token isn't the exact branch's tip" "$tok"
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -1417,6 +1445,16 @@ if command -v perl >/dev/null 2>&1; then
 else sk "a socket on stdin sends (no perl)"; fi
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
+# the name record is advisory: a send whose record can't be written warns, and still sends
+NR="$W/home-i1/.local/state/agent-mailbox/names"; chmod -R a-w "$NR"
+if (true > "$NR/probe") 2>/dev/null; then rm -f "$NR/probe"; chmod -R u+w "$NR"
+  sk "a send whose name record can't be written still sends (read-only folders don't stop this user)"
+else
+  expect "a send whose name record can't be written warns, and still sends" 0 "can't record this send's file name.*sending anyway" \
+    sh -c "echo x | HOME='$W/home-i1' '$SH' '$CLI' send i2 norec - 2>&1"
+  chmod -R u+w "$NR"
+  expect "and the message is delivered" 0 "^x$" block i2 norec
+fi
 
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
@@ -2010,6 +2048,16 @@ mkdir -p "$W/dshim"; printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ"
   '  if [ $n -le 2 ]; then echo 20260101T000000Z; else echo 20260101T000001Z; fi; exit 0; fi' "exec '$(command -v date)' \"\$@\"" > "$W/dshim/date"; chmod +x "$W/dshim/date"
 for k in "--hold" "--release"; do echo x | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 "g17${k#--}" - $k "item#17 v1" >/dev/null 2>&1; done
 expect "a release right after a hold in the same second still counts" 0 "item#17 released by u2 at v1" as u1 holds "item#17" --version v1
+# 11b. a file name is never reused, even right after the message it named was consumed (PROTOCOL.md section 5): with the
+# clock shim's first two stamps in one second, the second send waits for the next
+rm -f "$W/dshim/n"
+echo a | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 reuse-1 - >/dev/null 2>&1
+r1=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$'); [ -z "$r1" ] || as u1 consume "${r1##*/}" >/dev/null 2>&1
+echo b | env PATH="$W/dshim:$PATH" DCOUNT="$W/dshim/n" HOME="$W/home-u2" "$SH" "$CLI" send u1 reuse-1 - >/dev/null 2>&1
+r2=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$')
+[ -n "$r1" ] && [ -n "$r2" ] && [ "${r1##*/}" != "${r2##*/}" ] && ok "a consumed message's file name isn't reused in the same second" ||
+  no "a consumed message's file name was reused" "first: $r1, then: $r2"
+as u1 consume "${r2##*/}" >/dev/null 2>&1
 T="$W/rules"
 # 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
