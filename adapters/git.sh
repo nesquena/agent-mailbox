@@ -166,7 +166,8 @@ ad_started() {
   if [ -r "/proc/$1/stat" ]; then
     st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0; st=${st##*')'}
     set -f; set -- $st; set +f; [ $# -ge 20 ] || return 0
-    eval "st=\${20}"; printf '%s %s\n' "$st" "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"; return 0
+    # (without a boot id, the ticks alone, with no trailing space: a waiter reads the lock's fields split on spaces)
+    eval "st=\${20}"; bi=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); printf '%s\n' "$st${bi:+ $bi}"; return 0
   fi
   LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
 }
