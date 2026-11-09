@@ -1,6 +1,6 @@
 #!/bin/sh
 # test/bench.sh [messages=200] [senders=10]: rough timings of the git adapter against a throwaway local store, so the
-# limits discussed in docs/roadmap.md ("Stores beyond git") stay measured, not guessed. Not part of the test suite.
+# limits discussed in issue #7 (stores beyond git) stay measured, not guessed. Not part of the test suite.
 # Prints one line per measurement. Times are wall-clock seconds from a local bare repository, so they show the
 # CLI's own cost; a hosted store adds a network round trip (about 0.5 s on GitHub) per sync or push.
 set -u
