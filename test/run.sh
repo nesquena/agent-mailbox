@@ -518,6 +518,33 @@ case " $ADAPTERS " in *" git "*)
     [ "$(git --git-dir="$T/store.git" ls-tree -r --name-only main | grep -c 'store\.md$')" = 2 ] &&
       ok "and both mailboxes are on the branch" || no "a mailbox in another folder was lost" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
   fi
+  # a clone that saw the store's old branch fails even when the new branch's mailbox is in another folder: its old
+  # mailbox isn't published onto the new branch
+  T="$W/initreset2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as rt1 setup --store "$T/store.git" --root b --name rt1 >/dev/null; as rt2 setup --store "$T/store.git" --root a --name rt2 >/dev/null
+  as rt1 init >/dev/null; as rt1 register --kind t --about t --no-key >/dev/null
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main; as rt2 init >/dev/null 2>&1
+  expect "a clone that saw a store's old branch fails when the new one has a mailbox only in another folder" 1 "history doesn't match the store's" as rt1 agents
+  [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only main b/)" ] &&
+    ok "and its old mailbox isn't published onto the new branch" || no "a stale clone's old mailbox reached the new branch" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  # the race lost on a branch that already exists (a repository made with a README): init says so, and the loser's
+  # next command works
+  T="$W/initrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  git init -q "$T/seed" && (cd "$T/seed" && echo hi > README && git add README && git commit -qm readme && git push -q "$T/store.git" HEAD:refs/heads/main)
+  for a in ir5 ir6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" push "*) [ -e "$RACE_DONE" ] || { : > "$RACE_DONE"; sh -c "$RACE_CMD" >/dev/null 2>&1; } ;; esac' \
+    'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  expect "an init that loses the race on a branch that already exists says so" 1 "another agent initialized the mailbox at 'mailbox/' first.*title: winner" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
+      RACE_CMD="HOME='$W/home-ir6' '$SH' '$CLI' init --title winner" HOME="$W/home-ir5" "$SH" "$CLI" init --title loser
+  expect "and the loser's next command works" 0 "NAME" as ir5 agents
+  # the mailbox folder is compared as git prints paths: a/./b/. is a/b
+  T="$W/initrace4"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as dn1 setup --store "$T/store.git" --root a/./b/. --name dn1 >/dev/null; as dn2 setup --store "$T/store.git" --root a/b --name dn2 >/dev/null
+  cp "$W/initrace3/bin/git" "$T/bin/git"
+  expect "an init at a/./b/. that loses the race to one at a/b says so" 1 "another agent initialized the mailbox at .* first.*title: winner" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
+      RACE_CMD="HOME='$W/home-dn2' '$SH' '$CLI' init --title winner" HOME="$W/home-dn1" "$SH" "$CLI" init --title loser
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main

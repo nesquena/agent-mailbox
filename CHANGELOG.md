@@ -272,8 +272,9 @@ First version.
 - **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
   names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
 - **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
-  (remove the clone it names and run the command again), when it saw the store's branch before it was reset or
-  re-created, or when its unpublished init is for a folder another agent's init has since taken. Nothing it holds is
-  published into the store; before, every command failed with git's own rebase error. An `init` that loses a race
-  for one folder fails saying so, with the winner's title and `require_signatures`, instead of exit 4. Mailboxes in
-  other folders of the same branch are published as before (#68).
+  (remove the clone it names, sending again what its unpublished commits held, and run the command again), when it
+  saw the store's branch before it was reset or re-created, or when its unpublished init is for a folder another
+  agent's init has since taken. Nothing it holds is published into the store; before, some of these cases republished
+  stale history into the new mailbox, and others failed with git's own rebase error. An `init` that loses a race for
+  one folder, on a new branch or one that already exists, fails saying so, with the winner's title and
+  `require_signatures`, instead of exit 4. Mailboxes in other folders of the same branch are published as before (#68).
