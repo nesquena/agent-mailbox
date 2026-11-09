@@ -782,6 +782,34 @@ case " $ADAPTERS " in *" git "*)
     env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
       RACE_CMD="HOME='$W/home-dn2' '$SH' '$CLI' init --title winner" HOME="$W/home-dn1" "$SH" "$CLI" init --title loser
 
+  echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
+  T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in xq1 xq2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as xq1 init >/dev/null; for a in xq1 xq2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  # (fast: a sleep that returns at once, so the push's ten tries take no time)
+  mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"
+  fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
+  echo hi > "$T/m"
+  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" fast xq1 send xq2 first "$T/m"
+  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" fast xq1 send xq2 second "$T/m"
+  rm -f "$T/store.git/hooks/pre-receive"; as xq1 agents >/dev/null 2>&1
+  [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-first\.md$')" ] &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-second\.md$')" ] &&
+    ok "and it didn't: once the store takes pushes, only the first is there" ||
+    no "a command that said it wrote nothing wrote something" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  # an exported AD_LEFTOVER changes nothing: a send's own unpublished change still says don't resend
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "an AD_LEFTOVER in the environment doesn't change what a command says of its own change" 4 "written locally, not published" \
+    env AD_LEFTOVER=1 PATH="$T/fast:$PATH" HOME="$W/home-xq1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+      CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send xq2 third "$T/m"
+  # on a store with no mailbox branch yet: a first init the store won't take, then the next command
+  T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
+  expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
+
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

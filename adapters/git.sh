@@ -163,16 +163,24 @@ ad_pull() {
   fi
 }
 
+# ad_unpublished <why>: say what's saved locally but not published. A command publishing what an earlier one left
+# (AD_LEFTOVER, from ad_sync) has written nothing of its own yet, so it says so: that one is to be run again
+ad_unpublished() {
+  if [ -n "${AD_LEFTOVER:-}" ]; then
+    warn "this command wrote nothing: an earlier command's change is saved locally but not published ($1); re-run a command with the same name to publish it, then run this one again"
+  else warn "written locally, not published ($1); re-run a command with the same name to publish it, don't resend"; fi
+}
+
 ad_push() {
   n=0
   until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
     n=$((n+1))
-    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run a command with the same name to publish it, don't resend"; exit 4; }
+    [ $n -lt 10 ] || { ad_unpublished "push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)"; exit 4; }
     ad_jitter
     rerr=$(ad_pull); pr=$?
     # (a clone whose history the store doesn't share: its own message says what to do, and what goes with the clone)
     [ "$pr" != 3 ] || die "$(printf '%s\n' "$rerr" | ad_gist)"
-    [ "$pr" = 0 ] || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
+    [ "$pr" = 0 ] || { ad_unpublished "$(printf '%s\n' "$rerr" | ad_gist)"; exit 4; }
   done
   # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
   # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
@@ -272,7 +280,7 @@ ad_sync() {
     ad_git rev-parse -q --verify HEAD >/dev/null || return 0
     warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
-  ad_push
+  AD_LEFTOVER=1; ad_push; AD_LEFTOVER=
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else

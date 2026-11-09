@@ -329,3 +329,5 @@ First version.
 - **`send`'s path check is much faster on deep link chains:** it no longer runs `dirname` for every folder of every
   hop, and after a link with a relative target it doesn't walk again the folders it already knows hold no links. A
   chain of 20 links 300 folders deep went from about 29 s to under 1 s (#80).
+- **Fix:** a command that can't publish a change an earlier command left (exit 4) says it wrote nothing of its own,
+  and to run it again once that's published, instead of "written locally, not published ... don't resend" (#102).
