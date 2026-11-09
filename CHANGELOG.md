@@ -229,3 +229,6 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
+  it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
+  was typed in.
