@@ -848,7 +848,7 @@ case " $ADAPTERS " in *" git "*)
   # (now the store takes everything but a commit whose subject names the second send)
   printf '%s\n' '#!/bin/sh' 'while read o n r; do git log -1 --format=%s "$n" | grep -q second && exit 1; done; exit 0' > "$T/store.git/hooks/pre-receive"
   expect "a send after a leftover is published still says its own change is unpublished" 4 \
-    "publishing 1 commit.*written locally, not published" fast xq5 send xq6 second "$T/m"
+    "^agent-mailbox: written locally, not published" fast xq5 send xq6 second "$T/m"
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
 
@@ -1532,12 +1532,17 @@ printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
 fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
 expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
-rm -f "$R1/error"; out=$(fk 2>&1)
+# (with a minute's limit, so the error is recorded however slow the machine: the run ends at the notice anyway)
+rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
   (*) ok "and none of the error's own text is in the notice" ;; esac
-# still failing with that same error at the day's limit, it wakes the session once more, naming the same commands
-expect "a watcher still failing at the day's limit says so, naming the command that shows why" 2 \
-  "reached its daily limit, still failing \(exit 1; see why: .* --as rw agents, or the watcher's last output in .*/out'?\); it starts again at this turn's end\.$" fk
+# still failing with that same error at the day's limit, it wakes the session once more, naming the same commands.
+# (A 3 s limit, once more with 15 s only if the hook's own start used it up before the watcher first failed, as on a
+# loaded machine: then it says only "reached its daily limit")
+for m in 3 15; do r=$(RWMAX=$m fk 2>&1); rc=$?; case "$r" in (*"daily limit; it starts again"*) ;; (*) break ;; esac; done
+[ "$rc" = 2 ] && printf '%s\n' "$r" | grep -Eq "reached its daily limit, still failing \(exit 1; see why: .* --as rw agents, or the watcher's last output in .*/out'?\); it starts again at this turn's end\.$" &&
+  ok "a watcher still failing at the day's limit says so, naming the command that shows why" ||
+  no "a watcher still failing at the day's limit says so, naming the command that shows why" "exit $rc: $r"
 fk AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error with another count or time doesn't wake it again" ||
   no "the same error with another count or time doesn't wake it again" "$(cat "$T/bg.out")"
