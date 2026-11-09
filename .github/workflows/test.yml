@@ -48,7 +48,10 @@ jobs:
             done
             echo "$s ok"
           done
+      # (on Linux, /bin/sh is dash, so the dash step below already runs the suite under it; macOS's sh is bash in POSIX
+      # mode, which no other step covers)
       - name: Test suite (default sh)
+        if: runner.os != 'Linux'
         run: REQUIRE_SSH=1 sh test/run.sh
       - name: Test suite (dash)
         if: runner.os == 'Linux'
