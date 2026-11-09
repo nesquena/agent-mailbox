@@ -229,7 +229,11 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
-- **Fix:** `doctor` tells a retired name how to come back (`update --status active`), or to pick another name when
-  the record's key isn't this agent's; it said "run register", which refuses a name that's already registered. A store that isn't reachable or initialized now says to run `agents` to
-  see why. `register` and `send` say "ssh-keygen -Y (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for
-  `-Y` too, so an older ssh-keygen isn't mistaken for a missing one or for a working one (#71).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second (#66).
+- **Fix:** `doctor` tells a retired name how to come back (`update --status active`), or to pick another name when the
+  record's key isn't this agent's; it said "run register", which refuses a name that's already registered. A store
+  that isn't reachable or initialized now says to run `agents` to see why. `register` and `send` say "ssh-keygen -Y
+  (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for `-Y` too, so an older ssh-keygen isn't mistaken
+  for a missing one or for a working one (#71).
