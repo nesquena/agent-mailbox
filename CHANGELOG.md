@@ -290,3 +290,6 @@ First version.
 - **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
   count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
   `agents`, or the watcher's last output, a local file (#85).
+- **Key fingerprints to compare out of band:** `agents` lists each registered key's SHA256 fingerprint, `trust`
+  prints the one it pins, `doctor` shows this agent's own (read from this machine, not the store), and `holds`, on a
+  changed key, says where to find it. A key ssh-keygen can't read is said so (#97).

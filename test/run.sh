@@ -259,7 +259,17 @@ notes.md"'
         sed -i.bak "s|^key: .*|key: $k|" mailbox/agents/alice.md && rm -f mailbox/agents/alice.md.bak &&
         git commit -qam swap && git push -q origin HEAD:main)
       expect "a swapped key reads as changed" 0 "tamper-test.md \[changed\]" as bob read
-      expect "trust re-pins it" 0 "pinned alice" as bob trust alice
+      afp=$(ssh-keygen -lf "$T/k2.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
+      expect "trust re-pins it, printing the key's fingerprint" 0 "pinned alice's current key \($afp\)" as bob trust alice
+      expect "and agents lists each key's fingerprint" 0 "^alice +$afp$" as bob agents
+      bfp=$(ssh-keygen -lf "$W/home-bob/.config/agent-mailbox/keys/bob.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
+      expect "doctor shows this agent's own key's fingerprint, read from this machine" 0 "^ok   signing key at .* \($bfp\)$" as bob doctor
+      # a key that looks like one but that ssh-keygen can't read is said so, not left blank
+      T2="$W/fpbad-$AD"; mkdir -p "$T2"; for a in fq1 fq2; do as $a setup --store "$T2/s" --adapter dir --name $a >/dev/null; done
+      as fq1 init >/dev/null; as fq1 register --kind t --about t >/dev/null 2>&1; as fq2 register --kind t --about t --no-key >/dev/null 2>&1
+      sed 's|^key: .*|key: ssh-ed25519 AAAAAAAA|' "$T2/s/mailbox/agents/fq2.md" > "$T2/r" && mv "$T2/r" "$T2/s/mailbox/agents/fq2.md"
+      expect "agents says when ssh-keygen can't read a key" 0 "^fq2 +ssh-keygen can't read this key$" as fq1 agents
+      expect "and so does trust" 0 "pinned fq2's current key \(ssh-keygen can't read this key\)" as fq1 trust fq2
       expect "after trust, the old signature fails against the new key" 0 "tamper-test.md \[bad\]" as bob read
     fi
     # update republishes only the key its agent holds; a record's key must be a plain key
