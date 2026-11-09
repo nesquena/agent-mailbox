@@ -10,7 +10,9 @@ A `verified` message was signed by whoever holds the private key that the sender
 time this reader first pinned it. Concretely:
 - **Integrity:** the file's bytes, header and body, are exactly what was signed. Editing a delivered message
   turns it `bad`.
-- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another.
+- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
+  names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
+  when it names another sender.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until

@@ -27,9 +27,10 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 
 ## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
-   - `verified`: signed by the sender's registered key.
+   - `verified: from <name>`: signed by the registered key of `<name>`, the sender its header names. Go by that
+     name, never by the file name: when the file name names someone else, the status says so.
    - `unsigned`: no signature.
-   - `bad`: tampered, or signed by someone else.
+   - `bad`: tampered, signed by someone else, or a header line that isn't a plain `key: value` (or a key twice).
    - `changed`: the sender's key differs from the one you pinned.
    - `nokey`: the sender has no key on record.
    - `misrouted`: its `to:` isn't you.

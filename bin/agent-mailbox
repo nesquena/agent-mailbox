@@ -302,8 +302,15 @@ secret_file() {
 
 # --- signatures ----------------------------------------------------------------------------------------------------
 # verify_file <message path> [<inbox it sits in>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
+# hdr_ok <file>: its header closes, and every line in it is a plain `key: value` (a key of lowercase letters and _,
+# then a colon, then nothing or a space), with no key twice
+hdr_ok() { awk 'NR == 1 { if ($0 != "---") exit 1; next } $0 == "---" { c = 1; exit }
+  { i = index($0, ":"); k = substr($0, 1, i - 1); r = substr($0, i + 1)
+    if (i < 2 || k !~ /^[a-z_]+$/ || (r != "" && r !~ /^ /) || (k in seen)) exit 1; seen[k] = 1 }
+  END { exit c ? 0 : 1 }' "$1"; }
 verify_file() {
   f=$1 inb=${2:-}
+  hdr_ok "$f" || { echo bad; return; }
   from=$(field from "$f"); to=$(field to "$f")
   matches "$NAME_RE" "$from" && matches "$NAME_RE" "$to" || { echo bad; return; }
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
@@ -646,6 +653,14 @@ read)
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     v=$(verify_file "$p" "$ME")
+    # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
+    # name that names another sender is pointed out
+    fr=$(field from "$p"); b=${p##*/}
+    if matches "$NAME_RE" "$fr"; then
+      [ "$v" != verified ] || v="verified: from $fr"
+      case "${b#[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-}" in ("$fr"-*) ;;
+        (*) v="$v; its file name doesn't name $fr as the sender" ;; esac
+    fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
     # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes

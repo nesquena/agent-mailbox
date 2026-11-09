@@ -81,9 +81,32 @@ for AD in $ADAPTERS; do
   expect "send delivers" 0 "^sent mailbox/inbox/bob/" as alice send bob review-1 "$T/body" --needs "a yes or no" --context proj-x
   expect "list shows it to the recipient" 0 "alice-review-1.md" as bob list
   expect "the sender's own inbox is empty" 3 "no mail" as alice list
-  if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
+  if [ -n "$SSH" ]; then expect "read verifies the signature, naming the signer" 0 "alice-review-1\.md \[verified: from alice\]$" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
+  # a header holds only plain "key: value" lines, each key once, or the message reads bad; a key read reads as before
+  mkdir -p "$T/hd"; hh='---\nprotocol: 1\nfrom: alice\nto: bob\ntopic: t\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n'
+  printf -- "$hh"'from\342\200\213: carol\n---\n\nx\n' > "$T/hd/20200101T000001Z-alice-hdr1.md"
+  printf -- "$hh"'from: carol\n---\n\nx\n' > "$T/hd/20200101T000002Z-alice-hdr2.md"
+  printf -- "$hh"'--- \nbody\n---\n\nx\n' > "$T/hd/20200101T000003Z-alice-hdr3.md"
+  printf -- "$hh"'x_extra: 1\n---\n\nx\n' > "$T/hd/20200101T000004Z-alice-hdr4.md"
+  # and a message whose file name names another sender is pointed out, whatever its status
+  cp "$T/hd/20200101T000004Z-alice-hdr4.md" "$T/hd/20200101T000005Z-carol-hdr5.md"
+  tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
+  out=$(as bob read 2>&1)
+  for n in 1 2 3; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
+    no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
+  printf '%s\n' "$out" | grep -q "alice-hdr4\.md \[unsigned\]$" && ok "a key the protocol doesn't name still reads as before" ||
+    no "a key the protocol doesn't name still reads as before" "$out"
+  printf '%s\n' "$out" | grep -q "carol-hdr5\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+    ok "a file name naming another sender is pointed out" || no "a file name naming another sender is pointed out" "$out"
+  if [ -n "$SSH" ]; then
+    tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000006Z-carol-copy.md &&
+      cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000006Z-carol-copy.md.sig"
+    expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
+      "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
+  fi
+  tamper "rm -f mailbox/inbox/bob/20200101T00000*"
   expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
   expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
   expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
@@ -465,7 +488,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
   for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
   cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"
-  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
+  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified: from p1\]" as p3 --as p2 read; fi
   [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
   [ ! -e "$T/hook-ran" ] && ok "and none of the agents' own git hooks ran in its checkout" || no "a git hook ran in the CLI's checkout" "$(cat "$T/hook-ran")"
   # nor does a command run from inside a git hook, where git names the caller's repository in GIT_DIR
@@ -677,7 +700,7 @@ if [ -n "$SSH" ]; then
   expect "register with your own key" 0 "register: w2" as w2 register --kind t --about t --key "$T/own.pub"
   expect "the key path is kept in the config" 0 "^key = .*/own$" grep '^key' "$W/home-w2/.config/agent-mailbox/config"
   expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
-  expect "and verify" 0 "signed-own.md \\[verified\\]" as w1 read
+  expect "and verify" 0 "signed-own.md \\[verified: from w2\\]" as w1 read
 fi
 
 echo "== the Claude Code Stop hook (dir)"
@@ -1555,7 +1578,7 @@ if [ -n "$SSH" ]; then
   elif grep -qxF "$m" "$T/signlog"; then no "a message appeared before its signature was made" "$(cat "$T/signlog")"
   elif [ -s "$T/mvlog" ]; then no "a message was moved into place before its signature" "$(cat "$T/mvlog")"
   else ok "a message appears only once its signature is in place"; fi
-  expect "and verifies" 0 "in-order\.md \[verified\]" as n2 read
+  expect "and verifies" 0 "in-order\.md \[verified: from n1\]" as n2 read
   expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
   [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
     no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
@@ -1568,7 +1591,7 @@ if [ -n "$SSH" ]; then
     ok "a registry record appears only once its signature is in place"
   else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
   as n3 send n2 hello "$T/b" >/dev/null
-  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified\]" as n2 read
+  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified: from n3\]" as n2 read
   # an update whose final move fails leaves the record and the signature it had, so they still match
   A="$T/strict/mailbox/agents"; cp "$A/n3.md" "$T/rec3"; cp "$A/n3.md.sig" "$T/sig3"
   mv_fails() { (MVFAIL=$1 MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export MVFAIL MVLOG PATH; shift; as "$@"); }

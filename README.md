@@ -61,7 +61,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 ## Everyday commands
 | Command | What it does |
 |---|---|
-| `agent-mailbox read` | Print your mail, oldest first, each with its signature status. Exit 3 if there's none. |
+| `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
