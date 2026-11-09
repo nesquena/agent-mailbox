@@ -152,6 +152,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   doesn't read your ack as done and stand the backup down. A withdraw you refuse (from someone other than the
   request's sender, reading anything but `verified` or `unsigned`, or unverified against a verified request) is a
   finding for your human.
+- **As a backup, a rerouted request is one request,** however many times it arrives: a second `rerouted from <file>`
+  for the same file, from the same sender, is the same request. Act on it once; consume the copy, and reply to it
+  only as you would to the first.
 
 ## Holds (gating a shared action)
 When another agent must approve before you act on a shared item (a merge, a deploy, a publish), it sends you a hold

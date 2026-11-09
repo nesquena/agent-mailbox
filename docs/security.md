@@ -89,10 +89,10 @@ time this reader first pinned it. Concretely:
   makes commands fail, for every agent whose system refuses the path, until the store's branch no longer holds it:
   "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
-  bare clone of the store, with `<bad name>` as `git ls-tree <branch>` prints it (`git commit-tree` needs a git
-  identity, `user.name` and `user.email`). For an entry at the top of the tree:
+  bare clone of the store, with `<bad name>` exactly as `git ls-tree <branch>` prints it, quotes included
+  (`git commit-tree` needs a git identity, `user.name` and `user.email`). For an entry at the top of the tree:
   ```sh
-  t=$(git ls-tree <branch> | grep -vF "$(printf '\t')<bad name>" | git mktree) &&
+  t=$(git ls-tree <branch> | BAD='<bad name>' awk -F'\t' '$2 != ENVIRON["BAD"]' | git mktree) &&
   c=$(git commit-tree "$t" -p <branch> -m 'drop <bad name>') &&
   git push origin "${c}:refs/heads/<branch>"
   ```
