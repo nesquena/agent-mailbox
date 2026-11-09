@@ -402,10 +402,12 @@ case " $ADAPTERS " in *" git "*)
   # a clone that saw the store's branch before it was reset and initialized again is left to fail its rebase, as
   # before: its old history isn't published into the new mailbox
   T="$W/initreset"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  for a in rs1 rs2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  for a in rs1 rs2 rs3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   echo hi > "$T/msg"; as rs1 init >/dev/null; as rs1 register --kind t --about t --no-key >/dev/null
   as rs2 register --kind t --about t --no-key >/dev/null; as rs2 send rs1 old-1 "$T/msg" >/dev/null 2>&1; as rs1 agents >/dev/null 2>&1
-  git --git-dir="$T/store.git" update-ref -d refs/heads/main; as rs2 init --title fresh >/dev/null 2>&1
+  # the store is reset, and initialized again by an agent with no copy of the old branch (one that had a copy would be
+  # told the branch is gone)
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main; as rs3 init --title fresh >/dev/null 2>&1
   expect "a clone that saw a store's old branch doesn't publish it into the new mailbox" 1 "can't update from the store" as rs1 agents
   [ "$(git --git-dir="$T/store.git" log --format=%s main | tr '\n' ' ')" = "mailbox: init " ] &&
     ok "and the new mailbox holds only its own init" || no "a stale clone's history reached the new mailbox" "$(git --git-dir="$T/store.git" log --format=%s main)"
