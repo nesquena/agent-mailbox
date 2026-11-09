@@ -484,11 +484,13 @@ case " $ADAPTERS " in *" git "*)
   within 30 "a live holder is waited for, then named, with how long it has held the lock" 1 "pid $sp\) has been working in this name's copy of the store for 5[0-9]s" as lp list
   within 30 "and so it is by a waiter in another time zone and locale" 1 "pid $sp\)" alp TZ=Asia/Tokyo LC_ALL=fr_FR.UTF-8 "$SH" "$CLI" list
   # and so it is when the boot's id can't be read (a cat that fails on it): the holder's start is its ticks alone
-  mkdir -p "$T/nobid"; printf '%s\n' '#!/bin/sh' 'case "$*" in (*boot_id*) exit 1 ;; esac' 'exec "$REAL_CAT" "$@"' > "$T/nobid/cat"
+  # (the real cat's path is written into the shim, found before the shim is on PATH)
+  mkdir -p "$T/nobid"; printf '%s\n' '#!/bin/sh' 'case "$*" in (*boot_id*) exit 1 ;; esac' "exec '$(command -v cat)' \"\$@\"" > "$T/nobid/cat"
   chmod +x "$T/nobid/cat"
-  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(PATH="$T/nobid:$PATH" REAL_CAT="$(command -v cat)" started "$sp")" > "$lk"
-  within 30 "and so it is when the boot's id can't be read" 1 "pid $sp\) has been working" \
-    alp PATH="$T/nobid:$PATH" REAL_CAT="$(command -v cat)" "$SH" "$CLI" list
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(PATH="$T/nobid:$PATH" started "$sp")" > "$lk"
+  within 30 "and so it is when the boot's id can't be read" 1 "pid $sp\) has been working" alp PATH="$T/nobid:$PATH" "$SH" "$CLI" list
+  # (the lock again as a holder with the boot's id writes it, for the doctor test below)
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
   # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing
   within 30 "doctor says the store is busy while another command holds the lock" 0 "^busy the store wasn't checked" alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
