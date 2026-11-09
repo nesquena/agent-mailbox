@@ -2077,6 +2077,12 @@ r2=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$')
 [ -n "$r1" ] && [ -n "$r2" ] && [ "${r1##*/}" != "${r2##*/}" ] && ok "a consumed message's file name isn't reused in the same second" ||
   no "a consumed message's file name was reused" "first: $r1, then: $r2"
 as u1 consume "${r2##*/}" >/dev/null 2>&1
+# items and versions are compared as strings: a release of 3.1 isn't one of 3.10, 3.100 or 03.1, and item 1.5 isn't 1.50
+echo r | as u2 send u1 num-1 - --release "deploy:num 3.1" >/dev/null 2>&1
+expect "a release of version 3.1 counts for 3.1" 0 "deploy:num released by u2 at 3\.1 " as u1 holds "deploy:num" --version 3.1
+for v in 3.10 3.100 03.1; do expect "but not for $v" 5 "released by u2 at 3\.1, not $v" as u1 holds "deploy:num" --version "$v"; done
+sleep 1; echo r | as u2 send u1 num-2 - --release "1.5 abc" >/dev/null 2>&1
+expect "and a release for item 1.5 isn't one for item 1.50" 5 "nothing recorded for 1\.50" as u1 holds "1.50" --version abc
 T="$W/rules"
 # 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
