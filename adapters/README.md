@@ -30,7 +30,7 @@ The CLI writes every file to a temporary name, then renames it into place, insid
 `ad_commit`. Reads go through `AD_DIR` too, so an adapter for a remote service (a database, an HTTP API, an MCP
 server) can mirror the mailbox to a local cache directory and translate `ad_commit` into its own writes.
 
-ceiling: the contract is file-shaped, which fits stores you can mirror. A service with millions of messages would
+**Limits.** The contract is file-shaped, which fits stores you can mirror. A service with millions of messages would
 want a query interface instead (list an inbox, fetch one message) rather than a full mirror. That's a protocol
 version 2 question, tracked in `docs/roadmap.md`.
 

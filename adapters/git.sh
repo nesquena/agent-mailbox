@@ -120,7 +120,7 @@ ad_pull() {
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
-    ad_git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1
+    ad_ls_branch >/dev/null 2>&1
     case $? in (2) ad_remote_has_branch || return 0
       printf 'the store no longer has the branch %s; if it was re-created, delete %s and run this again\n' "$BRANCH" "$AD_DIR"
       return 1 ;; esac
@@ -166,8 +166,17 @@ ad_commit() {
   ad_push
 }
 
-# a cheap token that changes whenever the store changes: the branch tip, from one small network round trip
-ad_poll() { ad_git ls-remote origin "refs/heads/$BRANCH" | cut -f1; }
+# ad_ls_branch: the store's mailbox branch tip, or exit 2 when the store has no such branch (any other failure is git's
+# own exit). ls-remote matches a pattern against the end of ref names, so refs/heads/x/refs/heads/main matches main too:
+# only the exact name counts
+ad_ls_branch() {
+  lb=$(ad_git ls-remote origin "refs/heads/$BRANCH") || return
+  printf '%s\n' "$lb" | awk -F'\t' -v r="refs/heads/$BRANCH" '$2 == r { print $1; f = 1 } END { exit f ? 0 : 2 }'
+}
+
+# a cheap token that changes whenever the store changes: the branch tip, from one small network round trip; empty
+# while the store has no mailbox branch
+ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 ad_peek() {

@@ -1,7 +1,7 @@
 # agent-mailbox
 
-**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, Hermes or Dot in
-the cloud, a GrokBot, a cron script) register under a name, then send each other short, signed messages through
+**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, a hosted assistant
+in the cloud, a chat bot, a cron script) register under a name, then send each other short, signed messages through
 a store they can all reach. Today that store is any private git repository.
 
 **Status:** protocol 1. Runs on Linux and macOS: POSIX `sh`, git 2.9 or later for a git store, and OpenSSH 8.1 or
@@ -49,12 +49,11 @@ Then give each agent the sentence above. Give each one write access to the store
 to that one repository is enough. The CLI turns off git's own password prompt: without a stored credential, git fails at
 once. [`JOIN.md`](JOIN.md) step 2 lists the prompts it can't turn off, such as ssh's or a macOS Keychain dialog.
 
-**Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own
-branch (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then
-holds the mailbox branch's whole history (a clone made before the store had that branch, or by an earlier copy of the
-CLI, may also hold the store's other branches as they were then), and mailbox commits appear in the repository's
-history, so check that its members are happy with both. Each agent also needs push access to that repository, not
-just to the mailbox's folder.
+**Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own branch
+(`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then holds the
+mailbox branch's whole history (a clone made before the store had that branch may also hold the store's default branch
+as it was then), and mailbox commits appear in the repository's history, so check that its members are happy with
+both. Each agent also needs push access to that repository, not just to the mailbox's folder.
 
 **The protocol repo and the mail store are separate.** This repository holds the protocol, the CLI and the skill.
 Messages never go here; they live in the store you choose. One copy of the CLI can serve any number of stores
@@ -72,6 +71,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, and whether it signs. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Tamper-proof only in a store with `require_signatures: true`. |
+| `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. |
 | `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
