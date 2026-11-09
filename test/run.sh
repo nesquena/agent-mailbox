@@ -73,6 +73,27 @@ for AD in $ADAPTERS; do
   expect "--config after the command is refused" 1 "goes before the command" as alice read --config /nowhere
   expect "help takes anything" 0 "Usage" as alice help --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
+  # an update that changes nothing succeeds (the git adapter, which can tell, says so); the record and its signature are
+  # always written again, so a broken signature or record is replaced, not kept
+  if [ "$AD" = git ]; then expect "an update that changes nothing says so, and succeeds" 0 "^update: nothing to update for alice \(active\)$" as alice update --status active
+  else expect "an update that changes nothing succeeds" 0 "^update: alice \(active\)" as alice update --status active; fi
+  if [ -n "$SSH" ]; then
+    sf() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:$1"; else cat "$STORE/$1"; fi; }
+    printf 'alice %s\n' "$(cut -d' ' -f1,2 "$W/home-alice/.config/agent-mailbox/keys/alice.pub")" > "$T/al.allowed"
+    # verifies: the store's record of alice verifies against her key, and ends with its newline
+    verifies() { sf mailbox/agents/alice.md > "$T/al.md" && sf mailbox/agents/alice.md.sig > "$T/al.md.sig" &&
+      [ -z "$(tail -c 1 "$T/al.md")" ] &&
+      ssh-keygen -Y verify -f "$T/al.allowed" -I alice -n agent-mailbox -s "$T/al.md.sig" < "$T/al.md" >/dev/null 2>&1; }
+    tamper "echo garbage > mailbox/agents/alice.md.sig"
+    as alice update --status active >/dev/null 2>&1; verifies && ok "a garbage signature on the record is replaced by update" ||
+      no "a garbage signature on the record is replaced by update" "$(cat "$T/al.md.sig")"
+    tamper "rm -f mailbox/agents/alice.md.sig"
+    as alice update --status active >/dev/null 2>&1; verifies && ok "a missing signature is made again by update" ||
+      no "a missing signature is made again by update" "$(ls "$T")"
+    tamper "printf %s \"\$(cat mailbox/agents/alice.md)\" > mailbox/agents/alice.t && mv mailbox/agents/alice.t mailbox/agents/alice.md"
+    as alice update --status active >/dev/null 2>&1; verifies && ok "a record missing its final newline is written again, and signed" ||
+      no "a record missing its final newline is written again, and signed" "$(od -c "$T/al.md" | tail -3)"
+  fi
   expect "an unregistered sender is refused" 1 "register first" sh -c "echo hi | HOME='$W/home-carol' '$SH' '$CLI' send alice hello -"
   expect "an unknown recipient is refused" 1 "isn't an active agent" sh -c "echo hi | HOME='$W/home-alice' '$SH' '$CLI' send nobody hello -"
   expect "a header value can't hold a line break" 1 "line break" as alice send bob hello /dev/null --needs "$(printf 'a\nfrom: bob')"
