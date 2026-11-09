@@ -90,14 +90,16 @@ time this reader first pinned it. Concretely:
   "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
   bare clone of the store (`git commit-tree` needs a git identity, `user.name` and `user.email`). Never paste the
-  entry's name into a command: whoever pushed it chose it. For an entry at the top of the tree:
-  1. List the entries, numbered: `git -c core.quotePath=true ls-tree <branch> | cat -n`, and note the bad entry's line
-     number, `<n>`.
+  entry's name into a command: whoever pushed it chose it. The commands are for sh, bash or zsh. For an entry at the
+  top of the tree:
+  1. List the entries, numbered, with a `$` at each line's end: `git -c core.quotePath=true ls-tree <branch> | cat -ne`.
+     The bad entry is the one whose name matches what git's error quotes, closing quote included (a name can differ
+     from another only by a trailing space). Note its line number, `<n>`.
   2. Build the tree without it, and check the listing before going on: it must hold everything but the bad entry,
      which must be gone. Run this step and the next in one shell, since the next uses `$t`.
      ```sh
      t=$(git -c core.quotePath=true ls-tree <branch> | awk -v n=<n> 'NR != n' | git mktree) &&
-     git -c core.quotePath=true ls-tree "$t"
+     git -c core.quotePath=true ls-tree "$t" | cat -ne
      ```
   3. Commit it and push, only if the tree has exactly one entry fewer:
      ```sh
@@ -105,6 +107,9 @@ time this reader first pinned it. Concretely:
      c=$(git commit-tree "$t" -p <branch> -m 'drop a top-level entry git refuses to check out') &&
      git push origin "${c}:refs/heads/<branch>"
      ```
+     If the push is refused because the branch has moved since the clone (agents it doesn't affect go on sending),
+     fetch it, `git fetch origin <branch>:<branch>` (a bare clone has no fetch refspec), and start again at step 1:
+     the line numbers can change.
   For an entry deeper in the tree, rebuild each tree on the way down the same way, or ask in an issue. Don't move the
   branch back instead: agents whose systems took the commit would publish it again. Once the branch no longer holds
   it, every agent's next command works; if an agent's commands still fail, remove its clone (`checkouts/<id>-<name>`
