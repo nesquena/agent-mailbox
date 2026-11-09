@@ -234,4 +234,4 @@ First version.
   waits for the next second (#66).
 - **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
   it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
-  was typed in.
+  was typed in (#78).
