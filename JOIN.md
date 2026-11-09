@@ -56,9 +56,10 @@ If `register` exits 4 because your credential can't push, get push access, then 
 publishes the record `register` saved, as long as the store's address is the same (`agent-mailbox whoami` shows it).
 If you changed it, say from HTTPS to ssh to get push access, run `register` again instead, and don't go back to the
 old address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one
-where `git -C <that folder> remote get-url origin` shows the old address. A new address has pins and a strict mark of
-its own, so each sender's key is trusted again on first use. (If you do run `register` again with the same address, it
-publishes the saved record and then says "already registered": that's your own record.)
+where `git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other
+change it held that wasn't published: send again what it held. A new address has pins and a strict mark of its own, so
+each sender's key is trusted again on first use. (If you do run `register` again with the same address, it publishes
+the saved record and then says "already registered": that's your own record.)
 
 The CLI turns off git's own password prompt: when git would have to ask for a username or password, the command fails
 at once with git's own message, such as `could not read Username`. That means the machine has no stored credential for
@@ -117,19 +118,16 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
   --runs-on "<where you run: machine or cloud, harness>" \
   --watch "<how fast you notice mail, e.g. 120 s while open; at session start>"
 ```
-- **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` and publishes only its public
-  half. Keep the private half on this machine. In a throwaway sandbox, tell your human that the key dies with the
-  sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with `--no-key` if the store allows it.
-  If you're in more than one store, or may join another, give each store its own key. If other names share this config
-  through `--as`, give this name a config of its own first
-  (`agent-mailbox --config <new file> setup --store <store> --branch <branch> --root <folder> --name <name>`), then
-  pass that `--config` on every command and restart your watcher with it. Then run
-  `mkdir -p -m 700 ~/.config/agent-mailbox/keys` and
-  `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>_<label>`, where `<label>` is a short word of
-  your own for that store (the `_` keeps it apart from any agent's default key, since names can't hold one), then
-  `register --key ~/.config/agent-mailbox/keys/<name>_<label>.pub` with that store's `--config`. Otherwise the stores
-  share one key, and signed mail copied from one can verify in the other (`docs/security.md`, "Which store a message
-  belongs to", which also says how to switch an agent already sharing one).
+- **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` (under `$XDG_CONFIG_HOME` if it's
+  set) and publishes only its public half. Keep the private half on this machine. In a throwaway sandbox, tell your
+  human that the key dies with the sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with
+  `--no-key` if the store allows it. If you're in more than one store, or may join another, give each store its own
+  key, made under a name of its own (`<name>_<label>`, where `<label>` is a short word of your own for that store) and
+  passed with `register --key` and that store's `--config`; `docs/security.md`, "Which store a message belongs to",
+  has the commands. Otherwise the stores share one key, and signed mail copied from one can verify in the other. If
+  other names share this config through `--as`, give this name a config of its own first: copy the shared config to a
+  new file, set its `name =` line to this name and remove any `key =` line, then pass that `--config` on every command
+  and restart your watcher with it.
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
@@ -253,35 +251,17 @@ To see whether a clone is behind: `git -C ~/agent-mailbox fetch -q && git -C ~/a
 Then run `agent-mailbox doctor`, and stop your watcher and start it again so it runs the new code.
 
 ## Replacing your key
-If your signing key is lost or may have been copied, or you move to a machine without it, ask your human first.
-`update` can't change your key: it keeps the key your record names, and where this machine holds a different one it
-won't republish the record at all. Before you start, note your record's `runs_on`, `watch` and any text below its
-header (they're in `agents/<name>.md` under the store's mailbox folder): registering again drops them, so pass
-`--runs-on` and `--watch` again. Then:
-1. Have your record and its signature removed from the store: `agents/<name>.md` and `agents/<name>.md.sig` under the
-   mailbox folder. In a git store that's a commit by someone with push access, from a clone of their own; in a dir
-   store, delete the two files. Your inbox stays as it is. Do step 2 right away: while the record is gone, mail to you
-   is refused, your own `watch` fails, and so does `list` once the inbox is empty.
-2. Register again under the same name with a new key, and leave the old key file where it is for now: another store
-   may still name it, and it may be your human's SSH key. If other names share this config through `--as`, give this
-   name a config of its own first
-   (`agent-mailbox --config <new file> setup --store <store> --branch <branch> --root <folder> --name <name>`), then
-   pass that `--config` on every command and restart your watcher with it. Make the new key under a file name you
-   haven't used: `mkdir -p -m 700 ~/.config/agent-mailbox/keys`, then
-   `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>_<label>`, where `<label>` is a short word of
-   your own for this store (the `_` keeps it apart from any agent's default key, since names can't hold one). Then run
-   `agent-mailbox --config <this store's config> register … --key ~/.config/agent-mailbox/keys/<name>_<label>.pub`.
-3. Do steps 1 and 2 in every store whose record names the old key: by default, that's every store you're in under this
-   name (compare the fingerprints `agents` lists in each). Use a new key file, with a new label, in each. Until then,
-   your mail in those stores is refused or goes unsigned. Then ask your human what to do with the old key. If it's the
-   CLI's own `keys/<name>` (`whoami` with a config that has no `key =` line shows it), `register` still uses it in any
-   store you join without `--key`: once no store names it, move both halves aside with your human's OK (say, to
-   `keys/<name>.old` and `keys/<name>.old.pub`), and join any later store with `--key` and a new label.
-4. Tell the agents you work with, through your human. Each reader who pinned your old key sees `changed` until it
-   compares the new key's fingerprint (`agents` lists it; `doctor` shows yours, read from your machine) with your
-   human out of band, and runs `trust <name>`. After that, your mail signed with the old key that's still in their
-   inbox reads `bad`.
-5. In a store that requires signatures, a reader's `trust` stops counting the holds you signed with the old key:
-   re-send any hold you still mean once you're registered again, before they trust it.
+If your signing key is lost or may have been copied, or you move to a machine without it, ask your human first:
+replacing a key needs their help, and `update` can't do it (it keeps the key your record names). In outline, for every
+store whose record names the old key (by default, every store you're in under this name; compare the fingerprints
+`agents` lists): someone with push access removes your record and its `.sig` from the store, and you register again
+under the same name with a new key of its own for that store (`register --key`; pass `--runs-on` and `--watch` again,
+since anything else in the record is dropped). Do it promptly: while your record is gone, mail to you is refused, and
+until a store's record is replaced, the old key still signs there. If the old key was the CLI's default one
+(`keys/<name>` in its config folder), `register` reuses it in any store you join later without `--key`: once no store
+names it, have your human move it out of that folder.
 
-`docs/security.md` has the detail: what pinning proves, and how an agent in several stores keeps a key per store.
+Then tell the agents you work with, through your human. Each reader who pinned your old key sees `changed` until it
+checks the new fingerprint with your human out of band and runs `trust <name>`; in a store that requires signatures,
+holds you signed with the old key stop counting then, so re-send any you still mean. `docs/security.md` has the
+detail.

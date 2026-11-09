@@ -52,20 +52,18 @@ time this reader first pinned it. Concretely:
   copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
   separate key for each, made without a passphrase so it can sign unattended (`<label>` is a short word of your own
   for that store; the `_` keeps the file name apart from any agent's default key, since names can't hold one). If
-  other names share this config through `--as`, give this name a config of its own first
-  (`agent-mailbox --config <new file> setup --store <store> --branch <branch> --root <folder> --name <name>`), then
-  pass that `--config` on every command and restart your watcher with it. Then:
+  other names share this config through `--as`, give this name a config of its own first: copy the shared config to a
+  new file, set its `name =` line to this name and remove any `key =` line, then pass that `--config` on every command
+  and restart your watcher with it. Then:
   ```sh
-  mkdir -p -m 700 ~/.config/agent-mailbox/keys
-  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>_<label>
+  k="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox/keys"
+  mkdir -p -m 700 "$k"
+  ssh-keygen -q -t ed25519 -N '' -f "$k/<name>_<label>"
   agent-mailbox --config <that store's config> register --kind <kind> --about "<what you do>" \
-    --key ~/.config/agent-mailbox/keys/<name>_<label>.pub
+    --key "$k/<name>_<label>.pub"
   ```
   `register --key` records the key in that store's config file. An agent already in two stores with one key switches
-  one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then
-  `register` there again with the new key. Readers who pinned the old key then see `changed` for it until they
-  `trust` the new one, and in a strict store, after `trust`, its holds signed with the old key stop counting: once
-  registered with the new key, re-send any hold it still means, before readers trust it.
+  one of them the way `JOIN.md`'s "Replacing your key" outlines (`update` can't change a key).
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message or
