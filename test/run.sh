@@ -423,23 +423,69 @@ case " $ADAPTERS " in *" git "*)
     ok "every reply is in the store, and every message it answered is consumed" ||
     no "every reply is in the store, and every message it answered is consumed" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
   expect "and the clone agrees with the store" 3 "no mail" as lp list
-  # a lock whose holder is gone, or whose pid is now another process's, is broken at once; a live holder is waited
-  # for, then named
-  ck=$(ls -d "$W/home-lp/.local/state/agent-mailbox/checkouts/"*-lp); AGENT_MAILBOX_LOCK_WAIT=3; export AGENT_MAILBOX_LOCK_WAIT
-  started() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
-  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s\n' "$dp" "$(date +%s)" "Thu Jan  1 00:00:00 1970" > "$ck.lock"
-  expect "a lock whose holder is gone is broken at once" 3 "no mail" as lp list
-  [ ! -e "$ck.lock" ] && ok "and the command's own lock is gone once it's done" || no "a lock was left behind" "$(cat "$ck.lock")"
-  sleep 30 & sp=$!; printf '%s %s %s\n' "$sp" "$(date +%s)" "Thu Jan  1 00:00:00 1970" > "$ck.lock"
-  expect "a lock naming a pid now another process's is broken at once" 3 "no mail" as lp list
-  [ ! -e "$ck.lock" ] && ok "and replaced" || no "a lock naming a reused pid was kept" "$(cat "$ck.lock")"
-  printf '%s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$(started "$sp")" > "$ck.lock"
-  expect "a live holder is waited for, then named, with how long it has held the lock" 1 "pid $sp\) has been working in this name's copy of the store for 5[0-9]s" as lp list
-  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null; rm -f "$ck.lock"; unset AGENT_MAILBOX_LOCK_WAIT
-  # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, and a consume
-  # never committed
+  # within <seconds> <description> <exit code> <pattern or -> <command...>: as expect, and the command must be done
+  # within that many seconds (one still running is stopped, and fails the test)
+  within() { ws=$1 d=$2 code=$3 pat=$4; shift 4; rm -f "$T/wrc"; ( "$@" > "$T/wo" 2>&1; echo $? > "$T/wrc" ) & wp=$!; n=0
+    while [ $n -lt "$ws" ] && [ ! -s "$T/wrc" ]; do sleep 1; n=$((n+1)); done
+    if [ ! -s "$T/wrc" ]; then pkill -P "$wp" 2>/dev/null; kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+      no "$d (still running after ${ws}s)" "$(cat "$T/wo")"; return; fi
+    wait "$wp" 2>/dev/null; rc=$(cat "$T/wrc"); out=$(cat "$T/wo")
+    [ "$rc" = "$code" ] || { no "$d (exit $rc, wanted $code)" "$out"; return; }
+    [ "$pat" = - ] || printf '%s\n' "$out" | grep -Eq -- "$pat" || { no "$d (output didn't match /$pat/)" "$out"; return; }; ok "$d"; }
+  # alp <VAR=value...> <args>: run the CLI as lp with that extra environment (env takes the leading assignments)
+  alp() { env HOME="$W/home-lp" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$@"; }
+  # a lock whose holder is gone, or whose pid is now another process's, is broken at once; a live holder, or one on
+  # another host, is waited for, then named
+  ck=$(ls -d "$W/home-lp/.local/state/agent-mailbox/checkouts/"*-lp); ld=$(ls -d "$W/home-lp/.local/state/agent-mailbox/locks/"*-lp)
+  lk="$ld/lock"; host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
+  AGENT_MAILBOX_LOCK_WAIT=3; export AGENT_MAILBOX_LOCK_WAIT
+  started() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+  # (a dead holder, in the form a machine without ps writes: kill -0 decides)
+  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"
+  within 20 "a lock whose holder is gone is broken at once" 3 "no mail" as lp list
+  [ ! -e "$lk" ] && ok "and the command's own lock is gone once it's done" || no "a lock was left behind" "$(cat "$lk")"
+  sleep 120 & sp=$!; printf '%s %s %s %s\n' "$sp" "$(date +%s)" "$host" "Thu Jan 1 00:00:00 1970" > "$lk"
+  within 20 "a lock naming a pid now another process's is broken at once" 3 "no mail" as lp list
+  [ ! -e "$lk" ] && ok "and replaced" || no "a lock naming a reused pid was kept" "$(cat "$lk")"
+  printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
+  within 30 "a live holder is waited for, then named, with how long it has held the lock" 1 "pid $sp\) has been working in this name's copy of the store for 5[0-9]s" as lp list
+  within 30 "and so it is by a waiter in another time zone and locale" 1 "pid $sp\)" alp TZ=Asia/Tokyo LC_ALL=fr_FR.UTF-8 "$SH" "$CLI" list
+  printf '%s %s %s %s\n' "$dp" "$(( $(date +%s) - 10 ))" elsewhere.example "x" > "$lk"
+  within 30 "a holder on another host is waited for, and named with its host" 1 "pid $dp on elsewhere\.example\)" as lp list
+  rm -f "$lk"
+  # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
+  # PATH notes a fetch that starts while another is running)
+  mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
+    '  if mkdir "$LOCKT/busy" 2>/dev/null; then "$REAL_GIT" "$@"; rc=$?; sleep 1; rmdir "$LOCKT/busy"; exit $rc; fi' \
+    '  echo overlap >> "$LOCKT/overlaps" ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/lsh/git"; chmod +x "$T/lsh/git"
+  sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; : > "$T/overlaps"
+  for i in 1 2 3 4 5; do ( alp PATH="$T/lsh:$PATH" REAL_GIT="$(command -v git)" LOCKT="$T" AGENT_MAILBOX_LOCK_WAIT=60 "$SH" "$CLI" list > "$T/lw$i" 2>&1
+    echo $? > "$T/lw$i.rc" ) & done; wait
+  [ ! -s "$T/overlaps" ] && [ "$(cat "$T/lw1.rc" "$T/lw2.rc" "$T/lw3.rc" "$T/lw4.rc" "$T/lw5.rc" | tr -d '\n')" = 33333 ] &&
+    ok "five waiters on a dead holder's lock take turns, never two at once" ||
+    no "five waiters on a dead holder's lock take turns, never two at once" "overlaps: $(wc -l < "$T/overlaps"); exits: $(cat "$T/lw"*.rc | tr '\n' ' ')"
+  # a lock that can't be made, or a stale one that can't be removed, stops the command, saying so, instead of waiting
+  chmod a-w "$ld"
+  if (true > "$ld/probe") 2>/dev/null; then rm -f "$ld/probe"; chmod u+w "$ld"
+    sk "a lock that can't be made, or removed, stops the command (read-only folders don't stop this user)"
+  else
+    within 20 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
+    chmod u+w "$ld"; sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; chmod a-w "$ld"
+    within 20 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
+    chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+  fi
+  # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
+  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0
+  while [ $n -lt 30 ] && ! grep -q "^$wpid " "$W/home-lp/.local/state/agent-mailbox/run/lp.pid" 2>/dev/null; do sleep 1; n=$((n+1)); done
+  within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
+  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
+  # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, a consume never
+  # committed, a file it wrote but never added, and git's own lock on the index
   mkdir -p "$ck/.git/rebase-merge"; : > "$ck/.git/rebase-merge/autostash"
   expect "a rebase left half-removed doesn't stop the next command" 3 "no mail" as lp list
+  : > "$ck/.git/index.lock"; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
+  expect "nor does git's lock on the index, and a file written but never added isn't taken for mail" 3 "no mail" as lp list
   as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
   expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
 

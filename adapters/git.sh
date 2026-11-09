@@ -137,34 +137,56 @@ ad_push() {
 }
 
 # ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
-# in its clone instead of working in it at once. The lock is a file beside the clone, created with noclobber, naming
-# its holder: "<pid> <epoch it took the lock> <the holder's start time, from ps>". A holder that's gone, or a pid now
-# another process's (its start time differs), is broken at once; a lock that can't be read is broken once it's a
-# minute old. A command waits for a live holder up to AGENT_MAILBOX_LOCK_WAIT seconds (120), then stops, naming it.
-# ceiling: two commands that find the same stale lock at once can both break it, one removing the other's new lock just
-# after it's taken, and then both work in the clone; that needs a command killed while holding it, then two starting
-# together within the moment between the second one's read and its removal
-ad_started() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+# in its clone instead of working in it at once. The lock is a file in the state folder's locks/<clone id>/ (where no
+# clone name can reach it), created with noclobber, naming its holder: "<pid> <epoch it took the lock> <host> <the
+# holder's start time, from ps in UTC and the C locale>". A holder on this host that's gone, or a pid now another
+# process's (its start time differs), is broken at once; a lock that can't be read is broken once it's a minute old; a
+# holder on another host (a state folder shared between machines) can't be checked, so it's waited for. Breaking a
+# lock takes a guard file first, so two waiters never both break it. A command waits up to AGENT_MAILBOX_LOCK_WAIT
+# seconds (120), then stops, naming the holder.
+# ceiling: a breaker killed while holding the guard leaves it; it's taken as abandoned, and removed, once a minute old
+ad_started() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
 AD_LOCK="" AD_LOCKED=""
 ad_lock() {
-  AD_LOCK="$AD_DIR.lock"; AD_LOCKED="$$ $(date +%s) $(ad_started $$)"
+  ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
+  lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
+  mine="$$ $(date +%s) $host $(ad_started $$)"
   lw=${AGENT_MAILBOX_LOCK_WAIT:-120}; case "$lw" in (''|*[!0-9]*) lw=120 ;; esac; [ "${#lw}" -le 5 ] || lw=120
   t0=$(date +%s)
-  until (set -C; printf '%s\n' "$AD_LOCKED" > "$AD_LOCK") 2>/dev/null; do
-    held=$(cat "$AD_LOCK" 2>/dev/null); hp=${held%% *} rest=${held#* }; he=${rest%% *} hs=${rest#* }
-    case "$hp$he" in
-      (''|*[!0-9]*) [ -z "$(find "$AD_LOCK" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
-      (*) stale=""; kill -0 "$hp" 2>/dev/null && [ "$(ad_started "$hp")" = "$hs" ] || stale=1 ;;
-    esac
-    if [ -n "${stale:-}" ]; then
-      # (removed only while it still holds what was found stale, so a lock another command has just taken stays)
-      [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$held" ] || rm -f "$AD_LOCK"; stale=""; continue
+  while :; do
+    stale=""
+    (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then)
+    if [ ! -e "$lk" ] && [ ! -L "$lk" ]; then
+      (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+      [ -e "$lk" ] || [ -L "$lk" ] || die "can't create the lock $lk"
     fi
-    [ $(( $(date +%s) - t0 )) -lt "$lw" ] || { AD_LOCK=""
+    held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
+    set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
+    case "$hp$he" in
+      (''|*[!0-9]*) [ -z "$(find "$lk" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
+      (*) [ "$hh" != "$host" ] || { kill -0 "$hp" 2>/dev/null && [ "$(ad_started "$hp")" = "$hs" ]; } || stale=1 ;;
+    esac
+    if [ -n "$stale" ]; then
+      # (a guard just released by another waiter is tried once more)
+      if (set -C; : > "$ld/break") 2>/dev/null || { [ ! -e "$ld/break" ] && (set -C; : > "$ld/break") 2>/dev/null; }; then
+        # (removed only while it still holds what was found stale)
+        if [ "$(cat "$lk" 2>/dev/null)" = "$held" ]; then
+          rm -f "$lk" 2>/dev/null || { rm -f "$ld/break"; die "can't remove the stale lock $lk"; }
+        fi
+        rm -f "$ld/break"; continue
+      fi
+      # (still no guard there, so the folder can't be written: the stale lock can't be removed either)
+      [ -e "$ld/break" ] || die "can't remove the stale lock $lk"
+      [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
+    fi
+    [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
       case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
-      die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again"; }
+      on=""; [ -z "$hh" ] || [ "$hh" = "$host" ] || on=" on $hh"
+      die "another agent-mailbox command (pid ${hp:-unknown}$on) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again"; }
     sleep 1
   done
+  AD_LOCK=$lk AD_LOCKED=$mine
   trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
 }
 # ad_unlock: release the lock, if this command still holds it

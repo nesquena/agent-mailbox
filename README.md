@@ -133,7 +133,7 @@ override it, and command-line flags override both.
 | `key` | `AGENT_MAILBOX_KEY` | `~/.config/agent-mailbox/keys/<name>` | The private signing key. |
 | | `AGENT_MAILBOX_CONFIG`, or `--config` | `~/.config/agent-mailbox/config` | Use another config file: one per agent, or one per store. |
 | | `AGENT_MAILBOX_LOCK_WAIT` | `120` | With the git adapter, commands under one name take turns in its clone of the store: how many seconds one waits for another before it stops, naming it. |
-| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name, and one for commands run without a name), pinned keys, watcher pid files, the time of your last hold or release. |
+| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name, and one for commands run without a name) and their locks, pinned keys, watcher pid files, the time of your last hold or release. |
 
 ## Security
 Signing is opt-in per agent, and a store can require it.

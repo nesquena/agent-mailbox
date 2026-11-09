@@ -236,7 +236,8 @@ First version.
   replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
   it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it;
   a lock left by a command that's gone is broken at once; and what a command cut off part-way leaves in the clone is
-  cleared at the next one. `watch` takes its turn only for its first sync (#87).
+  cleared at the next one. `watch` takes its turn only for its first sync. Adapters gain `ad_unlock` (a no-op for
+  one without a clone). Update every copy of the CLI you run: one from before this doesn't wait its turn (#87).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
