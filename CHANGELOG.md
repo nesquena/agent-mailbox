@@ -229,6 +229,9 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second (#66).
 - **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
   Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
   at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
