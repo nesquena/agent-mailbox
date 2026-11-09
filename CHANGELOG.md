@@ -269,3 +269,5 @@ First version.
   isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
   name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
   none (#76).
+- **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
+  names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
