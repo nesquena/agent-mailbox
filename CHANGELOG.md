@@ -298,3 +298,15 @@ First version.
 - **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
   count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
   `agents`, or the watcher's last output, a local file (#85).
+- **Key fingerprints to compare out of band:** `agents` lists each registered key's SHA256 fingerprint, `trust`
+  prints the one it pins, `doctor` shows this agent's own (read from this machine, not the store), and `holds`, on a
+  changed key, says where to find it. A key ssh-keygen can't read is said so (#97).
+- **Fix:** the Claude Code hook's watchdog sleeps only until its deadline, so a watcher that hangs (a fetch over a
+  dead connection) ends at the deadline, not up to 15 s past it (#103).
+- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
+  (remove the clone it names, sending again what its unpublished commits held, and run the command again), when it
+  saw the store's branch before it was reset or re-created, or when its unpublished init is for a folder another
+  agent's init has since taken. Nothing it holds is published into the store; before, some of these cases republished
+  stale history into the new mailbox, and others failed with git's own rebase error. An `init` that loses a race for
+  one folder, on a new branch or one that already exists, fails saying so, with the winner's title and
+  `require_signatures`, instead of exit 4. Mailboxes in other folders of the same branch are published as before (#68).

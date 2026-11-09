@@ -41,6 +41,8 @@
 # (re-run a command with the same name to publish; don't resend); 5 not released; 6 signature not verified.
 set -u
 VERSION=0.1.0
+# (set only by init, around its own commit: never taken from the environment)
+AD_INIT=
 PROTOCOL=1
 NS=agent-mailbox
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
@@ -281,6 +283,10 @@ require_sigs() {
 record() { printf '%s\n' "$M/agents/$1.md"; }
 # reg_key <record file>: the key the record names, or nothing when it names none or the value isn't a plain key
 reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf '%s\n' "$rk"; }
+# fingerprint <public key>: its SHA256 fingerprint, as ssh-keygen -l prints it, for comparing out of band; empty
+# without ssh-keygen. fpnote <public key>: that, or a note when ssh-keygen can't read the key
+fingerprint() { printf '%s\n' "$1" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2; }
+fpnote() { fn=$(fingerprint "$1"); [ -n "$fn" ] || ! have_ssh || fn="ssh-keygen can't read this key"; printf '%s' "$fn"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
@@ -412,9 +418,14 @@ init)
   [ -f "$M/store.md" ] && die "a mailbox already exists at '$ROOT/' in this store"
   no_link "$M/agents/.keep"; no_link "$M/inbox/.keep"; no_link "$M/store.md"
   mkdir -p "$M/agents" "$M/inbox"; : > "$M/agents/.keep"; : > "$M/inbox/.keep"
-  put "$M/store.md" "$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
-    "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
-  ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"
+  ours=$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
+    "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  put "$M/store.md" "$ours"
+  # another agent's init can win the race while this one publishes: AD_INIT lets the git adapter drop this commit, and
+  # only this one, and the store keeps the winner's settings, which may differ
+  AD_INIT=1; ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"; AD_INIT=""
+  [ "$(cat "$M/store.md" 2>/dev/null)" = "$ours" ] ||
+    die "another agent initialized the mailbox at '$ROOT/' first, so this init was dropped; its settings are in $ROOT/store.md (title: $(field title "$M/store.md" | clean "$CAP"), require_signatures: $(field require_signatures "$M/store.md" | clean "$CAP"))"
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
@@ -518,16 +529,19 @@ register|update)
 agents)
   [ $# -eq 0 ] || unknown "$1"
   load_adapter; ad_sync; need_store
-  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT
+  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT; fps=
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
-    k=no; [ -n "$(reg_key "$r")" ] && k=yes
+    k=no; rk=$(reg_key "$r") && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
+    [ -z "$rk" ] || { fp=$(fpnote "$rk"); [ -z "$fp" ] || fps="$fps$(printf '%-24s %s' "$n" "$fp")$NL"; }
     # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows
     printf '%s\n%s\n%s\n' "$(field status "$r")" "$(field kind "$r")" "$(field about "$r")" | clean "$CAP" |
       { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
-  done ;;
+  done
+  # each key's fingerprint, to compare with its agent's human out of band (`trust` prints the one it pins)
+  [ -z "$fps" ] || printf '\nkey fingerprints:\n%s' "$fps" ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name> | trust --relax"
   if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict"
@@ -535,7 +549,8 @@ trust)
   valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
-  echo "pinned $1's current key; mail $1 signed with an earlier key (holds included) no longer counts" ;;
+  fp=$(fpnote "$pub")
+  echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key (holds included) no longer counts" ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -801,7 +816,7 @@ holds)
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
   echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
-    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
@@ -906,7 +921,9 @@ doctor)
     (nopub) echo "FAIL $ME is registered and active: it's retired here: if it's yours, restore your key's public half ('ssh-keygen -y -f $KEY > $KEY.pub'), then run update --status active; if not, pick another name"; ok=1 ;;
     (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
   esac
-  [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
+  # (with its fingerprint, read from this machine: the side an agent's human compares with what others see)
+  [ -z "$KEY" ] || { [ -f "$KEY" ] && { kf=""; ! have_ssh || kf=$(fpnote "$(own_pub)")
+      printf 'ok   signing key at %s%s\n' "$KEY" "${kf:+ ($kf)}"; } || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command '$cmd' (try: agent-mailbox help)" ;;

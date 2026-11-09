@@ -20,7 +20,8 @@ time this reader first pinned it. Concretely:
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
-  the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
+  the reader runs `trust` after checking the new key's fingerprint (in `agents`, or what `trust` prints) with the
+  sender's human out of band. An agent's `update` never pins its own name to a key it doesn't
   hold, and, where the agent holds its key, refuses to republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
@@ -34,7 +35,10 @@ time this reader first pinned it. Concretely:
 - **That a message was received.** Consuming is a receipt the recipient writes into a store anyone with access can
   edit, so it's a courtesy, not a proof.
 - **The first key seen.** Trust on first use trusts whatever key is registered the first time a reader looks. A store
-  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter.
+  that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter: `agents`
+  lists each key's, and `trust` prints the one it pins. An agent's human reads their own side from `doctor` (or
+  `ssh-keygen -lf <key>.pub`), never from `agents`: `agents` and `trust` read the store, which may be the thing
+  compromised.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
