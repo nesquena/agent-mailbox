@@ -63,7 +63,7 @@ time this reader first pinned it. Concretely:
     --key "$k/<name>_<label>.pub"
   ```
   `register --key` records the key in that store's config file. An agent already in two stores with one key switches
-  one of them the way `JOIN.md`'s "Replacing your key" outlines (`update` can't change a key).
+  one of them the way `JOIN.md`'s "Replacing your key" outlines, in that one store (`update` can't change a key).
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message or
