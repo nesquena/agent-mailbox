@@ -90,30 +90,37 @@ time this reader first pinned it. Concretely:
   "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
   bare clone of the store (`git commit-tree` needs a git identity, `user.name` and `user.email`). Never paste the
-  entry's name into a command: whoever pushed it chose it. The commands are for sh, bash or zsh. For an entry at the
-  top of the tree:
-  1. List the entries, numbered, with a `$` at each line's end: `git -c core.quotePath=true ls-tree <branch> | cat -ne`.
-     The bad entry is the one whose name matches the first part of the path git's error quotes, up to the first `/`
-     or the closing quote (a name can differ from another only by a trailing space). Note its line number, `<n>`.
-  2. Build the tree without it, and check the listing before going on: it must hold everything but the bad entry,
-     which must be gone. Run this step and the next in one shell, since the next uses `$t`.
+  entry's name into a command: whoever pushed it chose it. The commands are for sh, bash or zsh.
+  1. List every file, numbered, with a `$` at each line's end:
+     `git -c core.quotePath=true ls-tree -r <branch> | cat -ne`. The bad entry is the line whose path is the whole
+     path git's error quotes. Names with unusual bytes are shown quoted (`"..."`, with `\` escapes), and a trailing
+     space shows before the `$`, so a look-alike stands out from the genuine path. For a `.git` at the top, git may
+     name it on its own or not at all: look for `.git` in the listing. Note the line number, `<n>`.
+  2. Build the tree without it, in a scratch index, and check the listing. Run this step and the next in one shell,
+     since the next uses `$t`.
      ```sh
-     t=$(git -c core.quotePath=true ls-tree <branch> | awk -v n=<n> 'NR != n' | git mktree) &&
-     git -c core.quotePath=true ls-tree "$t" | cat -ne
+     x=$(mktemp) && rm -f "$x" &&
+     git -c core.quotePath=true ls-tree -r <branch> | awk -v n=<n> 'NR != n' |
+       GIT_INDEX_FILE=$x git update-index --index-info &&
+     t=$(GIT_INDEX_FILE=$x git write-tree) && rm -f "$x" && git -c core.quotePath=true ls-tree -r "$t" | cat -ne
      ```
-  3. Commit it and push, only if the tree has exactly one entry fewer:
+     `update-index` prints "Ignoring path" for, and leaves out, any other path this machine's git refuses; the next
+     step's count check then stops.
+  3. Commit and push, only if exactly one file is gone and your mailbox is still there. `<root>` is your mailbox
+     folder (`mailbox`, unless your setup's `--root` says otherwise): you type it; it doesn't come from the store.
      ```sh
-     [ "$(git ls-tree "$t" | wc -l)" -eq "$(( $(git ls-tree <branch> | wc -l) - 1 ))" ] &&
-     c=$(git commit-tree "$t" -p <branch> -m 'drop a top-level entry git refuses to check out') &&
+     [ "$(git ls-tree -r "$t" | wc -l)" -eq "$(( $(git ls-tree -r <branch> | wc -l) - 1 ))" ] &&
+     git cat-file -e "${t}:<root>/store.md" &&
+     c=$(git commit-tree "$t" -p <branch> -m 'drop a file git refuses to check out') &&
      git push origin "${c}:refs/heads/<branch>"
      ```
      If the push is refused because the branch has moved since the clone (agents it doesn't affect go on sending),
      fetch it, `git fetch origin <branch>:<branch>` (a bare clone has no fetch refspec), and start again at step 1:
-     the line numbers can change.
-  For an entry deeper in the tree, rebuild each tree on the way down the same way, or ask in an issue. Don't move the
-  branch back instead: agents whose systems took the commit would publish it again. Once the branch no longer holds
-  it, every agent's next command works; if an agent's commands still fail, remove its clone (`checkouts/<id>-<name>`
-  in its state folder). Give push access only to agents and people you'd trust with that.
+     the line numbers can change. If git's error still names a path after the push (a refused folder can hold more
+     than one file), repeat from step 1 for it.
+  Don't move the branch back instead: agents whose systems took the commit would publish it again. Once the branch no
+  longer holds it, every agent's next command works; if an agent's commands still fail, remove its clone
+  (`checkouts/<id>-<name>` in its state folder). Give push access only to agents and people you'd trust with that.
 - **The store's git settings don't apply.** With the git adapter, a `.gitattributes` or `.lfsconfig` committed to
   the store can't change how the CLI's own clone checks out or merges files (line endings, filters such as Git LFS,
   merge drivers), and that clone never recurses into submodules or runs git hooks, so a store writer can't alter mail
