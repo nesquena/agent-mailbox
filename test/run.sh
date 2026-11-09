@@ -100,6 +100,9 @@ body
 '; hm 20200101T000005Z-alice-hdr5.md hdr5 '  x_extra: 1
 '; hm 20200101T000006Z-alice-hdr6.md hdr6 'from : carol
 '
+  hm 20200101T000011Z-alice-hdr11.md hdr11 'abc
+'; hm 20200101T000012Z-alice-hdr12.md hdr12 ':v
+'
   hm 20200101T000007Z-alice-hdr7.md hdr7 'x_extra: 1
 x-trace:abc
 '
@@ -107,7 +110,7 @@ x-trace:abc
   hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
-  for n in 1 2 3 4 5 6; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
+  for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
   printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
     no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
@@ -127,23 +130,27 @@ x-trace:abc
     echo hi | as alice send bob swapme - >/dev/null 2>&1
     sp=$(as bob list | grep -- '-alice-swapme\.md$'); [ "$AD" = git ] && sp="$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts/"*-bob | head -n 1)/$sp" || sp="$STORE/$sp"
     mkdir -p "$T/kgs"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y verify "*) ;; (*) exec "$REAL_KG" "$@" ;; esac' \
+      'p=; for a in "$@"; do [ "$p" != -s ] || [ "$a" != "$SWAP_FILE.sig" ] || : > "$SWAP_DONE.store"; p=$a; done' \
       'm=$(mktemp); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
       'if grep -q "^topic: swapme$" "$m" && [ ! -e "$SWAP_DONE" ]; then : > "$SWAP_DONE"; cp "$SWAP_FILE" "$SWAP_FILE.orig"' \
       '  sed "s/^from: alice$/from: carol/" "$SWAP_FILE" > "$SWAP_FILE.t" && mv -f "$SWAP_FILE.t" "$SWAP_FILE"; fi' \
       'rm -f "$m"; exit $rc' > "$T/kgs/ssh-keygen"; chmod +x "$T/kgs/ssh-keygen"; rm -f "$T/swapped"
-    out=$(env PATH="$T/kgs:$PATH" REAL_KG="$(command -v ssh-keygen)" SWAP_FILE="$sp" SWAP_DONE="$T/swapped" HOME="$W/home-bob" \
+    rm -f "$T/swapped.store"; out=$(env PATH="$T/kgs:$PATH" REAL_KG="$(command -v ssh-keygen)" SWAP_FILE="$sp" SWAP_DONE="$T/swapped" HOME="$W/home-bob" \
       XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" read 2>&1 |
       awk '/^===== / && index($0, "swapme") { on = 1 } on && /^===== end/ { on = 0 } on')
     case "$out" in (*"alice-swapme.md [verified: from alice]"*"from: alice"*) case "$out" in (*carol*) no "read shows the message it checked, once" "$out" ;;
         (*) ok "read shows the message it checked, once" ;; esac ;; (*) no "read shows the message it checked, once" "$out" ;; esac
+    [ ! -e "$T/swapped.store" ] && ok "read verifies its own copy, never the store's file" ||
+      no "read verified the store's file, not its own copy"
     [ ! -e "$sp.orig" ] || mv -f "$sp.orig" "$sp"; as bob consume "${sp##*/}" >/dev/null 2>&1
   fi
-  # a .sig that's a link (a store folder can hold one) isn't the message's signature, for read and verify alike
+  # a .sig that's a link (a store folder can hold one) isn't the message's signature, for read, verify and holds alike
   if [ "$AD" = dir ] && [ -n "$SSH" ]; then
-    echo hi | as alice send bob linked - >/dev/null 2>&1; lp=$(as bob list | grep -- '-alice-linked\.md$')
+    echo hi | as alice send bob linked - --release "lk#1 v1" >/dev/null 2>&1; lp=$(as bob list | grep -- '-alice-linked\.md$')
     mv "$STORE/$lp.sig" "$STORE/$lp.sig.real" && ln -s "$STORE/$lp.sig.real" "$STORE/$lp.sig"
     expect "read takes a .sig that's a link as no signature" 0 "alice-linked\.md \[unsigned\]" as bob read
     expect "and so does verify" 6 "^unsigned$" as bob verify "${lp##*/}"
+    expect "and so does holds" 0 "lk#1 released by alice at v1 \(.*, unsigned\)" as bob holds "lk#1" --version v1
     rm -f "$STORE/$lp.sig" "$STORE/$lp.sig.real"; as bob consume "${lp##*/}" >/dev/null 2>&1
   fi
   expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
@@ -1831,7 +1838,7 @@ echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k
 echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
 echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
 echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
-for x in f1 f2 f3 g; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
+for x in f1 f2 f3 g p; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 echo h | as k3 send k1 hh - --hold "h#1 v1" >/dev/null
 # sg <sender> <file name> <topic> <hold or release line> [<extra header lines>]: a message to k1, signed with that
 # sender's own key, placed in the store as a writer could
@@ -1844,21 +1851,29 @@ as k1 holds "b#1" --version v1 >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap
 wr sh -c "sed 's|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|' mailbox/agents/k2.md > mailbox/agents/k2.t && mv mailbox/agents/k2.t mailbox/agents/k2.md"
 expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 .*changed" as k1 holds "a#1" --version v1
-# a signed hold whose header isn't plain still holds, its key changed or not; a release whose header isn't plain doesn't
-# count: either way the gate stays shut
+# a signed record whose header isn't plain, hold or release, its key changed or not, blocks the gate, saying so
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
-expect "a hold whose header isn't plain, from a sender whose key was swapped, still holds" 5 "g#1 is held by k2 .*changed" as k1 holds "g#1" --version v1
+expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks" 5 "g#1 has a record from k2 whose header isn't plain" as k1 holds "g#1" --version v1
 sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
 sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
 "
 sg k3 29990101T000100Z-k3-hf3.md hf3 "hold: f3#1 v1" "needs: none
 "
 for x in f1 f2; do expect "a signed hold with an unusual but plain header still holds over an older release ($x)" 5 "$x#1 is held by k3" as k1 holds "$x#1" --version v1; done
-expect "a signed hold whose header isn't plain (a key twice) still holds over an older release" 5 "f3#1 is held by k3" as k1 holds "f3#1" --version v1
+expect "a signed hold whose header isn't plain (a key twice) blocks over an older release" 5 "f3#1 has a record from k3 whose header isn't plain.*send it again" as k1 holds "f3#1" --version v1
 sg k3 29990101T000100Z-k3-rh.md rh "release: h#1 v1" "needs: none
 "
-expect "a signed release whose header isn't plain doesn't open the gate" 5 "h#1 is held by k3" as k1 holds "h#1" --version v1
+expect "a signed release whose header isn't plain doesn't open the gate" 5 "h#1 has a record from k3 whose header isn't plain" as k1 holds "h#1" --version v1
+# a newer signed release whose header isn't plain blocks, rather than letting the sender's older release decide
+sg k3 29990101T000100Z-k3-rp.md rp "release: p#1 v2" "needs: none
+"
+expect "a newer signed release whose header isn't plain blocks, and the older one doesn't decide" 5 "p#1 has a record from k3 whose header isn't plain" as k1 holds "p#1" --version v1
+# two records at the same time, one of them not plain, block too
+sg k3 29990101T000100Z-k3-rq1.md rq1 "release: q#1 v1"
+sg k3 29990101T000100Z-k3-rq2.md rq2 "release: q#1 v1" "needs: none
+"
+expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a record from k3 whose header isn't plain" as k1 holds "q#1" --version v1
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1

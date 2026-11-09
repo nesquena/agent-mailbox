@@ -12,8 +12,8 @@ time this reader first pinned it. Concretely:
   turns it `bad`.
 - **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
   names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
-  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`, but in
-  `holds` a malformed hold still holds, and in a store that requires signatures a malformed release doesn't count.
+  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`; in
+  `holds`, a signed record whose header isn't plain blocks.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until

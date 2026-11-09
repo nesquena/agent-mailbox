@@ -753,14 +753,21 @@ holds)
       matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
         field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      # a hold is checked by its signature alone, so a signed hold whose header isn't plain still holds; a release must
-      # be plain too, or it reads bad and doesn't count: either way, the gate fails closed
-      if [ "$kind" = hold ]; then v=$(verify_sig "$tmpd/m" "$ME"); else v=$(verify_file "$tmpd/m" "$ME"); fi
-      # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
-      # after this reader pinned it, still holds: dropping it would let a registry edit open the gate. unsigned and bad
+      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
+      # whose signature doesn't reads bad
+      v=$(verify_sig "$tmpd/m" "$ME")
+      if ! hdr_ok "$tmpd/m"; then
+        case "$v" in (verified|changed) kind=malformed ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (*) v=bad ;; esac
+      fi
+      # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
+      # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
+      # edit open the gate. unsigned and bad
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
-      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] ||
+      [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
         { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
     done)
@@ -771,12 +778,14 @@ holds)
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
-  # order mustn't decide between records with an equal sent time: a hold wins, and two releases naming different
-  # versions conflict (neither counts)
+  # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
+  # blocks, and two releases naming different versions conflict (neither counts)
   latest=$(echo "$records" | awk 'NF { k = $3 " " $5
       if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
       if ($1 < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
+      if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
+      if (kind[k] == "malformed") next
       if (kind[k] == "release" && ($4 "") != (v[k] "")) { kind[k] = "conflict"; last[k] = $1 " conflict " $3 " " v[k] "," $4 " " $5 " " $6 " " $7 } }
     END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
   if [ -z "$version" ]; then
@@ -787,6 +796,7 @@ holds)
   echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
+    $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }

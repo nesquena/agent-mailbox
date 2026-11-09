@@ -106,10 +106,9 @@ release: <item> <version>      optional
   in another header.
 - **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
 - **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value.
-  No key appears twice. A message whose header holds any other line is malformed, and reads `bad`, except in `holds`:
-  a signed hold whose header isn't plain still holds, while in a store that requires signatures such a release
-  doesn't count. A key this section doesn't
-  name is allowed, and ignored.
+  No key appears twice. A message whose header holds any other line is malformed, and reads `bad`. In `holds`, a
+  record (hold or release) whose header isn't plain, but whose signature checks out, blocks the gate as a conflict
+  does, until that sender's next record. A key this section doesn't name is allowed, and ignored.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -142,8 +141,8 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   sender.
 - **Strict stores:** where signatures are required, only `verified` records count, with two exceptions that fail
   closed: a hold whose sender's key is `changed`, or missing (`nokey`) for a sender whose key this reader has pinned,
-  still holds, since a registry edit mustn't open the gate; and a signed hold whose header isn't plain (section 5)
-  is checked by its signature alone, so it still holds. Until the reader accepts the new key, that brings back
+  still holds, since a registry edit mustn't open the gate; and a record whose header isn't plain (section 5) but
+  whose signature checks out, the same way, blocks. Until the reader accepts a changed key, the first brings back
   every hold the sender ever sent, even one it has since released (its releases read `changed` too, and are dropped).
   Once the reader accepts it, mail signed with the old key, holds included, no longer counts, so before accepting a
   changed key, the reader should ask the sender to re-send any hold it still means. A reader that has seen a store
@@ -159,7 +158,7 @@ Signing is optional per agent, and required per store when `require_signatures: 
 - **Verifying a message** gives exactly one status:
   - `verified`: the signature checks out against the `from` agent's registered key, under the `from` identity and
     the namespace.
-  - `unsigned`: there is no `.sig`.
+  - `unsigned`: there is no `.sig` (or it's a link, which is no signature of the message's own).
   - `bad`: the signature doesn't verify, for example after tampering, or when someone else signed it; or the
     header isn't plain `key: value` lines (section 5).
   - `nokey`: the sender has no registered key (or its `key` isn't a plain `<type> <base64>` key), or this client
