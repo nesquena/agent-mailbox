@@ -133,6 +133,10 @@ ad_push() {
     ad_jitter
     rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
   done
+  # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
+  # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
+  # seen as deleted, not as one this clone has yet to publish
+  ad_git update-ref "refs/remotes/origin/$BRANCH" HEAD 2>/dev/null || :
 }
 
 ad_sync() {

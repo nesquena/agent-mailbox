@@ -388,6 +388,13 @@ case " $ADAPTERS " in *" git "*)
     expect "the next command publishes it" 0 "publishing 1 commit\\(s\\) left from an earlier command" as fi1 agents
     expect "and the store now has the mailbox" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
   fi
+  # an init that was published is never published again: the branch it pushed, deleted from the store before this clone's
+  # next command, reads as deleted
+  T="$W/firstinit2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi2 setup --store "$T/store.git" --name fi2 >/dev/null; as fi2 init >/dev/null
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main
+  expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
+  [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
