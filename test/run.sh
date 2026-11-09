@@ -2335,6 +2335,9 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+# on a file system that ignores case, a protected folder named in another case is the same folder
+if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$H/.SSH/config"
+else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
 refused "or a link to such a file" "$T/via-dir.md"
 refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"
