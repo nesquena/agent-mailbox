@@ -225,7 +225,7 @@ First version.
   to (a `~/.ssh/config` managed from a dotfiles folder, say), by its path or as the same file (`docs/security.md`
   lists the limits); every file under a folder one leads to (to send one of those, copy it somewhere else first); the
   CLI's config file or signing key by any name for that file, such as a hard link; and a file in the account's own
-  `~/.ssh` when `HOME` points elsewhere. While a link in one of those folders has a line break in its name, `send`
+  `~/.ssh` when `HOME` points elsewhere. While a link in one of those folders has a line break in its path, `send`
   refuses every file, saying so, until it's renamed (#79).
 - **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH

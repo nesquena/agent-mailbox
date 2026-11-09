@@ -59,14 +59,16 @@ time this reader first pinned it. Concretely:
   file, hard links included, or a file under the folder one leads to (a link to a folder holding `~/.ssh` itself, such
   as `~` or `/`, is skipped, since it would refuse every file); the CLI's config file or signing key, by any name for
   that file, hard links included; a path it can't follow to the end (a name holding a newline, or folder links nested
-  more than 8 deep); and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or
-  `-----END` line, or a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the
-  obvious cases, not a guarantee: it catches a mistake, or mail asking an agent to send one of those files, not any
-  other secret (a cloud credentials file or a `.env` file passes), and not another user of the same machine who can
-  write to the folder a body is in, and so change the file between `send`'s check and its read. For files inside a
-  protected folder, or under a folder a link leads to, it follows symlinks, not hard links (or a hard link to one) or
-  bind mounts; and on macOS and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path,
-  where only the private-key check applies.
+  more than 8 deep), and any file at all while a link in `~/.ssh` or the config folder has a line break in its path;
+  and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY
+  key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the obvious cases, not a
+  guarantee: it catches a mistake, or mail asking an agent to send one of those files, not any other secret (a cloud
+  credentials file or a `.env` file passes), and not another user of the same machine who can write to the folder a
+  body is in, and so change the file between `send`'s check and its read. For files inside a protected folder, or
+  under a folder a link leads to, it follows symlinks, not hard links (or a hard link to one) or bind mounts; on macOS
+  and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path, where only the private-key
+  check applies; and a hard link to a protected file, deleted and then fed on stdin, isn't caught. It catches
+  mistakes, not deliberate evasion.
 - **Keys in a synced folder:** the CLI makes keys in its config folder (`agent-mailbox/keys/` under
   `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use), as do the per-store keys above. If that folder
   is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it does:

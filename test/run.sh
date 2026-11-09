@@ -2241,12 +2241,19 @@ ln "$T/ssh-config" "$T/hl-ssh-config" && refused "or a hard link to the file a l
 ln -s / "$H/.ssh/root"; ln -s / "$T/rootln"; echo ok > "$T/ok.md"
 expect "a link to / in ~/.ssh doesn't refuse an ordinary file reached through a link to /" 0 "^sent " as sec1 send sec2 rootok "$T/rootln$T/ok.md"
 rm -f "$H/.ssh/root" "$T/rootln"; as sec2 consume "$(as sec2 list | grep -- '-sec1-rootok\.md$' | sed 's#.*/##')" >/dev/null 2>&1
-# a link in ~/.ssh whose name has a line break can't be checked: every send is refused, naming the folder
+# a link in ~/.ssh whose path has a line break can't be checked: every send is refused, naming the folder. So it is
+# when the line break is in a folder's name on the way
 ln -s "$T/ok.md" "$H/.ssh/odd
 name"
-expect "a link in ~/.ssh whose name has a line break refuses a send, saying so" 1 "holds a link whose name has a line break" as sec1 send sec2 nlok "$T/ok.md"
+expect "a link in ~/.ssh whose name has a line break refuses a send, saying so" 1 "holds a link whose path has a line break" as sec1 send sec2 nlok "$T/ok.md"
 rm -f "$H/.ssh/odd
 name"
+mkdir "$H/.ssh/nl
+dir" && ln -s "$T/ok.md" "$H/.ssh/nl
+dir/cfg"
+expect "and so does one inside a folder whose name has a line break" 1 "holds a link whose path has a line break" as sec1 send sec2 nlok2 "$T/ok.md"
+rm -rf "$H/.ssh/nl
+dir"
 refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
 # at any hop of the walk: a link inside that folder, named there; and a folder link written with a trailing / that
 # leads through another link
