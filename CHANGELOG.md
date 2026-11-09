@@ -254,3 +254,9 @@ First version.
   it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
   writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names
   a descriptor, as one through `/proc` does on Linux (#63).
+- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
+  Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
+  at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
+  answer. An askpass program that prints a token keeps working. Some prompts still wait until someone answers, and
+  `JOIN.md` step 2 lists them: an askpass program's dialog, a macOS Keychain dialog after a git upgrade, and ssh's
+  passphrase and host-key prompts for an SSH store (#64).

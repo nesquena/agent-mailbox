@@ -347,6 +347,23 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
       failpeek all bob watch 1 30
 
+    # git's own prompts are off: every git call the adapter makes runs with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never.
+    # A local store asks for no credential, so this checks what git is given, through a git on PATH that logs each call.
+    # Both are unset first, so a value from the environment the suite runs in can't stand in for the adapter's own
+    mkdir -p "$W/gitlog"; printf '%s\n' '#!/bin/sh' \
+      'printf "%s %s|%s\n" "${GIT_TERMINAL_PROMPT-unset}" "${GCM_INTERACTIVE-unset}" "$*" >> "$GITLOG"' \
+      'exec "$REAL_GIT" "$@"' > "$W/gitlog/git"; chmod +x "$W/gitlog/git"
+    gitlog() { (unset GIT_TERMINAL_PROMPT GCM_INTERACTIVE; REAL_GIT=$real_git GITLOG="$T/gitlog" PATH="$W/gitlog:$PATH"
+      export REAL_GIT GITLOG PATH; as "$@"); }
+    rm -f "$T/gitlog"; as np setup --store "$STORE" --name np >/dev/null
+    gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
+    # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
+    calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
+    for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
+    bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
+    [ -n "$calls" ] && [ -z "$bad" ] && ok "every git call the adapter makes runs with git's own prompts off" ||
+      no "a git call could wait on git's own prompt" "$bad"
+
     # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
     # from the value it read, so a peek moving it too made a concurrent send fail
     for C in "$W/home-bob/.local/state/agent-mailbox/checkouts/"*; do :; done
