@@ -233,7 +233,8 @@ First version.
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
 - **Fix:** an `update` that changes nothing, such as `update --status active` when already active, or one run again
-  after it exited 4, says "nothing to update" and exits 0. With the git adapter it stopped with "git commit failed".
+  after it exited 4, says "nothing to update" and exits 0. With the git adapter it stopped with "git commit failed"
+  (#88).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
