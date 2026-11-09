@@ -263,3 +263,7 @@ First version.
 - **Fix:** with the git adapter, a first `init` whose push failed (exit 4) is published by the next command, as any
   other unpublished commit is. Before, on a store with no mailbox branch yet, it never was: `init` then said a
   mailbox already existed, and the store still had none (#67).
+- **Changed:** with no mail, `list` and `read` under a name that has no record in the mailbox stop with "'<name>'
+  isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
+  name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
+  none (#76).
