@@ -796,6 +796,7 @@ holds)
   echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
+    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }

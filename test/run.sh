@@ -1854,7 +1854,7 @@ expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 
 # a signed record whose header isn't plain, hold or release, its key changed or not, blocks the gate, saying so
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
-expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks" 5 "g#1 has a record from k2 whose header isn't plain" as k1 holds "g#1" --version v1
+expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key" as k1 holds "g#1" --version v1
 sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
 sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
 "
@@ -1880,6 +1880,10 @@ expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by 
 # ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
 wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
 expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
+# a record whose header isn't plain, from that sender (pinned, its key now missing), blocks with the key advice
+sg k4 29990101T000100Z-k4-hm.md hm "hold: m#1 v1" "needs: none
+"
+expect "a record whose header isn't plain, from a pinned sender whose key is missing, blocks" 5 "m#1 has a record from k4 whose header isn't plain .*nokey: confirm k4's new key" as k1 holds "m#1" --version v1
 # ... but a hold planted under a name k1 never pinned a key for (no record, a junk signature) doesn't count
 wr sh -c "printf -- '---\nprotocol: 1\nfrom: ghost\nto: k1\ntopic: hg\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: e#1 v1\n---\n\nx\n' > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md && echo junk > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md.sig"
 expect "a hold from a name never pinned, with a junk signature, doesn't count" 0 "e#1 released by k3" as k1 holds "e#1" --version v1
@@ -1902,6 +1906,18 @@ expect "or a shallow checkout can't fetch its full history" 1 "can't read this s
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+
+echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
+T="$W/loose"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+for a in j1 j2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+as j1 init >/dev/null; for a in j1 j2; do as $a register --kind t --about t >/dev/null; done
+echo r | as j2 send j1 ra - --release "m#1 v1" >/dev/null
+expect "(j2's release opens the gate)" 0 "m#1 released by j2" as j1 holds "m#1" --version v1
+git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom: j2\nto: j1\ntopic: rm\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\nrelease: m#1 v1\nneeds: none\n---\n\nx\n' \
+  > "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
+  ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-j2/.config/agent-mailbox/keys/j2" "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
+  git -C "$T/w" add -A && git -C "$T/w" -c user.name=e -c user.email=e@e commit -qm w && git -C "$T/w" push -q origin HEAD:main
+expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
 fi
 
 echo "== installed link (install.sh)"

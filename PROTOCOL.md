@@ -106,9 +106,8 @@ release: <item> <version>      optional
   in another header.
 - **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
 - **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value.
-  No key appears twice. A message whose header holds any other line is malformed, and reads `bad`. In `holds`, a
-  record (hold or release) whose header isn't plain, but whose signature checks out, blocks the gate as a conflict
-  does, until that sender's next record. A key this section doesn't name is allowed, and ignored.
+  No key appears twice. A message whose header holds any other line is malformed, and reads `bad` (section 5's Holds
+  says how `holds` reads one). A key this section doesn't name is allowed, and ignored.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -133,6 +132,12 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
 - **The acting agent** checks right before acting, from every message ever delivered to it (consumed ones
   included, where the adapter keeps history). For each sender, the latest record for the item counts. The action
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
+- **Reading a record:** a hold or release is read by its first plain `hold:` line (or, without one, its first plain
+  `release:` line) and its first plain `from:`, `to:` and `sent:` lines, so a header naming several items or times is
+  placed by the first. A header that spells those keys any other way (`Hold:`, `hold :`) isn't read as a record. A
+  record whose header holds other lines that aren't plain, but whose signature checks out (or whose sender's key is
+  `changed`, or missing for a sender this reader has pinned), blocks that item, as a conflict does, until that
+  sender's next record; one whose signature doesn't check out reads `bad`, and doesn't count.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history
@@ -158,7 +163,8 @@ Signing is optional per agent, and required per store when `require_signatures: 
 - **Verifying a message** gives exactly one status:
   - `verified`: the signature checks out against the `from` agent's registered key, under the `from` identity and
     the namespace.
-  - `unsigned`: there is no `.sig` (or it's a link, which is no signature of the message's own).
+  - `unsigned`: there is no `.sig` (or it's a link, which is no signature of the message's own; where a store keeps
+    links as plain files, as the git adapter's clone does, it's a file holding the link's target, and reads `bad`).
   - `bad`: the signature doesn't verify, for example after tampering, or when someone else signed it; or the
     header isn't plain `key: value` lines (section 5).
   - `nokey`: the sender has no registered key (or its `key` isn't a plain `<type> <base64>` key), or this client

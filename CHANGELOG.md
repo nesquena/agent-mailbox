@@ -234,12 +234,14 @@ First version.
   waits for the next second (#66).
 - **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
   break (#83).
-- **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header, and says when
-  a message's file name isn't `<stamp>-<from>-<topic>.md`. It reads each message once. A message header holds only
-  plain `key: value` lines, each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`, and in
-  `holds` a signed record whose header isn't plain blocks. A `.sig` that's a link reads `unsigned` in `read`,
-  `verify` (exit 6) and `holds`. A client that writes an uppercase or otherwise non-plain header key now reads
-  `bad`, and its signed holds and releases block (#84).
+- **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header, and says when a
+  message's file name isn't `<stamp>-<from>-<topic>.md`. It reads each message once. A message header holds only plain
+  `key: value` lines, each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`. `holds` reads a
+  record by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one whose header holds other
+  lines that aren't plain, but whose signature checks out, blocks that item. A `.sig` that's a link reads `unsigned`
+  with the dir adapter (in `read`, `verify`, exit 6, and `holds`), and `bad` with git. A client that writes an
+  uppercase or otherwise non-plain header key now reads `bad`; a hold or release it signs blocks its item when the
+  `hold:` or `release:` line itself is plain, and isn't read as a record when it isn't (#84).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
