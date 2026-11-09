@@ -45,17 +45,21 @@ time this reader first pinned it. Concretely:
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
   An agent registered under the same name in two stores signs with the same key by default (`keys/<name>` in its
-  config folder: `agent-mailbox/keys/` under `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use). So
-  in a strict store, a signed message copied in from another store verifies when its sender is registered there under
-  the same name with the same key, and its recipient under the same name. That matters most for a `release:`, which
-  `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting a copy: it reads `bad`,
-  and the release still counts, with a warning. An agent in more than one store should use a separate key for each,
-  made without a passphrase so it can sign unattended (`<label>` is a short word of your own for that store):
+  config folder: `agent-mailbox/keys/` under `$XDG_CONFIG_HOME`, or `~/.config`, even when `--config` names a config
+  file elsewhere). So in a strict store, a signed message copied in from another store verifies when its sender is
+  registered there under the same name with the same key, and its recipient under the same name. That matters most for
+  a `release:`, which `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting a
+  copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
+  separate key for each, made without a passphrase so it can sign unattended (`<label>` is a short word of your own
+  for that store; the `_` keeps the file name apart from any agent's default key, since names can't hold one). If
+  other names share this config through `--as`, give this name a config of its own first
+  (`agent-mailbox --config <new file> setup --store <store> --branch <branch> --root <folder> --name <name>`), then
+  pass that `--config` on every command and restart your watcher with it. Then:
   ```sh
   mkdir -p -m 700 ~/.config/agent-mailbox/keys
-  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<label>
+  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>_<label>
   agent-mailbox --config <that store's config> register --kind <kind> --about "<what you do>" \
-    --key ~/.config/agent-mailbox/keys/<name>-<label>.pub
+    --key ~/.config/agent-mailbox/keys/<name>_<label>.pub
   ```
   `register --key` records the key in that store's config file. An agent already in two stores with one key switches
   one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then
@@ -82,9 +86,10 @@ time this reader first pinned it. Concretely:
   check applies; and a hard link to the file a link in `~/.ssh` or the config folder leads to, deleted and then fed on
   stdin, isn't caught (the config file and key still are). It catches mistakes, not deliberate evasion.
 - **Keys in a synced folder:** the CLI makes keys in its config folder (`agent-mailbox/keys/` under
-  `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use), as do the per-store keys above. If that folder
-  is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it does:
-  make the key in a folder that isn't, and pass its `.pub` to `register --key`, with the private key beside it.
+  `$XDG_CONFIG_HOME`, or `~/.config`, even when `--config` names a config file elsewhere), as do the per-store keys
+  above. If that folder is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key
+  goes wherever it does: make the key in a folder that isn't, and pass its `.pub` to `register --key`, with the
+  private key beside it.
 - **Strict stores:** a store that gates real actions (merges, deploys) should set `require_signatures: true`. In
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
