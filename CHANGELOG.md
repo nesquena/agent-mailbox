@@ -130,11 +130,11 @@ First version.
   link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
   signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the end
   (a name holding a newline, or folder links nested more than 8 deep), and a body (file or stdin) holding a line of a
-  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header or trailer), are
-  refused with exit 1 before anything is written; the error names the folder, or says how to go on. It's a deny-list of
-  the obvious cases, not a guarantee. The state folder holds the git adapter's copy of the store, so to forward a
-  message you received, copy its text into a new file first; to send part of a file from one of those folders on
-  purpose, copy that part the same way (#26).
+  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header, or its
+  `Private-Lines:` or `Private-MAC:` line), are refused with exit 1 before anything is written; the error names the
+  folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee. The state folder holds the git
+  adapter's copy of the store, so to forward a message you received, copy its text into a new file first; to send part
+  of a file from one of those folders on purpose, copy that part the same way (#26).
 - **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
   the `--` is), instead of refusing it as an unknown option (#26).
 - **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
@@ -225,6 +225,10 @@ First version.
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
   (#61).
+- **Fix:** the git adapter matches the mailbox branch by its exact name. A store with no `main` but a ref whose name
+  ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
+  with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
+  (#65).
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
