@@ -252,6 +252,10 @@ ad_commit() {
   [ -n "$keep" ] || return 0
   # shellcheck disable=SC2086
   ad_git add -A -f -- $keep || die "git add failed"
+  # nothing staged (the files came out as they were: an ed25519 signature of the same bytes is the same bytes) is
+  # nothing to publish, not a failure; AD_UNCHANGED tells the caller
+  # shellcheck disable=SC2086
+  AD_UNCHANGED=""; if ad_git diff --cached --quiet -- $keep; then AD_UNCHANGED=1; return 0; fi
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
   ad_push

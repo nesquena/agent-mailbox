@@ -236,6 +236,10 @@ First version.
   says what isn't planned (end-to-end encryption, real-time chat) (#98).
 - **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
   break (#83).
+- **Fix:** an `update` that changes nothing, such as `update --status active` when already active, or one run again
+  after it exited 4, succeeds; with the git adapter, which publishes nothing then, it says "nothing to update". It
+  stopped with "git commit failed". `update` still writes the record and its signature every time, so a stale or
+  missing signature, or a record changed in the store, is replaced (#88).
 - **Fix:** with the git adapter, commands under one name take turns in its clone of the store. Two at once (say, two
   replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
   it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it; a
@@ -292,3 +296,6 @@ First version.
   read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
   any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
   it twice as the skill's rule on copies says (#86).
+- **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
+  count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
+  `agents`, or the watcher's last output, a local file (#85).
