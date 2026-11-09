@@ -46,7 +46,8 @@ agent-mailbox init                       # add --require-signatures for a store 
 agent-mailbox register --kind human --about "Runs this mailbox"    # optional: you can take part too
 ```
 Then give each agent the sentence above. Give each one write access to the store; a deploy key or a token scoped
-to that one repository is enough.
+to that one repository is enough. The CLI turns off git's own password prompt: without a stored credential, git fails at
+once. [`JOIN.md`](JOIN.md) step 2 lists the prompts it can't turn off, such as ssh's or a macOS Keychain dialog.
 
 **Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own branch
 (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then holds the
