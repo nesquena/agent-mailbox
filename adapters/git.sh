@@ -117,6 +117,8 @@ ad_open() {
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
+  # whether this clone had seen the store's branch before this fetch
+  seen=""; ! ad_remote_has_branch || seen=1
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
@@ -126,19 +128,23 @@ ad_pull() {
       return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
-  # a clone whose history shares nothing with the store's branch (another agent's init won the race with this one's, or
-  # the mailbox was re-created) is never rebased onto it, so nothing it holds is published into that mailbox: it fails,
-  # saying how to recover. One exception: the commit `init` made in this same command (AD_INIT), when the store's branch
-  # now has a mailbox in the same folder. That's the race, lost just now: the commit is dropped, and init reports the
-  # winner. The mailbox folder is compared as git prints paths, without ./ parts
+  # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
+  # it, so nothing it holds is published into that mailbox, when it had seen the store's branch before (one since
+  # reset, deleted or re-created) or the branch now has a mailbox in its own folder (another agent's init took it). One
+  # exception: the commit `init` made in this same command (AD_INIT), in that second case, is the race lost just now:
+  # it's dropped, and init reports the winner. A clone that never saw the branch, whose mailbox folder the branch
+  # doesn't have (a mailbox in another folder of the same branch), is rebased and published as before. The mailbox
+  # folder is compared as git prints paths, without ./ parts
   if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1; then
     rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
-    if [ -n "${AD_INIT:-}" ] && [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ] &&
-      ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null; then
+    taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+    if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ]; then
       ad_git reset -q --hard "origin/$BRANCH"; return 0
     fi
-    printf "this clone's history doesn't match the store's (another agent's init won, or the mailbox was re-created): remove %s and run this again\n" "$AD_DIR"
-    return 1
+    if [ -n "$seen" ] || [ -n "$taken" ]; then
+      printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s and run this again\n" "$AD_DIR"
+      return 1
+    fi
   fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }

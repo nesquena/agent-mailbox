@@ -267,8 +267,9 @@ First version.
   isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
   name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
   none (#76).
-- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share (another agent's `init` won
-  the race with this one's, or the mailbox was re-created) fails saying how to recover: remove the clone it names,
-  and run the command again. Nothing it holds is published into the store. Before, every command failed with git's
-  own rebase error. When two agents run `init` at once on a store with no mailbox branch yet, the one that loses
-  fails saying so, with the winner's title and `require_signatures`, instead of exit 4 (#68).
+- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
+  (remove the clone it names and run the command again), when it saw the store's branch before it was reset or
+  re-created, or when its unpublished init is for a folder another agent's init has since taken. Nothing it holds is
+  published into the store; before, every command failed with git's own rebase error. An `init` that loses a race
+  for one folder fails saying so, with the winner's title and `require_signatures`, instead of exit 4. Mailboxes in
+  other folders of the same branch are published as before (#68).

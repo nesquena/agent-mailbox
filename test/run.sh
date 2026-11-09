@@ -485,6 +485,28 @@ case " $ADAPTERS " in *" git "*)
   expect "and fails again on its next command" 1 "history doesn't match the store's" as rs1 agents
   [ "$(git --git-dir="$T/store.git" log --format=%s main | tr '\n' ' ')" = "mailbox: init " ] &&
     ok "and the new mailbox holds only its own init" || no "a stale clone's history reached the new mailbox" "$(git --git-dir="$T/store.git" log --format=%s main)"
+  # mailboxes in two folders of one branch: an init that loses the race to one in another folder, or is left
+  # unpublished while another folder's init lands, is published beside it, as before
+  T="$W/initroots"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as ro1 setup --store "$T/store.git" --root b --name ro1 >/dev/null; as ro2 setup --store "$T/store.git" --root a --name ro2 >/dev/null
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" push "*) [ -e "$RACE_DONE" ] || { : > "$RACE_DONE"; sh -c "$RACE_CMD" >/dev/null 2>&1; } ;; esac' \
+    'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  expect "an init that loses the race to one in another folder of the branch still lands" 0 "initialized a mailbox at 'b/'" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
+      RACE_CMD="HOME='$W/home-ro2' '$SH' '$CLI' init --title other" HOME="$W/home-ro1" "$SH" "$CLI" init --title mine
+  [ "$(git --git-dir="$T/store.git" ls-tree -r --name-only main | grep -c 'store\.md$')" = 2 ] &&
+    ok "and both mailboxes are on the branch" || no "a mailbox in another folder was lost" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  T="$W/initroots2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as ro3 setup --store "$T/store.git" --root b --name ro3 >/dev/null; as ro4 setup --store "$T/store.git" --root a --name ro4 >/dev/null
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "an unpublished init in another folder of the branch is published (read-only folders don't stop this user)"
+  else
+    as ro3 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"; as ro4 init >/dev/null
+    expect "an unpublished init in another folder of the branch is published by the next command" 0 "publishing 1 commit" as ro3 agents
+    [ "$(git --git-dir="$T/store.git" ls-tree -r --name-only main | grep -c 'store\.md$')" = 2 ] &&
+      ok "and both mailboxes are on the branch" || no "a mailbox in another folder was lost" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  fi
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
