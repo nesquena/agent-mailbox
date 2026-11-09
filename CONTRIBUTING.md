@@ -17,8 +17,8 @@ the most care.
 ## Running the tests
 ```sh
 sh test/run.sh                 # every adapter, with your default sh
-dash test/run.sh git           # one shell, one adapter
-TEST_SHELL=bash bash test/run.sh
+TEST_SHELL=dash dash test/run.sh git   # the CLI under dash, git adapter only
+TEST_SHELL=bash bash test/run.sh       # the CLI under bash
 ```
 The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. CI runs it on Linux for
 every pull request, and on Linux and macOS for every push to main and for manual runs (Actions, "test", "Run
