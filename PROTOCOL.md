@@ -105,9 +105,10 @@ release: <item> <version>      optional
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
 - **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
-- **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value.
-  No key appears twice. A message whose header holds any other line is malformed, and reads `bad` (section 5's Holds
-  says how `holds` reads one). A key this section doesn't name is allowed, and ignored.
+- **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value
+  (the space after the colon is optional). No key appears twice. A message whose header holds any other line is
+  malformed, and reads `bad` (section 5's Holds says how `holds` reads one). A key this section doesn't name is
+  allowed, and ignored.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -134,10 +135,12 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
 - **Reading a record:** a hold or release is read by its first plain `hold:` line (or, without one, its first plain
   `release:` line) and its first plain `from:`, `to:` and `sent:` lines, so a header naming several items or times is
-  placed by the first. A header that spells those keys any other way (`Hold:`, `hold :`) isn't read as a record. A
-  record whose header holds other lines that aren't plain, but whose signature checks out (or whose sender's key is
-  `changed`, or missing for a sender this reader has pinned), blocks that item, as a conflict does, until that
-  sender's next record; one whose signature doesn't check out reads `bad`, and doesn't count.
+  placed by the first. A header that spells `hold:` or `release:`, `from:` or `sent:` any other way (say, `Hold:`)
+  isn't read as a record; one with no plain `to:` reads `bad`. A record whose header holds other lines that aren't
+  plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a sender this reader has
+  pinned), blocks that item, as a conflict does, until that sender's next record. One whose signature doesn't check
+  out reads `bad`, and counts only as unsigned mail does: as the hold or release it names where signatures aren't
+  required, and not at all where they are.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history

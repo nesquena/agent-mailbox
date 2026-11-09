@@ -246,8 +246,9 @@ First version.
   record by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one whose header holds other
   lines that aren't plain, but whose signature checks out, blocks that item. A `.sig` that's a link reads `unsigned`
   with the dir adapter (in `read`, `verify`, exit 6, and `holds`), and `bad` with git. A client that writes an
-  uppercase or otherwise non-plain header key now reads `bad`; a hold or release it signs blocks its item when the
-  `hold:` or `release:` line itself is plain, and isn't read as a record when it isn't (#84).
+  uppercase or otherwise non-plain header key now reads `bad`; a hold or release it signs blocks its item when its
+  `hold:` or `release:`, `from:`, `to:` and `sent:` lines are plain; when `hold:` or `release:`, `from:` or `sent:`
+  isn't, it isn't read as a record, and when `to:` isn't, it reads `bad` (#84).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).

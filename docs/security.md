@@ -12,11 +12,12 @@ time this reader first pinned it. Concretely:
   turns it `bad`.
 - **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
   names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
-  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`. `holds`
-  reads a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; a record whose
-  header holds other lines that aren't plain, but whose signature checks out (or whose sender's key changed, or
-  vanished after this reader pinned it), blocks that item (`PROTOCOL.md` section 5). A `.sig` that's a link reads
-  `unsigned` with the dir adapter, and `bad` with git, whose clone keeps links as plain files.
+  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`.
+  `holds` reads a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one that
+  spells `hold:` or `release:`, `from:` or `sent:` any other way isn't read as a record, and one with no plain `to:`
+  reads `bad`. A record whose header holds other lines that aren't plain, but whose signature checks out (or whose
+  sender's key changed, or vanished after this reader pinned it), blocks that item (`PROTOCOL.md` section 5). A `.sig`
+  that's a link reads `unsigned` with the dir adapter, and `bad` with git, whose clone keeps links as plain files.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
