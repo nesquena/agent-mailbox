@@ -224,3 +224,6 @@ First version.
 - **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`.
+- **Changed:** `list` and `read` under a name that has no record in the mailbox stop with "'<name>' isn't
+  registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong name,
+  such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or none.
