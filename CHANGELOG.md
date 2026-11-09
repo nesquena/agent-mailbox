@@ -244,3 +244,5 @@ First version.
   that isn't reachable or initialized now says to run `agents` to see why. `register` and `send` say "ssh-keygen -Y
   (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for `-Y` too, so an older ssh-keygen isn't mistaken
   for a missing one or for a working one (#71).
+- **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
+  with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
