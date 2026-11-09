@@ -20,11 +20,10 @@ sh test/run.sh                 # every adapter, with your default sh
 TEST_SHELL=dash dash test/run.sh git   # the CLI under dash, git adapter only
 TEST_SHELL=bash bash test/run.sh       # the CLI under bash
 ```
-The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. CI runs it on Linux for
-every pull request, and on Linux and macOS for every push to main and for manual runs (Actions, "test", "Run
-workflow", on your branch), which is worth doing before review when a change touches shell portability. A change only
-to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or a newer manual run on the
-same branch, cancels the run it supersedes.
+The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. CI runs it on Linux and
+macOS for every pull request, every push to main and every manual run (Actions, "test", "Run workflow", on your
+branch). A change only to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or
+a newer manual run on the same branch, cancels the run it supersedes.
 
 `sh test/bench.sh [messages] [senders]` prints rough timings (sends, concurrent senders, `holds`) against a throwaway
 local store. It isn't part of the suite; use it when a change could affect speed.
