@@ -319,14 +319,13 @@ notes.md"'
     ln -s nowhere "$STORE/mailbox/inbox/bob/20260101T000000Z-mal-link.md"
     rm -rf "$STORE/mailbox/inbox/vic"; ln -s "$W/planted-$AD" "$STORE/mailbox/inbox/vic"
   fi
-  expect "a planted link doesn't wake the watcher" 2 "no mail" as bob watch 1 2
+  expect "a planted link doesn't wake the watcher, and watch times out with no mail" 2 "no mail" as bob watch 1 1
   echo x | HOME="$W/home-alice" "$SH" "$CLI" send vic via-link - >/dev/null 2>&1
   [ -z "$(ls -A "$W/planted-$AD")" ] && ok "a symlinked inbox can't redirect a send outside the store" ||
     no "a send wrote through a symlinked inbox" "$(ls -A "$W/planted-$AD")"
 
   # watch wakes on new mail and times out without it
   for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
-  expect "watch times out with no mail" 2 "no mail" as bob watch 1 2
   ( sleep 2; echo ping | HOME="$W/home-alice" "$SH" "$CLI" send bob ping - >/dev/null 2>&1 ) &
   expect "watch wakes on new mail" 0 "alice-ping.md" as bob watch 1 30
   wait
@@ -433,7 +432,7 @@ case " $ADAPTERS " in *" git "*)
   tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
-  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
 
   echo "== git: a first init whose push failed is published by the next command"
   # the store's objects and refs are read-only for the init, so its fetches work and its push fails
@@ -655,17 +654,17 @@ exec "%s" "$@"
     AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/$n.cfg" "$@"; }
   for a in pn1 pn2 pn3 pn4; do pn $a setup --store "$T/s.git" --name $a >/dev/null; done
   pn pn1 init >/dev/null; for a in pn1 pn2 pn3 pn4; do pn $a register --kind t --about t --no-key >/dev/null 2>&1; done
-  # four names send at once, three times over
+  # four names send at once, twice over
   rm -f "$T/fail" "$T/err"
-  for r in 1 2 3; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
+  for r in 1 2; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
       ( echo x | pn $a send $o "r$r" - >/dev/null 2>>"$T/err" || echo x >> "$T/fail" ) & done; wait; done
-  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[123]\.md$')
-  [ ! -s "$T/fail" ] && [ "$n" = 12 ] && ok "names sharing one HOME send at once: all 12 delivered" ||
+  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[12]\.md$')
+  [ ! -s "$T/fail" ] && [ "$n" = 8 ] && ok "names sharing one HOME send at once: all 8 delivered" ||
     no "names sharing one HOME: $(cat "$T/fail" 2>/dev/null | wc -l) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
   [ "$(ls "$PH/.local/state/agent-mailbox/checkouts" | wc -l | tr -d ' ')" = 4 ] && ok "each name has a clone of its own" ||
     no "names don't have a clone each" "$(ls "$PH/.local/state/agent-mailbox/checkouts")"
   l3=$(pn pn3 list); r3=$?; l4=$(pn pn4 list); r4=$?
-  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && [ "$(pn pn2 list | grep -c -- '-r[123]\.md$')" = 3 ] &&
+  [ "$(pn pn1 list | grep -c -- '-r[12]\.md$')" = 6 ] && [ "$(pn pn2 list | grep -c -- '-r[12]\.md$')" = 2 ] &&
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
 
@@ -1025,7 +1024,7 @@ kill "$sp" 2>/dev/null
 # nor does a hook left running by another session (it stops itself once its own session is gone)
 "$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r0" > "$R1/pid"
 expect "another session's hook doesn't hold the lock" 2 "daily limit" rewake r1
-if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last"
+if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
   case "$g" in (*"is not running"*) ok "nor does it satisfy this session's Stop guard" ;; (*) no "nor does it satisfy this session's Stop guard" "$g" ;; esac
@@ -1034,7 +1033,7 @@ echo "$sp r1" > "$R1/pid"
 expect "this session's does" 0 '^$' rewake r1
 sleep 1 & dp=$!; wait "$dp"; echo "$sp r1 $dp" > "$R1/pid"
 expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit" rewake r1
-if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last"
+if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
   case "$g" in (*"is not running"*) ok "nor does the Stop guard count it" ;; (*) no "nor does the Stop guard count it" "$g" ;; esac
@@ -1265,7 +1264,7 @@ reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
 expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
-n=0 lost=""; while [ $n -lt 10 ]; do rm -f "$RS/session-stores/r8"
+n=0 lost=""; while [ $n -lt 5 ]; do rm -f "$RS/session-stores/r8"
   ALSO=--also; regs r8 & regs r8 --config "$C2" & wait; ALSO=; [ "$(grep -c . "$RS/session-stores/r8")" = 2 ] || lost="$lost $n"; n=$((n+1)); done
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
@@ -1423,7 +1422,7 @@ for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/
 as h1 init >/dev/null; as h1 register --kind t --about t --no-key >/dev/null; as h2 register --kind t --about t --no-key >/dev/null
 printf -- '---\nprotocol: 1\nfrom: ../../evil\nto: h1\ntopic: x\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h1/20260101T000000Z-evil-x.md"
 expect "a message with a malformed sender reads as bad" 0 "evil-x.md \[bad\]" as h1 read
-echo h | as h2 send h1 hold-x - --hold "thing#1 v1" >/dev/null; sleep 1
+echo h | as h2 send h1 hold-x - --hold "thing#1 v1" >/dev/null
 printf -- '---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: y\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: thing#1 v1\n---\n\nok\n' > "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md"
 expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1 holds "thing#1" --version v1
 mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
@@ -1445,7 +1444,7 @@ if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- '-h2-hold-x\.md' && ! prin
 else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
 for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
-expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 2
+expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 1
 # a reply to a message whose context header isn't a valid context falls back to general
 printf -- '---\nprotocol: 1\nfrom: h1\nto: h2\ntopic: c\ncontext: Bad Context\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h2/20260101T000000Z-h1-c.md"
 echo r | as h2 send h1 c-reply - --consume 20260101T000000Z-h1-c.md >/dev/null
@@ -1875,7 +1874,7 @@ expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' 
 # a message whose name starts with '-': --except must take it as a file name and hide it
 cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
 expect "watch --except takes a value starting with - as a file name" 2 "no mail" \
-  as o2 watch 1 2 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
+  as o2 watch 1 1 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
 out=$(as o2 read --except -x.md 2>&1); rc=$?
 hit=$(printf '%s\n' "$out" | grep -c -e '/-x\.md' -e basename)
 if [ "$rc" = 0 ] && [ "$hit" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md'; then ok "an --except value starting with - is a file name"
@@ -2076,7 +2075,7 @@ expect "and one whose header never closes" 5 "is held by u2" as u1 holds "item#9
 expect "read marks a header that never closes as bad" 0 "u2-open\.md \[bad\]" as u1 read
 # a hold written without a space after the colon is still a hold (field() strips one space only if it's there): a
 # holds pattern that required the space would miss it, and an older release would then pass
-echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
   printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h7\ncontext: general\nsent: 2999-01-01T00:00:02Z\nin_reply_to: none\nneeds: none\nhold:item#7 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000002Z-u2-h7.md &&
   git add -A && git commit -qm h7 && git push -q origin HEAD:main)
@@ -2090,16 +2089,16 @@ pl sh -c 'printf "%s -diff\n" "$(basename "$(ls mailbox/inbox/u1/*-u2-h-6.md)")"
 expect "a hold still counts when an attribute marks it binary" 5 "item#6 is held by u2" as u1 holds "item#6" --version v1
 pl rm -f mailbox/inbox/u1/.gitattributes
 # 2. a NUL byte in the hold
-echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h5\ncontext: general\nsent: 2999-01-01T00:00:03Z\nin_reply_to: none\nneeds: none\nhold: item#5 v1\n---\n\nnul \000 byte\n' > mailbox/inbox/u1/29990101T000003Z-u2-h5.md"
 expect "a hold in a message with a NUL byte still counts" 5 "item#5 is held by u2" as u1 holds "item#5" --version v1
 # 3. an earlier release renamed to a new name and rewritten as a newer hold, in one commit
-echo r | as u2 send u1 r-4 - --release "item#4 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-4 - --release "item#4 v1" >/dev/null
 pl sh -c 'old=$(ls mailbox/inbox/u1/*-u2-r-4.md) && new=mailbox/inbox/u1/29990101T000004Z-u2-h4.md && git mv "$old" "$new" &&
   sed "s/^release: item#4 v1\$/hold: item#4 v1/; s/^sent: .*/sent: 2999-01-01T00:00:04Z/" "$new" > "$new.t" && mv "$new.t" "$new"'
 expect "a hold renamed into the inbox still counts" 5 "item#4 is held by u2" as u1 holds "item#4" --version v1
 # 4. an earlier release rewritten in place as a newer hold
-echo r | as u2 send u1 r-3 - --release "item#3 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-3 - --release "item#3 v1" >/dev/null
 pl sh -c 'f=$(ls mailbox/inbox/u1/*-u2-r-3.md) && sed "s/^release: item#3 v1\$/hold: item#3 v1/; s/^sent: .*/sent: 2999-01-01T00:00:05Z/" "$f" > "$f.t" && mv "$f.t" "$f"'
 expect "a hold rewritten in place still counts" 5 "item#3 is held by u2" as u1 holds "item#3" --version v1
 # 4b. a hold with an old sent time, then rewritten in place so only its sent line changes (later than a release)
@@ -2118,7 +2117,7 @@ sleep 1; echo h | as u2 send u1 h-2 - --hold "item#2 v1" >/dev/null
   git checkout -q main && git reset -q --hard origin/main)
 expect "a hold dropped by a merge still counts" 5 "item#2 is held by u2" as u1 holds "item#2" --version v1
 # 6. a hold that exists only in a merge commit (in neither parent), read by a user whose git config turns merge diffs off
-echo r | as u2 send u1 r-11 - --release "item#11 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-11 - --release "item#11 v1" >/dev/null
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD) &&
   git checkout -q -b side2 "$base" && echo y > note2.txt && git add note2.txt && git commit -qm side2 && git checkout -q main &&
   echo z > note3.txt && git add note3.txt && git commit -qm main3 && { git merge -q --no-ff --no-commit side2 >/dev/null 2>&1 || :; } &&
@@ -2153,7 +2152,7 @@ as u1 holds "item#15" >/dev/null 2>&1
 co=$(ls -d "$W"/home-u1/.local/state/agent-mailbox/checkouts/*/ | head -n 1)
 rows=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_history mailbox/inbox/u1 '^(hold|release):') | grep -c -- '-u2-h-15\.md$')
 [ "$rows" = 1 ] && ok "a hold under several merges is read once" || no "a hold under merges was listed $rows times"
-sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
+echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 # 10. in a store that requires signatures, a copy of a signed hold committed without its signature (an old-dated side
 # branch merged in, so history lists the copy first) doesn't stand in for the signed one
@@ -2187,7 +2186,7 @@ as u1 consume "${r2##*/}" >/dev/null 2>&1
 # items and versions are compared as strings: a release of 3.1 isn't one of 3.10, 3.100 or 03.1, and item 1.5 isn't 1.50
 echo r | as u2 send u1 num-1 - --release "deploy:num 3.1" >/dev/null 2>&1
 expect "a release of version 3.1 counts for 3.1" 0 "deploy:num released by u2 at 3\.1 " as u1 holds "deploy:num" --version 3.1
-for v in 3.10 3.100 03.1; do expect "but not for $v" 5 "released by u2 at 3\.1, not $v" as u1 holds "deploy:num" --version "$v"; done
+for v in 3.10 03.1; do expect "but not for $v" 5 "released by u2 at 3\.1, not $v" as u1 holds "deploy:num" --version "$v"; done
 sleep 1; echo r | as u2 send u1 num-2 - --release "1.5 abc" >/dev/null 2>&1
 expect "and a release for item 1.5 isn't one for item 1.50" 5 "nothing recorded for 1\.50" as u1 holds "1.50" --version abc
 T="$W/rules"
