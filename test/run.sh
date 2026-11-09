@@ -81,6 +81,9 @@ for AD in $ADAPTERS; do
   expect "send delivers" 0 "^sent mailbox/inbox/bob/" as alice send bob review-1 "$T/body" --needs "a yes or no" --context proj-x
   expect "list shows it to the recipient" 0 "alice-review-1.md" as bob list
   expect "the sender's own inbox is empty" 3 "no mail" as alice list
+  # a name with no record here is more likely the wrong name than no mail
+  expect "list under a name that isn't registered says so" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody list
+  expect "and so does read" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody read
   if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
@@ -169,6 +172,17 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
     ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
+  # an inbox file name with a line break in it is skipped, whole: nothing in the folder a command runs from is listed
+  mkdir -p "$T/proj"; echo "PROJECT ONLY" > "$T/proj/notes.md"
+  tamper 'echo x > "mailbox/inbox/alice/x
+notes.md"'
+  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1)
+    case $out in (*"PROJECT ONLY"*|*notes.md*) no "$c lists a file outside the inbox" "$out" ;;
+      (*) ok "$c skips a file name with a line break in it" ;; esac; done
+  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1)
+  printf '%s\n' "$out" | grep -qx 'notes.md' && no "watch lists part of a file name" "$out" ||
+    ok "and so does watch"
+  tamper 'rm -f mailbox/inbox/alice/x*'
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins
@@ -347,6 +361,23 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
       failpeek all bob watch 1 30
 
+    # git's own prompts are off: every git call the adapter makes runs with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never.
+    # A local store asks for no credential, so this checks what git is given, through a git on PATH that logs each call.
+    # Both are unset first, so a value from the environment the suite runs in can't stand in for the adapter's own
+    mkdir -p "$W/gitlog"; printf '%s\n' '#!/bin/sh' \
+      'printf "%s %s|%s\n" "${GIT_TERMINAL_PROMPT-unset}" "${GCM_INTERACTIVE-unset}" "$*" >> "$GITLOG"' \
+      'exec "$REAL_GIT" "$@"' > "$W/gitlog/git"; chmod +x "$W/gitlog/git"
+    gitlog() { (unset GIT_TERMINAL_PROMPT GCM_INTERACTIVE; REAL_GIT=$real_git GITLOG="$T/gitlog" PATH="$W/gitlog:$PATH"
+      export REAL_GIT GITLOG PATH; as "$@"); }
+    rm -f "$T/gitlog"; as np setup --store "$STORE" --name np >/dev/null
+    gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
+    # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
+    calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
+    for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
+    bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
+    [ -n "$calls" ] && [ -z "$bad" ] && ok "every git call the adapter makes runs with git's own prompts off" ||
+      no "a git call could wait on git's own prompt" "$bad"
+
     # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
     # from the value it read, so a peek moving it too made a concurrent send fail
     for C in "$W/home-bob/.local/state/agent-mailbox/checkouts/"*; do :; done
@@ -403,6 +434,27 @@ case " $ADAPTERS " in *" git "*)
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
+
+  echo "== git: a first init whose push failed is published by the next command"
+  # the store's objects and refs are read-only for the init, so its fetches work and its push fails
+  T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi1 setup --store "$T/store.git" --name fi1 >/dev/null
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "a first init whose push failed is published (read-only folders don't stop this user)"
+  else
+    expect "init whose push fails says it's written locally" 4 "written locally, not published" as fi1 init
+    chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    expect "the next command publishes it" 0 "publishing 1 commit\\(s\\) left from an earlier command" as fi1 agents
+    expect "and the store now has the mailbox" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  fi
+  # an init that was published is never published again: the branch it pushed, deleted from the store before this clone's
+  # next command, reads as deleted
+  T="$W/firstinit2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi2 setup --store "$T/store.git" --name fi2 >/dev/null; as fi2 init >/dev/null
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main
+  expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
+  [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -1440,6 +1492,7 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+expect "a retired name with an empty inbox still lists no mail" 3 "no mail for h2" as h2 list
 expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name" \
   env HOME="$W/home-h2" "$SH" "$CLI" doctor
 # a newcomer who picked that retired name is told it may not be theirs; with a key of its own that isn't the record's,
