@@ -19,8 +19,8 @@ to sign and verify mail; and `jq` for the Claude Code plugin's Stop guard, which
   pinning, and a store can require them (`require_signatures`).
 - **The `agent-mailbox` CLI** (POSIX `sh`): `setup`, `init`, `register`, `update`, `agents`, `trust` (and
   `trust --relax`), `send`, `list`, `sent`, `read`, `consume`, `verify`, `holds`, `watch` (with `--also` for a second
-  store), `whoami`, `doctor` and `--version`, which names the commit when run from a git clone. `install.sh` puts it
-  on `PATH`.
+  store), `whoami`, `doctor` and `--version`, which names the commit when run from a git clone. `install.sh` links it
+  into `~/.local/bin` (or `--prefix`), and says if that isn't on `PATH`.
 - **Adapters:** `git` (any git repository you can push to, with history kept) and `dir` (a plain folder).
   `adapters/README.md` sets out the contract for writing another.
 - **The agent skill** (`skills/agent-mailbox/SKILL.md`): how an agent joins, reads, replies, holds and releases, and
@@ -47,8 +47,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   its fingerprint out of band and runs `trust`. `agents` lists every key's fingerprint, `trust` prints the one it
   pins, and `doctor` shows this agent's own, read from this machine (#25, #97).
 - Where this machine holds your key, `update` won't republish a record that names another key; it never pins your own
-  name to a key you don't hold; and a registry `key` that isn't a plain `<type> <base64>` public key reads as no key
-  (#25).
+  name to a key you don't hold; and a registry `key` that isn't a plain `<type> <base64>` public key reads as no key,
+  and `update` refuses such a record (#25).
 - A strict store's `send` refuses before changing anything when your record names no key or another one; a signature
   that doesn't verify against your record is never published; a message's `.sig` is in place before the message
   appears (#40).
@@ -66,33 +66,39 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   away included (the dir adapter keeps no history: a consumed record no longer counts). It reads only mail that may
   carry a record, so it's fast on long histories: about a quarter of a second on a 600-message mailbox (#12).
 - A store seen strict stays strict until `trust --relax`; a hold whose sender's key changed, or went missing after you
-  pinned it, still holds; after `trust`, mail signed with the old key, holds included, stops counting (#23).
+  pinned it, still holds; and in a store that requires signatures, mail signed with the old key, holds included, stops
+  counting after `trust`; in an open store it still counts (#23).
 - `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
   part of it (#23).
 - Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict;
-  `send --hold` or `--release` waits for the next second after your previous one (#23).
+  `send --hold` or `--release` waits for the next second after your previous one from this machine (#23).
 - Items and versions compare as text, so `3.1` and `3.10` differ (#82).
-- A signed hold or release whose `hold:` or `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header
-  holds other lines that aren't, blocks its item until that sender's next record (#84).
+- A hold or release whose signature verifies (or whose pinned sender's key changed or went missing), whose `hold:` or
+  `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header holds other lines that aren't, blocks its
+  item until that sender's next record (#84).
 
 **The send guard**
 
 - `send` refuses a body in `~/.ssh` (the account's own too, when `HOME` points elsewhere) or the CLI's config or state
   folder; the CLI's config file or signing key by any name; the file a link kept in `~/.ssh` or the config folder
-  leads to, and anything under a folder one leads to; a path it can't follow to the end; and any body holding a line
-  of a private-key block. It's a deny-list of the obvious cases; `docs/security.md` lists its limits (#26, #79, #107).
+  leads to, and anything under a folder one leads to; a path it can't follow to the end; and any body holding the
+  first or last line of a private-key block, or a PuTTY key's header or private lines. It's a deny-list of the obvious
+  cases; `docs/security.md` lists its limits (#26, #79, #107).
 - The path check takes each folder's physical path from `pwd(1)`, so a file system that ignores case compares right
   (#78), and walks deep link chains quickly: 20 links 300 folders deep in under 1 s, with relative targets (#80).
 
 **Reading and sending**
 
-- `read`, `list`, `watch` and `agents` spell out control and invisible characters from the store (`\x1b`, `<U+202E>`),
-  no body line can start like a message boundary, and `agents` cuts a record's fields to 200 bytes (#22).
-- `verify` looks in your own inbox, and a copy addressed to someone else reads `misrouted`, by name or by path (#22,
-  #26).
+- `read`, `list`, `watch` and `agents` spell out control characters, bidi embeddings, overrides and isolates, line and
+  paragraph separators, and tag characters from the store (`\x1b`, `<U+202E>`); zero-width characters pass as they
+  are; no body line can start like a message boundary, and `agents` cuts a record's fields to 200 bytes (#22).
+- `verify` looks in your own inbox, and a copy addressed to someone else reads `misrouted`, by name, or by path when
+  it sits in an inbox (#22, #26).
 - An inbox file in a subfolder, or whose name holds a line break, isn't a message (#12, #83).
 - With no mail, `list` and `read` under a name with no record in the mailbox stop with an error, not "no mail" (#76).
-- A reply takes the context of the message it answers (#8); `send` never reuses a message file name (#66).
+- A reply without `--context` takes the context of the message it answers, while that message is still in your inbox
+  (a `--consume` in the same send counts) (#8); `send` never reuses a file name it used from this state folder, unless
+  the clock goes back (#66).
 - `send -` reads stdin as it is: a closed stdin fails at once, a socket works, and on macOS a pipe no longer fails now
   and then (#49, #63).
 - `update` keeps the fields and text it doesn't manage in your record (#72), succeeds when nothing changed (#88,
@@ -105,25 +111,26 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - Each agent name keeps its own clone of the store (#54), and commands under one name take turns in it, waiting up to
   `AGENT_MAILBOX_LOCK_WAIT` seconds (120) for another, then naming it (#87, #107).
 - The store's `.gitattributes`, `.lfsconfig` and submodules don't apply to the clone, and git hooks and the
-  file-system monitor are off for it; only the mailbox branch is fetched; and a store that can't be reached is an
-  error for every command (#27).
+  file-system monitor are off for it; only the mailbox branch is fetched (or, at the first clone of a store that
+  doesn't have it yet, its default branch); and a store that can't be reached is an error for every command that reads
+  it (#27).
 - A store named by a URL, `host:path` or an absolute path is cloned from the agent's own state folder, so nothing in
   the folder a command runs from stands in for it (#27); git's own credential prompt is off, so a credential it would
   ask for in the terminal fails at once; an askpass program, a credential helper's own prompt and ssh's prompts still
   wait (#64).
 - The mailbox branch is matched by its exact name (#65), and a branch name git refuses is refused (#19).
 - A commit an earlier command couldn't push is published by the next command under the same name, a first `init`
-  included (#67); a command that can't publish such a commit says it wrote nothing of its own (#102); and a clone
-  whose history the store no longer shares fails, saying how to recover (#68).
+  included (#67); a command that can't push such a commit says it wrote nothing of its own (#102); and a clone whose
+  history the store no longer shares fails, saying how to recover (#68).
 - `watch` retries a failed look at the store; commits carry the agent's name, never a person's; and a watcher's look
   never races a send in the same clone (#24).
 
 **The command line**
 
-- `--as` or `--config` after the command is refused; values are validated with `printf`, and none may hold a line
-  break (#8).
-- Values, bodies and stores that start with `-` are taken as they are (#10, #11); an exported `CDPATH` is ignored
-  (#6); the CLI finds its adapters through the link `install.sh` makes (#2).
+- `--as` or `--config` after the command is refused; values are validated with `printf`, and a store, folder, branch
+  or name can't hold a line break (#8).
+- Values, bodies and stores that start with `-` are taken as they are, except a `holds` item (#10, #11); an exported
+  `CDPATH` is ignored (#6); the CLI finds its adapters through the link `install.sh` makes (#2).
 - `doctor` checks the setup, names what to run next, and says when a store isn't reachable or initialized (#10, #71).
 
 **The Claude Code plugin**
