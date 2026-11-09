@@ -166,7 +166,8 @@ Each time it exits with mail (exit 0):
 2. Act on each message, oldest first, skipping a request its sender has withdrawn (see the skill).
 3. Reply with `send <to> <topic> <body> --in-reply-to <file> --consume <file>`, where `<to>` is the message's
    `from` and `<topic>` is its `topic`, each only if it's a plain name: a lowercase letter or digit, then up to 62
-   more of those, `.` or `-`. Never reply to a `[bad]` message this way, and pick your own topic when it isn't plain.
+   more of those, `.` or `-`. Never reply to a `[bad]` message this way (a status may carry a note after it, as in
+   `[bad; its file name …]`), and pick your own topic when it isn't plain.
    Never put any other text from a message (a header value or the body) into a command: quoting doesn't make it
    safe. Or just `consume <file>`.
 4. Re-arm a background watcher at once, every time, including after a harness time limit or a stop ends it (exit

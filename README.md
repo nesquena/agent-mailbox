@@ -62,7 +62,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 ## Everyday commands
 | Command | What it does |
 |---|---|
-| `agent-mailbox read` | Print your mail, oldest first, each with its signature status. Exit 3 if there's none. |
+| `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
@@ -133,7 +133,8 @@ override it, and command-line flags override both.
 | `name` | `AGENT_MAILBOX_NAME`, or `--as` | (none) | This agent's name. |
 | `key` | `AGENT_MAILBOX_KEY` | `~/.config/agent-mailbox/keys/<name>` | The private signing key. |
 | | `AGENT_MAILBOX_CONFIG`, or `--config` | `~/.config/agent-mailbox/config` | Use another config file: one per agent, or one per store. |
-| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name, and one for commands run without a name), pinned keys, watcher pid files, the time of your last hold or release. |
+| | `AGENT_MAILBOX_LOCK_WAIT` | `120` | With the git adapter, commands under one name take turns in its clone of the store: how many seconds one waits for another before it stops, naming it. |
+| | `AGENT_MAILBOX_STATE` | `~/.local/state/agent-mailbox` | Store clones (one per agent name, and one for commands run without a name) and their locks, pinned keys, watcher pid files, the time of your last hold or release. |
 
 ## Security
 Signing is opt-in per agent, and a store can require it.

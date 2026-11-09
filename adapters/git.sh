@@ -71,8 +71,9 @@ ad_open() {
   # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
+  mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
+  ad_lock
   if [ ! -d "$AD_DIR/.git" ]; then
-    mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
@@ -187,7 +188,88 @@ ad_push() {
   ad_git update-ref "refs/remotes/origin/$BRANCH" HEAD 2>/dev/null || :
 }
 
+# ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
+# in its clone instead of working in it at once. The lock is a file in the state folder's locks/<clone id>/ (where no
+# clone name can reach it), created with noclobber, naming its holder: "<pid> <epoch it took the lock> <host> <the
+# holder's start, from ad_started>". A holder on this host that's gone, or a pid now another process's (its start
+# differs), is broken at once; a lock that can't be read is broken once it's a minute old; a holder on another host (a
+# state folder shared between machines, or this one's name since changed) can't be checked, so it's waited for, and the
+# message says which file to delete if nothing is running there. Breaking a lock takes a guard file first, so two
+# waiters never both break it. A command waits up to AGENT_MAILBOX_LOCK_WAIT seconds (120), then stops, naming the
+# holder.
+# ceiling: a breaker killed while holding the guard leaves it; it's taken as abandoned, and removed, once a minute old
+# ad_started <pid>: when that process started, in a form that reads the same every time. Where /proc has it (Linux), its
+# start in clock ticks since boot (field 22 of /proc/<pid>/stat, counted after the name's closing parenthesis, since a
+# name can hold spaces) and the boot's id: a clock step moves ps's start time for every process, but not these, and a
+# lock from an earlier boot reads as another process's. Elsewhere, ps's start time, in UTC and the C locale
+ad_started() {
+  if [ -r "/proc/$1/stat" ]; then
+    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0; st=${st##*')'}
+    set -f; set -- $st; set +f; [ $# -ge 20 ] || return 0
+    # (without a boot id, the ticks alone, with no trailing space: a waiter reads the lock's fields split on spaces)
+    eval "st=\${20}"; bi=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); printf '%s\n' "$st${bi:+ $bi}"; return 0
+  fi
+  LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+AD_LOCK="" AD_LOCKED=""
+ad_lock() {
+  ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
+  lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
+  mine="$$ $(date +%s) $host $(ad_started $$)"
+  lw=${AGENT_MAILBOX_LOCK_WAIT:-120}; case "$lw" in (''|*[!0-9]*) lw=120 ;; esac; [ "${#lw}" -le 5 ] || lw=120
+  t0=$(date +%s)
+  while :; do
+    stale=""
+    (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then)
+    if [ ! -e "$lk" ] && [ ! -L "$lk" ]; then
+      (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+      [ -e "$lk" ] || [ -L "$lk" ] || die "can't create the lock $lk"
+    fi
+    held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
+    set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
+    case "$hp$he" in
+      (''|*[!0-9]*) [ -z "$(find "$lk" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
+      (*) [ "$hh" != "$host" ] || { kill -0 "$hp" 2>/dev/null && [ "$(ad_started "$hp")" = "$hs" ]; } || stale=1 ;;
+    esac
+    if [ -n "$stale" ]; then
+      # (a guard just released by another waiter is tried once more)
+      if (set -C; : > "$ld/break") 2>/dev/null || { [ ! -e "$ld/break" ] && (set -C; : > "$ld/break") 2>/dev/null; }; then
+        # (removed only while it still holds what was found stale)
+        if [ "$(cat "$lk" 2>/dev/null)" = "$held" ]; then
+          rm -f "$lk" 2>/dev/null || { rm -f "$ld/break"; die "can't remove the stale lock $lk"; }
+        fi
+        rm -f "$ld/break"; continue
+      fi
+      # (still no guard there, and the folder can't be written: the stale lock can't be removed either. One that can
+      # be is only another waiter's guard, come and gone: wait, and try again)
+      [ -e "$ld/break" ] || [ -w "$ld" ] || die "can't remove the stale lock $lk"
+      [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
+    fi
+    [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
+      case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
+      if [ -n "$hh" ] && [ "$hh" != "$host" ]; then
+        die "another agent-mailbox command (pid ${hp:-unknown} on $hh) has been working in this name's copy of the store$age: if none is running on $hh (or this machine's name has changed), delete $lk, then run this again"
+      fi
+      die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again (its lock: $lk)"; }
+    sleep 1
+  done
+  AD_LOCK=$lk AD_LOCKED=$mine
+  trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
+}
+# ad_unlock: release the lock, if this command still holds it
+ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
+
 ad_sync() {
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: a rebase it
+  # was in, git's own lock on the index, and changes it never committed (a message written but not added, a consumed
+  # one removed but not committed). Commits it made but couldn't push are kept, and published below
+  if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
+    ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
+  rm -f "$AD_DIR/.git/index.lock"
+  if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
+  # (-x: files the store's own .gitignore names are debris too)
+  ad_git clean -fdqx -- "$ROOT" 2>/dev/null
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)
