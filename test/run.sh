@@ -829,7 +829,7 @@ case " $ADAPTERS " in *" git "*)
   expect "an update the store won't take exits 4" 4 "written locally, not published" fast xq4 update --about again
   rm -f "$T/store.git/hooks/pre-receive"
   expect "run again, it says the earlier change is now published" 0 \
-    "publishing 1 commit.*nothing new to update for xq4 \(active\): the earlier change is now published" as xq4 update --about again
+    "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
