@@ -128,10 +128,12 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
      with the primary.
   2. Check with `agents` that the backup is `active`. If it isn't, don't reroute; tell your human.
   3. Send the primary a one-line `withdraw <file>` note (`--needs none`). If that send fails (exit 1), stop and tell
-     your human before resending anything. Exit 4 means it's queued, not yet published: run `agents` (with the same
-     `--as` and `--config`), which publishes it, until that exits 0, and only then go on to step 4. If it won't
-     publish, keep the reroute pending and tell your human; don't resend until it does, or the withdraw could go out
-     on its own later, with no request at the backup.
+     your human before resending anything. Exit 4 means something didn't publish, maybe before the withdraw was
+     written: run `agents` (with the same `--as` and `--config`), which publishes what's queued, until that exits 0.
+     Then check with `sent <primary>` that the withdraw is listed. If it isn't, send it again (this step): it was
+     never written, or the primary already consumed it, and a second withdraw does no harm. Only then go on to step
+     4. If it won't publish, keep the reroute pending and tell your human; don't resend until it does, or the
+     withdraw could go out on its own later, with no request at the backup.
   4. Resend the request to the backup with `rerouted from <file>` as the body's first line. If the resend fails (exit
      1), tell your human: the primary has already stopped.
 - **Honour a withdraw only from the request's own sender,** only when it reads `verified` or `unsigned` (never `bad`,

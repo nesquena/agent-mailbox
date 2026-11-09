@@ -232,3 +232,5 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
+  with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
