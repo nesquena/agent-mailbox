@@ -37,7 +37,7 @@
 #   whoami | doctor                     show the resolved config | check this machine's setup
 #   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
-# Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 written locally but not published
+# Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 a change saved locally isn't published
 # (re-run a command with the same name to publish; don't resend); 5 not released; 6 signature not verified.
 set -u
 VERSION=0.1.0

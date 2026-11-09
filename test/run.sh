@@ -404,6 +404,20 @@ case " $ADAPTERS " in *" git "*)
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
+  echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
+  T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in e1 e2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as e1 init >/dev/null; for a in e1 e2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  echo hi > "$T/m"
+  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" as e1 send e2 first "$T/m"
+  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" as e1 send e2 second "$T/m"
+  rm -f "$T/store.git/hooks/pre-receive"; as e1 agents >/dev/null 2>&1
+  [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/e2 | grep -- '-e1-first\.md$')" ] &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/e2 | grep -- '-e1-second\.md$')" ] &&
+    ok "and it didn't: once the store takes pushes, only the first is there" ||
+    no "a command that said it wrote nothing wrote something" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
