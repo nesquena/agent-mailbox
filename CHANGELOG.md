@@ -229,6 +229,9 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second (#66).
 - **Fix:** with the git adapter, a first `init` whose push failed (exit 4) is published by the next command, as any
   other unpublished commit is. Before, on a store with no mailbox branch yet, it never was: `init` then said a
   mailbox already existed, and the store still had none (#67).
