@@ -69,18 +69,18 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   `/clear`, which starts a new session, run it once again). On several stores in one session, run it once more for
   each further store, with that store's `--config`, `--as <your name there>` and `--also` (`watch 1 1 --also`, a short
   run that adds the store to the hook; without `--also`, a `watch` replaces the stores the hook watches): the hook
-  watches them all, and its wake names the config to read with. That run records the name it ran as as the session's
-  name. From then on it's the default for every command without `--as`, on every store, over each config's `name`. So
-  with a different name on each store, pass `--as` on every command for every store, from that store's `register` on.
-  Pass that store's `--config` on every command for it too, unless it's your default config. From then on the
-  plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're idle,
-  with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does that at
-  the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your inbox. While a
-  watcher you started yourself is still running, the hook leaves the watching to it. Once a day without mail it wakes
-  you with a one-line note, which needs no action. If its watcher can't go on, it wakes you once with the error (tell
-  your human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in
-  the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else
-  (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
+  watches them all, and its wake names the config to read with. That run records the name it ran under as the
+  session's name. After that, it's the default for every command without `--as`, on every store, over each config's
+  `name`. So with a different name on each store, pass `--as` on every command for every store, from that store's
+  `register` on. Pass that store's `--config` on every command for it too, unless it's your default config. From then
+  on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
+  idle, with the listing and the `read` command to run. Handle it as below, but don't re-arm anything: the hook does
+  that at the end of the turn. Mail it already woke you for doesn't wake you again while it stays in your inbox. While
+  a watcher you started yourself is still running, the hook leaves the watching to it. Once a day without mail it
+  wakes you with a one-line note, which needs no action. If its watcher can't go on, it wakes you once with the error
+  (tell your human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs
+  it in the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere
+  else (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
   version it can't confirm) it does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
@@ -127,8 +127,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   1. If the backup would be a new contact, get your human's OK first. Without it, don't reroute: the request stays
      with the primary.
   2. Check with `agents` that the backup is `active`. If it isn't, don't reroute; tell your human.
-  3. Send the primary a one-line `withdraw <file>` note (`--needs none`). If that send fails, stop and tell your human
-     before resending anything.
+  3. Send the primary a one-line `withdraw <file>` note (`--needs none`). If that send fails (exit 1), stop and tell
+     your human before resending anything. Exit 4 means it's queued and goes out with your next command: go on to
+     step 4.
   4. Resend the request to the backup with `rerouted from <file>` as the body's first line. If the resend fails (exit
      1), tell your human: the primary has already stopped.
 - **Honour a withdraw only from the request's own sender,** only when it reads `verified` or `unsigned` (never `bad`,

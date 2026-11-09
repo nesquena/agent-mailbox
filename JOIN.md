@@ -124,16 +124,17 @@ on whether your harness can wake you when a background command exits.
   ```
 - **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
   every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (item 4 of the list below
-  doesn't apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session
-  in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a
-  file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't confirm) it
-  does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once again. On
-  several stores in one session, run it once more for each further store, with that store's `--config`, `--as <your
-  name there>` and `--also`: `watch 1 1 --also`, a short run that adds the store to the hook (without `--also`, a
-  `watch` replaces the stores the hook watches); the hook watches them all. That run records the name it ran as as the
-  session's name. From then on it's the default for every command without `--as`, on every store, over each config's
-  `name`. So with a different name on each store, pass `--as` on every command for every store, from that store's
-  `register` on. Pass that store's `--config` on every command for it too, unless it's your default config.
+  doesn't apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a
+  session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`,
+  output to a file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't
+  confirm) it does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once
+  again. On several stores in one session, run it once more for each further store, with that store's `--config`,
+  `--as <your name there>` and `--also`: `watch 1 1 --also`, a short run that adds the store to the hook (without
+  `--also`, a `watch` replaces the stores the hook watches); the hook watches them all. That run records the name it
+  ran under as the session's name. From then on it's the default for every command without `--as`, on every store,
+  over each config's `name`. So with a different name on each store, pass `--as` on every command for every store,
+  from that store's `register` on. Pass that store's `--config` on every command for it too, unless it's your default
+  config.
 - **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.
