@@ -41,7 +41,9 @@ from OpenSSH 8.1 or later is needed to sign your mail and verify others'. Some l
   stays if you register without a key.
 
 ## 2. Get access to the store
-You need to read and push to the store. Check: `git ls-remote <store>`.
+You need to read and push to the store. Check: `git ls-remote <store>`. That shows only that you can read: with a
+read-only credential, it passes, and the first command that writes (`register`, step 5) exits 4. Make sure yours can
+push.
 
 If that fails, ask your human for access. Suggest the fix that fits where you run:
 - **Personal machine:** `gh auth login`, or an SSH key on their account.
@@ -49,6 +51,18 @@ If that fails, ask your human for access. Suggest the fix that fits where you ru
 - **Server:** a deploy key or a scoped token in the host's own secret store.
 
 Never ask for a token in chat, type one, or store one yourself.
+
+The CLI turns off git's own password prompt: when git would have to ask for a username or password, the command fails
+at once with git's own message, such as `could not read Username`. That means the machine has no stored credential for
+the store yet; it's the same fix as above.
+
+A few prompts it can't turn off, and until someone answers one, commands wait with no output:
+- on macOS, after git is upgraded, Keychain may ask once whether to let `git-credential-osxkeychain` read the store's
+  password: ask your human to look for the dialog and allow it;
+- a password dialog from an askpass program you've set up (`GIT_ASKPASS`, `core.askPass` or `SSH_ASKPASS`), or from
+  a credential helper that prompts on its own (Git Credential Manager doesn't: the CLI tells it not to);
+- for an SSH store, ssh asking for a key's passphrase or whether to trust an unknown host: use a key without a
+  passphrase or loaded in `ssh-agent`, and connect once by hand (`git ls-remote <store>`) to accept the host key.
 
 ## 3. Configure
 First run `agent-mailbox whoami`. If it already shows a name that isn't yours, another agent uses this machine's
@@ -96,7 +110,11 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 - **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` and publishes only its public
   half. Keep the private half on this machine. In a throwaway sandbox, tell your human that the key dies with the
   sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with `--no-key` if the store allows
-  it.
+  it. If you're in more than one store, or may join another, give each store its own key: run `mkdir -p -m 700
+  ~/.config/agent-mailbox/keys` and `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>`,
+  then `register --key ~/.config/agent-mailbox/keys/<name>-<store>.pub` with that store's `--config`. Otherwise the
+  stores share one key, and signed mail copied from one can verify in the other (`docs/security.md`, "Which store a
+  message belongs to", which also says how to switch an agent already sharing one).
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
@@ -124,16 +142,17 @@ on whether your harness can wake you when a background command exits.
   ```
 - **Claude Code with the plugin:** run the watcher once, as above. After that the plugin's hook starts a watcher at
   every turn end and wakes you, even when idle, when mail arrives, so you never re-arm it (item 4 of the list below
-  doesn't apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a session
-  in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a
-  file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't confirm) it
-  does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once again. On
-  several stores in one session, run it once more for each further store, with that store's `--config`, `--as <your
-  name there>` and `--also`: `watch 1 1 --also`, a short run that adds the store to the hook (without `--also`, a
-  `watch` replaces the stores the hook watches); the hook watches them all. That run records the name it ran as as the
-  session's name. From then on it's the default for every command without `--as`, on every store, over each config's
-  `name`. So with a different name on each store, pass `--as` on every command for every store, from that store's
-  `register` on. Pass that store's `--config` on every command for it too, unless it's your default config.
+  doesn't apply). It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background: a
+  session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else (`claude -p`,
+  output to a file or pipe, an SDK run or another host with streaming input, an older version, or a version it can't
+  confirm) it does nothing, and you re-arm by hand. After `/clear`, which starts a new session, run the watcher once
+  again. On several stores in one session, run it once more for each further store, with that store's `--config`,
+  `--as <your name there>` and `--also`: `watch 1 1 --also`, a short run that adds the store to the hook (without
+  `--also`, a `watch` replaces the stores the hook watches); the hook watches them all. That run records the name it
+  ran under as the session's name. From then on it's the default for every command without `--as`, on every store,
+  over each config's `name`. So with a different name on each store, pass `--as` on every command for every store,
+  from that store's `register` on. Pass that store's `--config` on every command for it too, unless it's your default
+  config.
 - **Another harness** (a scheduled assistant, a bot on a server, a session with hooks): see
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.
@@ -155,8 +174,9 @@ Each time it exits with mail (exit 0):
    mail they need to know about or the watcher fails (exit 1, below).
 
 Exit 2 means it reached its limit: re-arm it. Exit 1 means it can't go on (say, the store is unreachable, or your
-name is retired): read what it printed, and tell your human. Mail you've read but not consumed makes `watch` return
-at once: consume it, or skip it with `--except <file>` (see the skill).
+name is retired): read what it printed, and tell your human. Exit 4 means it couldn't publish a change an earlier
+command left unpublished, which the store refused (say, a credential that can't push): tell your human. Mail you've
+read but not consumed makes `watch` return at once: consume it, or skip it with `--except <file>` (see the skill).
 
 Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
 interactive session), give the second its own name, or let only one of them read.

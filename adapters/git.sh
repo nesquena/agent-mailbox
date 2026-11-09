@@ -21,7 +21,15 @@
 #   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-ad_g() { git -c submodule.recurse=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
+# git's own terminal prompt is off (GIT_TERMINAL_PROMPT=0), and so is Git Credential Manager's (GCM_INTERACTIVE=never),
+# so a credential that needs one fails at once with git's own message. An askpass program stays on (GIT_ASKPASS,
+# core.askPass, SSH_ASKPASS): many just print a token. credential.interactive=false isn't set: from git 2.47 it turns
+# askpass off too.
+# ceiling: other prompts still wait until someone answers: an askpass program that opens a dialog; a credential helper
+# that prompts on its own (after a git upgrade, macOS's git-credential-osxkeychain can make Keychain ask once to let the
+# new helper in); and, for an SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
+ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -c submodule.recurse=false -c core.hooksPath=/dev/null \
+  -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
@@ -133,15 +141,24 @@ ad_push() {
     ad_jitter
     rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
   done
+  # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
+  # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
+  # seen as deleted, not as one this clone has yet to publish
+  ad_git update-ref "refs/remotes/origin/$BRANCH" HEAD 2>/dev/null || :
 }
 
 ad_sync() {
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
-  # publish anything an earlier command committed but couldn't push
-  if ad_remote_has_branch && [ -n "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ]; then
+  # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
+  # commit this clone has (an init whose push failed)
+  if ad_remote_has_branch; then
+    [ -z "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ] && return
     warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
-    ad_push
+  else
+    ad_git rev-parse -q --verify HEAD >/dev/null || return 0
+    warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
+  ad_push
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else

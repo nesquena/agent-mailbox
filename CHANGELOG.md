@@ -232,6 +232,10 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Docs:** the roadmap moved to issues labelled `enhancement`; the README's Roadmap section points at them, and
+  says what isn't planned (end-to-end encryption, real-time chat) (#98).
+- **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
+  break (#83).
 - **Fix:** an `update` that changes nothing, such as `update --status active` when already active, or one run again
   after it exited 4, succeeds; with the git adapter, which publishes nothing then, it says "nothing to update". It
   stopped with "git commit failed". `update` still writes the record and its signature every time, so a stale or
@@ -243,3 +247,43 @@ First version.
   retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
   consume it first (sending on, as new mail, any that are another agent's job), or pass `--force` to retire with it unread
   (#73).
+- **Fix:** `doctor` tells a retired name how to come back (`update --status active`), or to pick another name when the
+  record's key isn't this agent's; it said "run register", which refuses a name that's already registered. A store
+  that isn't reachable or initialized now says to run `agents` to see why. `register` and `send` say "ssh-keygen -Y
+  (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for `-Y` too, so an older ssh-keygen isn't mistaken
+  for a missing one or for a working one (#71).
+- **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
+  with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
+- **Docs:** `docs/security.md` says a signature doesn't name the store: in a strict store, signed mail copied in
+  from another store verifies when its sender is registered there under the same name with the same key. `JOIN.md`
+  and `docs/security.md` say how an agent in more than one store gives each its own key, and how one already sharing
+  a key switches (#81).
+- **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
+  it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
+  writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names
+  a descriptor, as one through `/proc` does on Linux (#63).
+- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
+  Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
+  at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
+  answer. An askpass program that prints a token keeps working. Some prompts still wait until someone answers, and
+  `JOIN.md` step 2 lists them: an askpass program's dialog, a macOS Keychain dialog after a git upgrade, and ssh's
+  passphrase and host-key prompts for an SSH store (#64).
+- **Fix:** with the git adapter, a first `init` whose push failed (exit 4) is published by the next command, as any
+  other unpublished commit is. Before, on a store with no mailbox branch yet, it never was: `init` then said a
+  mailbox already existed, and the store still had none (#67).
+- **Changed:** with no mail, `list` and `read` under a name that has no record in the mailbox stop with "'<name>'
+  isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
+  name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
+  none (#76).
+- **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
+  names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
+- **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
+  it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
+  was typed in (#78).
+- **Docs:** `docs/security.md` says the send guard catches mistakes and mail asking for the files it guards, not
+  other secrets or another local user changing the file mid-send; that anyone who can push can stop the mailbox with a
+  commit git won't check out, and how to recover; to keep signing keys out of synced folders; where the default key
+  lives; and that an agent switching keys re-sends the holds it still means. `JOIN.md` says `git ls-remote` passes a
+  read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
+  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
+  it twice as the skill's rule on copies says (#86).
