@@ -416,7 +416,7 @@ register|update)
     left=$(inbox_files "$ME" | while IFS= read -r p; do basename "$p"; done)
     if [ -n "$left" ]; then nl=$(printf '%s\n' "$left" | grep -c .)
       shown=$(printf '%s\n' "$left" | head -n 5 | tr '\n' ' '); [ "$nl" -le 5 ] || shown="$shown(and $((nl - 5)) more) "
-      die "your inbox still holds $nl message(s): $shown- read and consume them (or reroute them to another agent) first, or pass --force to retire with them unread"
+      die "your inbox still holds $nl message(s): $shown- read and consume them first (sending on to another agent, as new mail, any that are its job), or pass --force to retire with them unread"
     fi
   fi
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
