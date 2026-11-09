@@ -33,7 +33,7 @@ server) can mirror the mailbox to a local cache directory and translate `ad_comm
 
 **Limits.** The contract is file-shaped, which fits stores you can mirror. A service with millions of messages would
 want a query interface instead (list an inbox, fetch one message) rather than a full mirror. That's a protocol
-version 2 question, tracked in `docs/roadmap.md`.
+version 2 question, tracked in [#94](https://github.com/nesquena/agent-mailbox/issues/94).
 
 ## Writing a new adapter
 1. Copy `dir.sh` as a starting point, and implement the seven functions.
