@@ -229,6 +229,9 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second (#66).
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
   (#61).
 - **Changed:** `list` and `read` under a name that has no record in the mailbox stop with "'<name>' isn't
