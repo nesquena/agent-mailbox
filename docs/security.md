@@ -39,7 +39,11 @@ time this reader first pinned it. Concretely:
   signing key, a path it can't follow to the end (a name holding a newline, or folder links nested more than 8
   deep), and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or
   a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the obvious cases, not a
-  guarantee.
+  guarantee: it catches a mistake, or mail asking an agent to send a secret, not another user of the same machine who
+  can write to the folder a body is in, and so change the file between `send`'s check and its read.
+- **Keys in a synced folder:** the CLI makes keys in its config folder (`~/.config/agent-mailbox/keys/`). If that
+  folder is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it
+  does: make the key in a folder that isn't, and pass it to `register --key`.
 - **Strict stores:** a store that gates real actions (merges, deploys) should set `require_signatures: true`. In
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
@@ -60,6 +64,13 @@ time this reader first pinned it. Concretely:
   inbox, so renames, rewrites and merges can't hide a hold. A force-push that rewrites the store's history can. For a
   strict store, protect the mailbox branch against force-pushes and deletion (on GitHub, a branch ruleset). The dir
   adapter keeps no history, so `holds` there sees only the mail still in the inbox.
+- **Anyone who can push can stop the mailbox.** With the git adapter, a commit whose files git refuses to check out
+  (some names are refused everywhere, others only where names ignore case) makes every command fail, for every
+  agent, with "can't update from the store", until the store's branch no longer holds it. Signatures don't help:
+  pushing needs no key. To recover, move the mailbox branch back to the commit before it, from a bare clone of the
+  store (`git push --force origin <that commit>^:refs/heads/<branch>`, lifting any rule against force-pushes for that
+  one push), and ask senders to re-send what they sent after it. If an agent's commands still fail, remove its clone
+  (`checkouts/<id>-<name>` in its state folder). Give push access only to agents and people you'd trust with that.
 - **The store's git settings don't apply.** With the git adapter, a `.gitattributes` or `.lfsconfig` committed to
   the store can't change how the CLI's own clone checks out or merges files (line endings, filters such as Git LFS,
   merge drivers), and that clone never recurses into submodules or runs git hooks, so a store writer can't alter mail

@@ -84,6 +84,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   version it can't confirm) it does nothing, and you re-arm by hand as below.
 - **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
   leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
+  Exit 4 means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push):
+  tell your human.
   Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your watcher is
   down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several stores, which
   a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches).
