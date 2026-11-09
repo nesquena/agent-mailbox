@@ -1498,6 +1498,20 @@ if command -v perl >/dev/null 2>&1; then
     close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
   expect "and its text is the body" 0 "^from a socket$" block i2 sock
 else sk "a socket on stdin sends (no perl)"; fi
+# on macOS, /dev/stdin leads to /dev/fd/0, and a stat of that fails now and then while a pipe's writer exits (EBADF).
+# A sandbox that denies that stat makes it fail every time; the body is still read from fd 0, so the send goes through
+if [ "$(uname -s)" = Darwin ] && command -v sandbox-exec >/dev/null 2>&1 &&
+   printf '%s\n' '(version 1)' '(allow default)' '(deny file-read-metadata (regex #"^/dev/fd/[0-9]+$"))' > "$T/nofd.sb" &&
+   echo x | sandbox-exec -f "$T/nofd.sb" /bin/sh -c '! [ /dev/fd/0 -ef /dev/stdin ] && [ "$(cat)" = x ]' 2>/dev/null; then
+  expect "a pipe on stdin sends when /dev/fd/0 can't be stat'ed" 0 "^sent" \
+    sh -c "echo 'from a pipe' | HOME='$W/home-i1' sandbox-exec -f '$T/nofd.sb' '$SH' '$CLI' send i2 nofd -"
+  expect "and its text is the body" 0 "^from a pipe$" block i2 nofd
+else sk "a pipe on stdin sends when /dev/fd/0 can't be stat'ed (macOS with sandbox-exec only)"; fi
+# the walk's earlier hops still count when it ends at /dev/fd/<n>: a link in the config folder that leads to stdin
+ln -s /dev/stdin "$W/home-i1/.config/agent-mailbox/to-stdin"
+expect "a config-folder link to /dev/stdin is refused" 1 "refusing to send" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 link-stdin '$W/home-i1/.config/agent-mailbox/to-stdin' < '$T/b'"
+rm -f "$W/home-i1/.config/agent-mailbox/to-stdin"
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
 # the name record is advisory: a send whose record can't be written warns, and still sends
@@ -2214,6 +2228,21 @@ mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
 " "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
 n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
   env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
+# a decoy folder link named as readlink shows the real one, leading to /dev/fd: the end it reaches isn't exempt from
+# the same-file check (only /dev/stdin's own link to fd/<n> is). macOS only: elsewhere /dev/stdin leads through /proc
+if [ "$(uname -s)" = Darwin ]; then
+  mkdir -p "$T/dfd/real"; ln -s "$H/.ssh/config" "$T/dfd/real/9"; ln -s "$T/dfd/real" "$T/dfd/d
+"; ln -s /dev/fd "$T/dfd/d?"; ln -s "$T/dfd/d
+/9" "$T/dfd/notes.md"
+  n=$((n+1)); expect "or a chain whose shown name leads into /dev/fd" 1 "refusing to send" \
+    env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/dfd/notes.md"
+else sk "a chain whose shown name leads into /dev/fd is refused (macOS only)"; fi
+# stdin's link shown as a digit-named file that isn't in /dev/fd isn't exempt either
+mkdir -p "$T/lierl" "$T/decoy"; echo decoy > "$T/decoy/7"
+printf '#!/bin/sh\ncase "$1" in (/dev/stdin) echo "%s/decoy/7" ;; (*) exec "%s" "$@" ;; esac\n' "$T" "$(command -v readlink)" > "$T/lierl/readlink"
+chmod +x "$T/lierl/readlink"
+n=$((n+1)); expect "or stdin whose link is shown as a digit-named file outside /dev/fd" 1 "can't be followed" \
+  sh -c "echo hi | env PATH='$T/lierl:$PATH' HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
