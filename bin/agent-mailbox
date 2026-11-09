@@ -309,7 +309,8 @@ rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${
 # when HOME is elsewhere) or this CLI's config or state folder, or is (or is under) where a link kept in ~/.ssh or the
 # config folder leads (set in SF); or the file is the same file as the CLI's config file or signing key (either half;
 # SF empty), by path or as a file (a hard link, or a name in another case on a file system that ignores case); or its
-# path can't be followed to the end (SF is -). Then `send` won't mail it out, however it's asked to.
+# path can't be followed to the end (SF is -), or a folder whose links are checked holds one whose name has a line break
+# (SF is !<folder>). Then `send` won't mail it out, however it's asked to.
 # ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine.
 # Another name for a protected file by a hard link, or through a bind mount, is caught (by -ef) for the config file and
 # key, and for the file a link kept in ~/.ssh or the config folder leads to, but not for a file inside a protected
@@ -331,9 +332,11 @@ secret_file() {
     # protected folder itself (~ or /) is skipped, since every file under it would be refused; and only links kept in
     # those folders count, not a link inside the folder one leads to, when its own target is named directly
     [ "$SF" != "$STATE" ] || continue
+    # (the links are read one per line, so a link whose name holds a line break can't be checked: refuse, naming it)
+    [ -z "$(find "$sd" -type l -name "*$NL*" 2>/dev/null)" ] || { SF="!$SF"; return 0; }
     # (a link whose target is the body itself, as a file, by another name, a hard link say, counts by the body's own path)
     lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do
-      if [ -d "$l" ]; then phys "$l"; elif [ "$bf" -ef "$l" ]; then printf '%s\n' "$bf"; else real "$l"; fi; done)
+      if [ -d "$l" ]; then phys "$l"; elif [ "$1" -ef "$l" ] || [ "$bf" -ef "$l" ]; then printf '%s\n' "$bf"; else real "$l"; fi; done)
     while IFS= read -r lt; do
       # (a link to / leads to every file: hops shows a hop that is / itself as //, which it would match)
       case "$lt" in (/) continue ;; esac; case "$sd/" in ("$lt"/*) continue ;; esac
@@ -589,6 +592,7 @@ send)
       h="; to forward a message, copy its text into a new file first"
     w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
     [ "$SF" != - ] || w="a path whose links can't be followed to the end"
+    case $SF in ("!"*) w="unchecked: ${SF#!} holds a link whose name has a line break (rename it)" ;; esac
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
   fi
   # stdin itself is read as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
