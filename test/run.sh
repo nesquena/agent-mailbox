@@ -360,6 +360,24 @@ case " $ADAPTERS " in *" git "*)
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
 
+  echo "== git: the mailbox branch is matched by its exact name"
+  # ls-remote matches a pattern against the end of ref names: a store whose only ref is x/refs/heads/main has no main
+  T="$W/nested"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email s@s && git config user.name s &&
+    echo other > other.txt && git add other.txt && git commit -qm other && git push -q origin HEAD:refs/heads/x/refs/heads/main)
+  as nb1 setup --store "$T/store.git" --name nb1 >/dev/null
+  expect "init on a store with only a ref ending in refs/heads/main" 0 initialized as nb1 init
+  expect "the mailbox is on main itself" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only refs/heads/x/refs/heads/main | grep store.md)" ] &&
+    ok "and the other ref is left alone" || no "init wrote to the ref that only ends in main"
+  as nb1 register --kind t --about t --no-key >/dev/null
+  # the poll token is that branch's tip alone, not every ref ending in its name
+  C=$(ls -d "$W/home-nb1/.local/state/agent-mailbox/checkouts/"*-nb1)
+  tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
+  [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
+    no "the poll token isn't the exact branch's tip" "$tok"
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
+
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
