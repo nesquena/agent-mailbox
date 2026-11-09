@@ -25,9 +25,9 @@ to sign and verify mail; and `jq` for the Claude Code plugin's Stop guard, which
   `adapters/README.md` sets out the contract for writing another.
 - **The agent skill** (`skills/agent-mailbox/SKILL.md`): how an agent joins, reads, replies, holds and releases, and
   conducts itself, including first contact, standing roles, sensitive requests and rerouting to a backup.
-- **The Claude Code plugin** (Claude Code 2.1.69 or later): once you've run `watch` in a session, a Stop hook
-  (`hooks/claude-rewake.sh`, `asyncRewake`) starts a watcher at every turn end and wakes the session when new mail
-  arrives, on one store or several, in a terminal session, Claude Code on the web, or the Claude desktop app on macOS.
+- **The Claude Code plugin:** once you've run `watch` in a session, a Stop hook (`hooks/claude-rewake.sh`,
+  `asyncRewake`) starts a watcher at every turn end and wakes the session when new mail arrives (Claude Code 2.1.69 or
+  later), on one store or several, in a terminal session, Claude Code on the web, or the Claude desktop app on macOS.
   Anywhere it can't tell it runs in the background, the Stop guard (`hooks/claude-watch-guard.sh`) asks the session to
   re-arm the watcher instead.
 - **Docs:** `README.md`, `JOIN.md` (joining, step by step), `docs/security.md` (what a signature proves, and what the
@@ -52,7 +52,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - A strict store's `send` refuses before changing anything when your record names no key or another one; a signature
   that doesn't verify against your record is never published; a message's `.sig` is in place before the message
   appears (#40).
-- `register --key` checks that the `.pub` is the public half of the private key beside it (#40).
+- `register --key` checks that the `.pub` is the public half of the private key beside it, or, for a key with a
+  passphrase, that it can sign as that key (#40).
 - `read` names the signer from the signed header (`[verified: from <name>]`), says when the file name doesn't name
   that sender, and verifies the copy it shows (#84).
 - A message header holds only plain `key: value` lines, each key once; any other header reads `bad` (#84).
@@ -63,7 +64,7 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 
 - With the git adapter, `holds` reads every version of every file ever in your inbox, renamed, rewritten or merged
   away included (the dir adapter keeps no history: a consumed record no longer counts). It reads only mail that may
-  carry a record, so it's fast on long histories: 0.14-0.23 s on a 600-message mailbox (#12).
+  carry a record, so it's fast on long histories: about a quarter of a second on a 600-message mailbox (#12).
 - A store seen strict stays strict until `trust --relax`; a hold whose sender's key changed, or went missing after you
   pinned it, still holds; after `trust`, mail signed with the old key, holds included, stops counting (#23).
 - `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
@@ -107,7 +108,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   file-system monitor are off for it; only the mailbox branch is fetched; and a store that can't be reached is an
   error for every command (#27).
 - A store named by a URL, `host:path` or an absolute path is cloned from the agent's own state folder, so nothing in
-  the folder a command runs from stands in for it (#27); git's own credential prompts are off (#64).
+  the folder a command runs from stands in for it (#27); a credential git would prompt for fails at once, though ssh's
+  own prompts still wait (#64).
 - The mailbox branch is matched by its exact name (#65), and a branch name git refuses is refused (#19).
 - A commit an earlier command couldn't push is published by the next command under the same name, a first `init`
   included (#67); a command that can't publish such a commit says it wrote nothing of its own (#102); and a clone
@@ -133,20 +135,23 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 ### Notes for anyone who ran main before 0.1.0
 
 - **Update every copy of the CLI you run**, and the plugin with it: a CLI from before #87 doesn't wait its turn in a
-  clone; and once a newer CLI has run `watch` in a session, a `watch` or retire by one from before #58 no longer
-  changes which name, store and config the hook watches. The plugin's manifest pins no version, so refreshing the
-  marketplace and updating the plugin brings each change in (#52).
+  clone; and once the plugin's hook or a newer CLI has run `watch` in a session, a `watch` or retire by one from
+  before #58 no longer changes which name, store and config the hook watches. The plugin's manifest pins no version,
+  so refreshing the marketplace and updating the plugin brings each change in (#52).
 - **A command that exited 4 before you updated** (each name now has a clone of its own): if you haven't updated yet,
   run any command that reads the store once first, such as `agents`, so its commit is published. If you already have,
-  with one config and `--as`, run a command under no name, from a copy of the config without its `name =` line
-  (`agent-mailbox --config <copy> agents`), which publishes it from the clone all names shared; otherwise send the
-  message again (#54).
+  run a command under no name, from a copy of the config without its `name =` line and with no name from the
+  environment or a session:
+  `env -u AGENT_MAILBOX_NAME -u AGENT_MAILBOX_SESSION -u CLAUDE_CODE_SESSION_ID agent-mailbox --config <copy> agents`.
+  It prints "publishing 1 commit(s) left from an earlier command" when it has published it from the clone all names
+  shared. Don't send the message again instead: the stranded commit would still be there, and a later command under no
+  name would publish it as a duplicate (#54).
 - **A git mailbox on a branch named `HEAD` or starting with `-`** is refused. Copy it to a new branch and change each
   agent's `branch =` line:
   `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`. Pins
   are kept per branch, so on the new one each sender's key is trusted afresh, and a store seen strict is learned
-  again. The dir adapter doesn't use the branch: set `branch = main` there; its pinned keys are trusted afresh too
-  (#19).
+  again. The dir adapter doesn't use the branch: set `branch = main` there; its pinned keys, and whether it was seen
+  strict, are learned afresh too (#19).
 - **A git checkout that took the store's default branch** (from before the mailbox branch existed) stays so until you
   delete it, under `checkouts/` in the state folder `whoami` shows. A relative store path with a colon and no slash
   before it needs a leading `./` (#27).
@@ -155,8 +160,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   your inbox can wake you once more, and one new message can wake you twice (#58).
 - **Behaviour that changed:** `holds` stops with an error when it can't read the store (#23); with no mail, `list` and
   `read` under an unregistered name exit 1 (#76); retiring with mail waiting needs `--force` (#73); a header key that
-  isn't plain makes a message read `bad` (#84); git's own credential prompts are off, so a credential the machine
-  doesn't have fails at once (#64); a key with a passphrase and no `.pub` beside it makes a strict store refuse to
-  send, and an open one send unsigned (#40); and signing reads the message on stdin, so with no terminal a key with a
-  passphrase needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or later; on 8.1 to
-  8.3, askpass with no terminal also needs `DISPLAY`) (#40).
+  isn't plain makes a message read `bad` (#84); a credential git would prompt for fails at once, though ssh's own
+  prompts still wait (#64); a key with a passphrase and no `.pub` beside it makes a strict store refuse to send, and
+  an open one send unsigned (#40); and signing reads the message on stdin, so with no terminal a key with a passphrase
+  needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or later; on 8.1 to 8.3, askpass
+  with no terminal also needs `DISPLAY`) (#40).
