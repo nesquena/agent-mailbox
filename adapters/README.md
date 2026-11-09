@@ -22,7 +22,7 @@ defines:
 |---|---|
 | `ad_open` | Set `AD_DIR` to a local directory whose `$ROOT/` subtree mirrors the store, creating it if needed. Cheap when it already exists. An adapter whose `AD_DIR` one command at a time must work in (a clone) takes a lock here, held until the command exits, so commands under one name take turns. |
 | `ad_unlock` | Release that lock early (`watch` does, after its first sync, since it then only peeks and polls). A no-op for an adapter without one. |
-| `ad_sync` | Bring `AD_DIR` up to date with the store. Publish anything an earlier `ad_commit` left unpublished. |
+| `ad_sync` | Bring `AD_DIR` up to date with the store. Publish anything an earlier `ad_commit` left unpublished, and when it did, an adapter that can tell sets `AD_PUBLISHED=1`. |
 | `ad_commit <message> <path>...` | Publish exactly these paths, relative to `AD_DIR`, as one atomic change: files that exist are added or updated, files that don't are removed. On a conflict with other writers, retry. Exit 4 when the change is saved locally but couldn't be published, so the next command retries it. When the paths came out as they were, publish nothing, and an adapter that can tell sets `AD_UNCHANGED=1`. |
 | `ad_poll` | Print a short token that changes whenever the store changes. Called every watch interval, so it must be cheap (one small round trip). |
 | `ad_peek <dir>` | List the files under `<dir>` in the store's latest state, one path per line, without changing `AD_DIR`. |

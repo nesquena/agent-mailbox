@@ -129,6 +129,7 @@ ad_pull() {
       return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
+  post=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH")
   # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
   rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
   taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
@@ -151,8 +152,10 @@ ad_pull() {
       lost=""; [ "${un:-0}" = 0 ] || lost=" (its $un unpublished commit(s) go with it: send again what they held)"
       printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s%s and run this again\n" "$AD_DIR" "$lost"
       # (the fetch moved the tracking ref to the store's new tip: it goes back to where it was, so a command run again
-      # counts from the same point, not from a tip this clone shares nothing with)
-      if [ -n "$pre" ]; then ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre"; else ad_git update-ref -d "refs/remotes/origin/$BRANCH"; fi
+      # counts from the same point, not from a tip this clone shares nothing with; only while it still holds what this
+      # fetch set, so a later fetch's value is never overwritten with an older one)
+      if [ -n "$pre" ]; then ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre" "$post" 2>/dev/null
+      else ad_git update-ref -d "refs/remotes/origin/$BRANCH" "$post" 2>/dev/null; fi
       return 3
     fi
   fi
@@ -211,6 +214,13 @@ ad_started() {
   fi
   LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
 }
+# ad_same_start <one> <other>: two ad_started values name the same start. When both are /proc's ticks and one has no
+# boot id (its side couldn't read it, in a sandbox that hides /proc/sys, say), the ticks alone decide
+ad_same_start() {
+  [ "$1" = "$2" ] && return 0
+  case "${1%% *}" in (''|*[!0-9]*) return 1 ;; esac; case "${2%% *}" in (''|*[!0-9]*) return 1 ;; esac
+  { [ "${1#* }" = "$1" ] || [ "${2#* }" = "$2" ]; } && [ "${1%% *}" = "${2%% *}" ]
+}
 AD_LOCK="" AD_LOCKED=""
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
@@ -230,7 +240,7 @@ ad_lock() {
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
     case "$hp$he" in
       (''|*[!0-9]*) [ -z "$(find "$lk" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
-      (*) [ "$hh" != "$host" ] || { kill -0 "$hp" 2>/dev/null && [ "$(ad_started "$hp")" = "$hs" ]; } || stale=1 ;;
+      (*) [ "$hh" != "$host" ] || { kill -0 "$hp" 2>/dev/null && ad_same_start "$(ad_started "$hp")" "$hs"; } || stale=1 ;;
     esac
     if [ -n "$stale" ]; then
       # (a guard just released by another waiter is tried once more)
@@ -280,12 +290,12 @@ ad_sync() {
     ad_git rev-parse -q --verify HEAD >/dev/null || return 0
     warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
-  AD_LEFTOVER=1; ad_push; AD_LEFTOVER=
+  AD_LEFTOVER=1; ad_push; AD_LEFTOVER= AD_PUBLISHED=1
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
 ad_commit() {
-  msg=$1; shift; keep=""
+  msg=$1; shift; keep=""; AD_UNCHANGED=""
   for p in "$@"; do
     if [ -e "$AD_DIR/$p" ] || ad_git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then keep="$keep $p"; fi
   done
@@ -295,7 +305,7 @@ ad_commit() {
   # nothing staged (the files came out as they were: an ed25519 signature of the same bytes is the same bytes) is
   # nothing to publish, not a failure; AD_UNCHANGED tells the caller
   # shellcheck disable=SC2086
-  AD_UNCHANGED=""; if ad_git diff --cached --quiet -- $keep; then AD_UNCHANGED=1; return 0; fi
+  if ad_git diff --cached --quiet -- $keep; then AD_UNCHANGED=1; return 0; fi
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
   ad_push

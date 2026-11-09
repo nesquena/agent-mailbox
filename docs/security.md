@@ -10,20 +10,21 @@ A `verified` message was signed by whoever holds the private key that the sender
 time this reader first pinned it. Concretely:
 - **Integrity:** the file's bytes, header and body, are exactly what was signed. Editing a delivered message
   turns it `bad`.
-- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read`
-  names the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says
-  when it isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`.
-  `holds` reads a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one that
-  spells `hold:` or `release:`, `from:` or `sent:` any other way isn't read as a record, and one with no plain `to:`
+- **Sender:** a message signed by any other key reads `bad`, so one agent can't write mail as another. `read` names
+  the signer, `[verified: from <name>]`, from the signed header; the file name isn't signed, and `read` says when it
+  isn't `<stamp>-<from>-<topic>.md`. A message whose header isn't plain `key: value` lines reads `bad`. `holds` reads
+  a hold or release by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one with no plain
+  `hold:` or `release:` line, or no plain `from:` or `sent:` line, isn't read as a record, and one with no plain `to:`
   reads `bad`. A record whose header holds other lines that aren't plain, but whose signature checks out (or whose
   sender's key changed, or vanished after this reader pinned it), blocks that item (`PROTOCOL.md` section 5). A `.sig`
   that's a link reads `unsigned` with the dir adapter, and `bad` with git, whose clone keeps links as plain files.
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
-  key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
-  the reader runs `trust` after checking the new key's fingerprint (in `agents`, or what `trust` prints) with the
-  sender's human out of band. An agent's `update` never pins its own name to a key it doesn't
-  hold, and, where the agent holds its key, refuses to republish a record that names a different key.
+  key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until the
+  reader runs `trust`, after comparing the new key's fingerprint in `agents` with the sender's human out of band;
+  `trust` then prints the fingerprint it pinned, to confirm it's the one compared. An agent's `update` never pins its
+  own name to a key it doesn't hold, and, where the agent holds its key, refuses to republish a record that names a
+  different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
 
@@ -78,8 +79,8 @@ time this reader first pinned it. Concretely:
   body is in, and so change the file between `send`'s check and its read. For files inside a protected folder, or
   under a folder a link leads to, it follows symlinks, not hard links (or a hard link to one) or bind mounts; on macOS
   and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path, where only the private-key
-  check applies; and a hard link to a protected file, deleted and then fed on stdin, isn't caught. It catches
-  mistakes, not deliberate evasion.
+  check applies; and a hard link to the file a link in `~/.ssh` or the config folder leads to, deleted and then fed on
+  stdin, isn't caught (the config file and key still are). It catches mistakes, not deliberate evasion.
 - **Keys in a synced folder:** the CLI makes keys in its config folder (`agent-mailbox/keys/` under
   `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use), as do the per-store keys above. If that folder
   is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it does:
@@ -108,15 +109,16 @@ time this reader first pinned it. Concretely:
   makes commands fail, for every agent whose system refuses the path, until the store's branch no longer holds it:
   "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
   doesn't. Signatures don't help: pushing needs no key. To recover, someone with push access removes the entry in a
-  new commit on top of the branch, from a bare clone of the store, without checking it out. Check what the commit
-  removes before pushing it: only the files git refuses, and none of the mailbox's own files (messages, registry
-  records, `store.md`). Never paste the entry's name into a command: whoever pushed it chose it. If you're unsure how to
-  do this safely, ask in an issue, and leave the branch as it is until then. If the push is refused because the branch
-  has moved since the clone (agents it doesn't affect go on sending), fetch it (`git fetch origin <branch>:<branch>`; a
-  bare clone has no fetch refspec) and start again.
-  Don't move the branch back instead: agents whose systems took the commit would publish it again. Once the branch no
-  longer holds it, every agent's next command works; if an agent's commands still fail, remove its clone
-  (`checkouts/<id>-<name>` in its state folder). Give push access only to agents and people you'd trust with that.
+  new commit on top of the branch, from a bare clone of the store, without checking it out. Check what the commit does
+  before pushing it: it only removes files, only the ones git refuses, and none of the mailbox's own (messages,
+  registry records, `store.md`). Never put the entry's name into a command, typed or pasted: whoever pushed it chose
+  it. If you're unsure how to do this safely, ask in an issue, and leave the branch as it is until then. If the push
+  is refused because the branch has moved since the clone (agents it doesn't affect go on sending), fetch it
+  (`git fetch origin <branch>:<branch>`; a bare clone has no fetch refspec) and start again. Don't move the branch
+  back instead: agents whose systems took the commit would publish it again. Once the branch no longer holds it, every
+  agent's next command works; if an agent's commands still fail, remove its clone (`checkouts/<id>-<name>` in its
+  state folder): anything it hadn't published goes with it, so check `sent` and send again what's missing. Give push
+  access only to agents and people you'd trust with that.
 - **The store's git settings don't apply.** With the git adapter, a `.gitattributes` or `.lfsconfig` committed to
   the store can't change how the CLI's own clone checks out or merges files (line endings, filters such as Git LFS,
   merge drivers), and that clone never recurses into submodules or runs git hooks, so a store writer can't alter mail

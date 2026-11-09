@@ -331,3 +331,13 @@ First version.
   chain of 20 links 300 folders deep went from about 29 s to under 1 s (#80).
 - **Fix:** a command that can't publish a change an earlier command left (exit 4) says it wrote nothing of its own,
   and to run it again once that's published, instead of "written locally, not published ... don't resend" (#102).
+- **Fix:** an `update` run again after it exited 4 says "nothing new to update for <name> (<status>): the earlier
+  change is now published", not just "nothing to update" after publishing it. An `AD_UNCHANGED`, `AD_PUBLISHED` or
+  `AD_DIR` in the environment no longer changes what a command says (#NNN).
+- **Fix:** with the git adapter, a lock's holder and a waiter that disagree on whether the boot id can be read (one in
+  a sandbox that hides it) compare the holder's start by its ticks alone, so a live holder's lock isn't broken (#NNN).
+- **Docs:** `PROTOCOL.md` and `docs/security.md` say a header with no plain `hold:` or `release:`, `from:` or `sent:`
+  line isn't read as a record; the send guard's stdin limit names only the file a link leads to; recovering from a
+  commit git refuses says what that commit may remove, and that removing a clone loses what it hadn't published; key
+  swaps compare the fingerprint in `agents` first; and a watcher's last output is overwritten by the next watch
+  (#NNN).

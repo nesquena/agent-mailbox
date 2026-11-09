@@ -57,8 +57,8 @@ mail, the hook exits 2, which wakes the session with a count of the new messages
 and the `read` command. Its notices never repeat the store's or its host's text (file names and errors included):
 mail is read by `read`, and an error by the commands a notice names. It also:
 - keeps a list of the mail it already woke the session for, passing it as `--except`;
-- reports an error once, naming the commands that show why (`agents`, or the watcher's last output, a local file),
-  then retries quietly;
+- reports an error once, naming the commands that show why (`agents`, or the watcher's last output, a local file the
+  next watch overwrites when it starts, so read it while the session is woken), then retries quietly;
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
 - runs only one instance per session;
 - acts only where it can tell that Claude Code runs it in the background (a session in a terminal, Claude Code on
