@@ -149,6 +149,9 @@ ad_pull() {
       if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..HEAD"); else un=$(ad_git rev-list --count HEAD); fi
       lost=""; [ "${un:-0}" = 0 ] || lost=" (its $un unpublished commit(s) go with it: send again what they held)"
       printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s%s and run this again\n" "$AD_DIR" "$lost"
+      # (the fetch moved the tracking ref to the store's new tip: it goes back to where it was, so a command run again
+      # counts from the same point, not from a tip this clone shares nothing with)
+      if [ -n "$pre" ]; then ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre"; else ad_git update-ref -d "refs/remotes/origin/$BRANCH"; fi
       return 3
     fi
   fi

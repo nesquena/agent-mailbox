@@ -493,9 +493,22 @@ case " $ADAPTERS " in *" git "*)
   # told the branch is gone)
   git --git-dir="$T/store.git" update-ref -d refs/heads/main; as rs3 init --title fresh >/dev/null 2>&1
   expect "a clone that saw a store's old branch fails, naming the clone to remove" 1 "history doesn't match the store's" as rs1 agents
-  expect "and fails again on its next command" 1 "history doesn't match the store's" as rs1 agents
+  # (all it held was published, so nothing is said to go with it, this time or the next)
+  expect "and fails again on its next command, the same way" 1 "history doesn't match the store's.*remove .*-rs1 and run this again" as rs1 agents
   [ "$(git --git-dir="$T/store.git" log --format=%s main | tr '\n' ' ')" = "mailbox: init " ] &&
     ok "and the new mailbox holds only its own init" || no "a stale clone's history reached the new mailbox" "$(git --git-dir="$T/store.git" log --format=%s main)"
+  # a push that finds the store reset and initialized again, after this clone's commit was made: the send fails,
+  # naming the one commit that goes with the clone
+  T="$W/pushreset"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in pz1 pz2 pz3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as pz1 init >/dev/null; for a in pz1 pz2; do as $a register --kind t --about t --no-key >/dev/null; done; as pz1 agents >/dev/null 2>&1
+  cp "$W/initrace2/bin/git" "$T/bin/git"
+  expect "a send whose push finds the store re-created fails, naming its one unpublished commit" 1 \
+    "history doesn't match the store's.*remove .*-pz1 \(its 1 unpublished commit\(s\) go with it" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
+      RACE_CMD="git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-pz3' '$SH' '$CLI' init --title fresh" \
+      HOME="$W/home-pz1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+      "$SH" "$CLI" send pz2 t "$W/initreset/msg"
   # mailboxes in two folders of one branch: an init that loses the race to one in another folder, or is left
   # unpublished while another folder's init lands, is published beside it, as before
   T="$W/initroots"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -530,7 +543,8 @@ case " $ADAPTERS " in *" git "*)
   # the race lost on a branch that already exists (a repository made with a README): init says so, and the loser's
   # next command works
   T="$W/initrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  git init -q "$T/seed" && (cd "$T/seed" && echo hi > README && git add README && git commit -qm readme && git push -q "$T/store.git" HEAD:refs/heads/main)
+  git init -q "$T/seed" && (cd "$T/seed" && echo hi > README && git add README && git -c user.name=s -c user.email=s@s commit -qm readme && git push -q "$T/store.git" HEAD:refs/heads/main)
+  expect "(the store has its branch before the race)" 0 - git --git-dir="$T/store.git" rev-parse -q --verify refs/heads/main
   for a in ir5 ir6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   printf '%s\n' '#!/bin/sh' 'case " $* " in (*" push "*) [ -e "$RACE_DONE" ] || { : > "$RACE_DONE"; sh -c "$RACE_CMD" >/dev/null 2>&1; } ;; esac' \
     'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
