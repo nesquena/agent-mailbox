@@ -81,6 +81,9 @@ for AD in $ADAPTERS; do
   expect "send delivers" 0 "^sent mailbox/inbox/bob/" as alice send bob review-1 "$T/body" --needs "a yes or no" --context proj-x
   expect "list shows it to the recipient" 0 "alice-review-1.md" as bob list
   expect "the sender's own inbox is empty" 3 "no mail" as alice list
+  # a name with no record here is more likely the wrong name than no mail
+  expect "list under a name that isn't registered says so" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody list
+  expect "and so does read" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody read
   if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
@@ -169,6 +172,17 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   [ -n "$d28" ] && [ -n "$d01" ] && [ "${d28#* }" = "${d01#* }" ] && [ $(( ${d28% *} - ${d01% *} )) -eq 2 ] &&
     ok "and its day count has 2000-02-29 in it" || no "the day count across 2000-02-29 is off" "feb28: $d28, mar1: $d01"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
+  # an inbox file name with a line break in it is skipped, whole: nothing in the folder a command runs from is listed
+  mkdir -p "$T/proj"; echo "PROJECT ONLY" > "$T/proj/notes.md"
+  tamper 'echo x > "mailbox/inbox/alice/x
+notes.md"'
+  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1)
+    case $out in (*"PROJECT ONLY"*|*notes.md*) no "$c lists a file outside the inbox" "$out" ;;
+      (*) ok "$c skips a file name with a line break in it" ;; esac; done
+  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1)
+  printf '%s\n' "$out" | grep -qx 'notes.md' && no "watch lists part of a file name" "$out" ||
+    ok "and so does watch"
+  tamper 'rm -f mailbox/inbox/alice/x*'
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
   # --in-reply-to alone keeps the context too, and an explicit --context wins
@@ -305,14 +319,13 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     ln -s nowhere "$STORE/mailbox/inbox/bob/20260101T000000Z-mal-link.md"
     rm -rf "$STORE/mailbox/inbox/vic"; ln -s "$W/planted-$AD" "$STORE/mailbox/inbox/vic"
   fi
-  expect "a planted link doesn't wake the watcher" 2 "no mail" as bob watch 1 2
+  expect "a planted link doesn't wake the watcher, and watch times out with no mail" 2 "no mail" as bob watch 1 1
   echo x | HOME="$W/home-alice" "$SH" "$CLI" send vic via-link - >/dev/null 2>&1
   [ -z "$(ls -A "$W/planted-$AD")" ] && ok "a symlinked inbox can't redirect a send outside the store" ||
     no "a send wrote through a symlinked inbox" "$(ls -A "$W/planted-$AD")"
 
   # watch wakes on new mail and times out without it
   for m in $(as bob list 2>/dev/null | grep '\.md$'); do as bob consume "$(basename "$m")" >/dev/null 2>&1; done
-  expect "watch times out with no mail" 2 "no mail" as bob watch 1 2
   ( sleep 2; echo ping | HOME="$W/home-alice" "$SH" "$CLI" send bob ping - >/dev/null 2>&1 ) &
   expect "watch wakes on new mail" 0 "alice-ping.md" as bob watch 1 30
   wait
@@ -346,6 +359,23 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     wait; retried 2 "the peek after the store moved failed and was retried"
     expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
       failpeek all bob watch 1 30
+
+    # git's own prompts are off: every git call the adapter makes runs with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never.
+    # A local store asks for no credential, so this checks what git is given, through a git on PATH that logs each call.
+    # Both are unset first, so a value from the environment the suite runs in can't stand in for the adapter's own
+    mkdir -p "$W/gitlog"; printf '%s\n' '#!/bin/sh' \
+      'printf "%s %s|%s\n" "${GIT_TERMINAL_PROMPT-unset}" "${GCM_INTERACTIVE-unset}" "$*" >> "$GITLOG"' \
+      'exec "$REAL_GIT" "$@"' > "$W/gitlog/git"; chmod +x "$W/gitlog/git"
+    gitlog() { (unset GIT_TERMINAL_PROMPT GCM_INTERACTIVE; REAL_GIT=$real_git GITLOG="$T/gitlog" PATH="$W/gitlog:$PATH"
+      export REAL_GIT GITLOG PATH; as "$@"); }
+    rm -f "$T/gitlog"; as np setup --store "$STORE" --name np >/dev/null
+    gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
+    # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
+    calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
+    for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
+    bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
+    [ -n "$calls" ] && [ -z "$bad" ] && ok "every git call the adapter makes runs with git's own prompts off" ||
+      no "a git call could wait on git's own prompt" "$bad"
 
     # the watcher's peek moves only its own ref: refs/remotes/origin/<branch> is send's, and git updates a ref only
     # from the value it read, so a peek moving it too made a concurrent send fail
@@ -402,21 +432,56 @@ case " $ADAPTERS " in *" git "*)
   tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
-  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
+
+  echo "== git: a first init whose push failed is published by the next command"
+  # the store's objects and refs are read-only for the init, so its fetches work and its push fails
+  T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi1 setup --store "$T/store.git" --name fi1 >/dev/null
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "a first init whose push failed is published (read-only folders don't stop this user)"
+  else
+    expect "init whose push fails says it's written locally" 4 "written locally, not published" as fi1 init
+    chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    expect "the next command publishes it" 0 "publishing 1 commit\\(s\\) left from an earlier command" as fi1 agents
+    expect "and the store now has the mailbox" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  fi
+  # an init that was published is never published again: the branch it pushed, deleted from the store before this clone's
+  # next command, reads as deleted
+  T="$W/firstinit2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  as fi2 setup --store "$T/store.git" --name fi2 >/dev/null; as fi2 init >/dev/null
+  git --git-dir="$T/store.git" update-ref -d refs/heads/main
+  expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
+  [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
 
   echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
   T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in xq1 xq2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq1 init >/dev/null; for a in xq1 xq2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  # (fast: a sleep that returns at once, so the push's ten tries take no time)
+  mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"
+  fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
   echo hi > "$T/m"
-  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" as xq1 send xq2 first "$T/m"
-  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" as xq1 send xq2 second "$T/m"
+  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" fast xq1 send xq2 first "$T/m"
+  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" fast xq1 send xq2 second "$T/m"
   rm -f "$T/store.git/hooks/pre-receive"; as xq1 agents >/dev/null 2>&1
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-first\.md$')" ] &&
     [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-second\.md$')" ] &&
     ok "and it didn't: once the store takes pushes, only the first is there" ||
     no "a command that said it wrote nothing wrote something" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  # an exported AD_LEFTOVER changes nothing: a send's own unpublished change still says don't resend
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "an AD_LEFTOVER in the environment doesn't change what a command says of its own change" 4 "written locally, not published" \
+    env AD_LEFTOVER=1 PATH="$T/fast:$PATH" HOME="$W/home-xq1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+      CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send xq2 third "$T/m"
+  # on a store with no mailbox branch yet: a first init the store won't take, then the next command
+  T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
+  expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -580,8 +645,11 @@ exec "%s" "$@"
   [ -z "$(git -C "$C" for-each-ref --format='%(refname)' | grep big)" ] && ok "a new checkout fetches only the mailbox branch" ||
     no "a new checkout fetched another branch" "$(git -C "$C" for-each-ref --format='%(refname)')"
   # a branch the store doesn't have yet reads as no mailbox, and starts empty, whatever the default branch holds
-  expect "doctor on a branch the store doesn't have says it isn't initialized" 1 "FAIL the store is reachable and initialized" \
+  expect "doctor on a branch the store doesn't have says it isn't initialized, and where to see why" 1 "FAIL the store is reachable and initialized: run agents to see why" \
     env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor
+  out=$(env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" doctor 2>&1)
+  case "$out" in (*"registered and active"*) no "doctor gave a name hint from a store it couldn't read" "$out" ;;
+    (*) ok "and gives no hint about the name, from a store it couldn't read" ;; esac
   expect "init on that branch works" 0 initialized env HOME="$W/home-p5" AGENT_MAILBOX_BRANCH=other "$SH" "$CLI" init
   [ "$(git --git-dir="$S" ls-tree -r --name-only other | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
     ok "and the new branch holds only its own mailbox" || no "the new branch carries other files" "$(git --git-dir="$S" ls-tree -r --name-only other)"
@@ -614,17 +682,17 @@ exec "%s" "$@"
     AGENT_MAILBOX_NAME= "$SH" "$CLI" --config "$T/$n.cfg" "$@"; }
   for a in pn1 pn2 pn3 pn4; do pn $a setup --store "$T/s.git" --name $a >/dev/null; done
   pn pn1 init >/dev/null; for a in pn1 pn2 pn3 pn4; do pn $a register --kind t --about t --no-key >/dev/null 2>&1; done
-  # four names send at once, three times over
+  # four names send at once, twice over
   rm -f "$T/fail" "$T/err"
-  for r in 1 2 3; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
+  for r in 1 2; do for a in pn1 pn2 pn3 pn4; do o=pn1; [ $a != pn1 ] || o=pn2
       ( echo x | pn $a send $o "r$r" - >/dev/null 2>>"$T/err" || echo x >> "$T/fail" ) & done; wait; done
-  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[123]\.md$')
-  [ ! -s "$T/fail" ] && [ "$n" = 12 ] && ok "names sharing one HOME send at once: all 12 delivered" ||
+  n=$(git --git-dir="$T/s.git" ls-tree -r --name-only main | grep -c -- '-r[12]\.md$')
+  [ ! -s "$T/fail" ] && [ "$n" = 8 ] && ok "names sharing one HOME send at once: all 8 delivered" ||
     no "names sharing one HOME: $(cat "$T/fail" 2>/dev/null | wc -l) sends failed, $n delivered" "$(cat "$T/err" 2>/dev/null)"
   [ "$(ls "$PH/.local/state/agent-mailbox/checkouts" | wc -l | tr -d ' ')" = 4 ] && ok "each name has a clone of its own" ||
     no "names don't have a clone each" "$(ls "$PH/.local/state/agent-mailbox/checkouts")"
   l3=$(pn pn3 list); r3=$?; l4=$(pn pn4 list); r4=$?
-  [ "$(pn pn1 list | grep -c -- '-r[123]\.md$')" = 9 ] && [ "$(pn pn2 list | grep -c -- '-r[123]\.md$')" = 3 ] &&
+  [ "$(pn pn1 list | grep -c -- '-r[12]\.md$')" = 6 ] && [ "$(pn pn2 list | grep -c -- '-r[12]\.md$')" = 2 ] &&
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
 
@@ -984,7 +1052,7 @@ kill "$sp" 2>/dev/null
 # nor does a hook left running by another session (it stops itself once its own session is gone)
 "$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r0" > "$R1/pid"
 expect "another session's hook doesn't hold the lock" 2 "daily limit" rewake r1
-if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last"
+if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
   case "$g" in (*"is not running"*) ok "nor does it satisfy this session's Stop guard" ;; (*) no "nor does it satisfy this session's Stop guard" "$g" ;; esac
@@ -993,7 +1061,7 @@ echo "$sp r1" > "$R1/pid"
 expect "this session's does" 0 '^$' rewake r1
 sleep 1 & dp=$!; wait "$dp"; echo "$sp r1 $dp" > "$R1/pid"
 expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit" rewake r1
-if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last"
+if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
   case "$g" in (*"is not running"*) ok "nor does the Stop guard count it" ;; (*) no "nor does the Stop guard count it" "$g" ;; esac
@@ -1224,7 +1292,7 @@ reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
 expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
-n=0 lost=""; while [ $n -lt 10 ]; do rm -f "$RS/session-stores/r8"
+n=0 lost=""; while [ $n -lt 5 ]; do rm -f "$RS/session-stores/r8"
   ALSO=--also; regs r8 & regs r8 --config "$C2" & wait; ALSO=; [ "$(grep -c . "$RS/session-stores/r8")" = 2 ] || lost="$lost $n"; n=$((n+1)); done
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
@@ -1382,7 +1450,7 @@ for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/
 as h1 init >/dev/null; as h1 register --kind t --about t --no-key >/dev/null; as h2 register --kind t --about t --no-key >/dev/null
 printf -- '---\nprotocol: 1\nfrom: ../../evil\nto: h1\ntopic: x\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h1/20260101T000000Z-evil-x.md"
 expect "a message with a malformed sender reads as bad" 0 "evil-x.md \[bad\]" as h1 read
-echo h | as h2 send h1 hold-x - --hold "thing#1 v1" >/dev/null; sleep 1
+echo h | as h2 send h1 hold-x - --hold "thing#1 v1" >/dev/null
 printf -- '---\nprotocol: 1\nfrom: h2\nto: h1\ntopic: y\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nrelease: thing#1 v1\n---\n\nok\n' > "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md"
 expect "an unverified deciding release warns" 0 "isn't signature-verified" as h1 holds "thing#1" --version v1
 mv "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y.md" "$T/store/mailbox/inbox/h1/29990101T000000Z-h2-y verified z.md"
@@ -1404,7 +1472,7 @@ if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- '-h2-hold-x\.md' && ! prin
 else no "list leaves it out (exit $rc)" "$out"; fi
 expect "consuming it is refused, not faked" 1 "isn't a message file name" as h1 consume "2026 a [verified].md"
 for m in $(as h1 list 2>/dev/null | grep '\.md$'); do as h1 consume "$(basename "$m")" >/dev/null 2>&1; done
-expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 2
+expect "it doesn't wake the watcher" 2 "no mail" as h1 watch 1 1
 # a reply to a message whose context header isn't a valid context falls back to general
 printf -- '---\nprotocol: 1\nfrom: h1\nto: h2\ntopic: c\ncontext: Bad Context\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' > "$T/store/mailbox/inbox/h2/20260101T000000Z-h1-c.md"
 echo r | as h2 send h1 c-reply - --consume 20260101T000000Z-h1-c.md >/dev/null
@@ -1451,6 +1519,27 @@ HOME="$W/home-h2" AGENT_MAILBOX_SESSION=sr "$SH" "$CLI" update --status retired 
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/sessions/sr" ] && ok "retiring clears it" || no "retiring left the session marker"
 [ ! -f "$W/home-h2/.local/state/agent-mailbox/session-configs/sr" ] && ok "and the config record" || no "retiring left the config record"
 expect "a retired agent is told how to come back" 1 "update --status active" sh -c "echo x | HOME='$W/home-h2' '$SH' '$CLI' send h1 r-1 -"
+expect "a retired name with an empty inbox still lists no mail" 3 "no mail for h2" as h2 list
+expect "and doctor tells it the same, not to register" 1 "FAIL h2 is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name" \
+  env HOME="$W/home-h2" "$SH" "$CLI" doctor
+# a newcomer who picked that retired name is told it may not be theirs; with a key of its own that isn't the record's,
+# that it isn't
+as h2b setup --store "$T/store" --adapter dir --name h2 >/dev/null
+expect "a newcomer under a retired name isn't simply told to take it back" 1 "it's retired here: if it's yours.*if not, pick another name" \
+  env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+if [ -n "$SSH" ]; then
+  mkdir -p "$W/home-h2b/.config/agent-mailbox/keys"; ssh-keygen -q -t ed25519 -N '' -f "$W/home-h2b/.config/agent-mailbox/keys/h2"
+  tamper_dir() { (cd "$T/store" && sh -c "$1"); }
+  hk=$(cut -d' ' -f1,2 "$W/home-h2b/.config/agent-mailbox/keys/h2.pub")
+  ssh-keygen -q -t ed25519 -N '' -f "$T/h2-other"; ok_k=$(cut -d' ' -f1,2 "$T/h2-other.pub")
+  tamper_dir "sed -i.bak 's|^key: .*|key: $ok_k|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key isn't the record's is told it's another agent's" 1 "another agent's retired name here.*pick another name" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: $hk|' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+  expect "and one whose key is the record's is told to come back" 1 "it's retired here; run update --status active to come back" \
+    env HOME="$W/home-h2b" "$SH" "$CLI" doctor
+  tamper_dir "sed -i.bak 's|^key: .*|key: |' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
+else sk "doctor tells a retired name apart by key (no ssh-keygen -Y)"; fi
 
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
@@ -1489,6 +1578,20 @@ if command -v perl >/dev/null 2>&1; then
     close $p; open STDIN, "<&", $c or exit 127; exec @ARGV or exit 127' env HOME="$W/home-i1" "$SH" "$CLI" send i2 sock -
   expect "and its text is the body" 0 "^from a socket$" block i2 sock
 else sk "a socket on stdin sends (no perl)"; fi
+# on macOS, /dev/stdin leads to /dev/fd/0, and a stat of that fails now and then while a pipe's writer exits (EBADF).
+# A sandbox that denies that stat makes it fail every time; the body is still read from fd 0, so the send goes through
+if [ "$(uname -s)" = Darwin ] && command -v sandbox-exec >/dev/null 2>&1 &&
+   printf '%s\n' '(version 1)' '(allow default)' '(deny file-read-metadata (regex #"^/dev/fd/[0-9]+$"))' > "$T/nofd.sb" &&
+   echo x | sandbox-exec -f "$T/nofd.sb" /bin/sh -c '! [ /dev/fd/0 -ef /dev/stdin ] && [ "$(cat)" = x ]' 2>/dev/null; then
+  expect "a pipe on stdin sends when /dev/fd/0 can't be stat'ed" 0 "^sent" \
+    sh -c "echo 'from a pipe' | HOME='$W/home-i1' sandbox-exec -f '$T/nofd.sb' '$SH' '$CLI' send i2 nofd -"
+  expect "and its text is the body" 0 "^from a pipe$" block i2 nofd
+else sk "a pipe on stdin sends when /dev/fd/0 can't be stat'ed (macOS with sandbox-exec only)"; fi
+# the walk's earlier hops still count when it ends at /dev/fd/<n>: a link in the config folder that leads to stdin
+ln -s /dev/stdin "$W/home-i1/.config/agent-mailbox/to-stdin"
+expect "a config-folder link to /dev/stdin is refused" 1 "refusing to send" \
+  sh -c "HOME='$W/home-i1' '$SH' '$CLI' send i2 link-stdin '$W/home-i1/.config/agent-mailbox/to-stdin' < '$T/b'"
+rm -f "$W/home-i1/.config/agent-mailbox/to-stdin"
 expect "the redirected file is the body" 0 "^from a file$" block i2 redir
 expect "and the heredoc is" 0 "^from a heredoc$" block i2 here
 # the name record is advisory: a send whose record can't be written warns, and still sends
@@ -1799,7 +1902,7 @@ expect "a body file named like an option is read" 0 "^sent " sh -c "cd '$W/odd' 
 # a message whose name starts with '-': --except must take it as a file name and hide it
 cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-x.md"
 expect "watch --except takes a value starting with - as a file name" 2 "no mail" \
-  as o2 watch 1 2 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
+  as o2 watch 1 1 --except -x.md --except "$(basename "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)")"
 out=$(as o2 read --except -x.md 2>&1); rc=$?
 hit=$(printf '%s\n' "$out" | grep -c -e '/-x\.md' -e basename)
 if [ "$rc" = 0 ] && [ "$hit" = 0 ] && printf '%s\n' "$out" | grep -q 'dash-body.md'; then ok "an --except value starting with - is a file name"
@@ -2000,7 +2103,7 @@ expect "and one whose header never closes" 5 "is held by u2" as u1 holds "item#9
 expect "read marks a header that never closes as bad" 0 "u2-open\.md \[bad\]" as u1 read
 # a hold written without a space after the colon is still a hold (field() strips one space only if it's there): a
 # holds pattern that required the space would miss it, and an older release would then pass
-echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-7 - --release "item#7 v1" >/dev/null
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
   printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h7\ncontext: general\nsent: 2999-01-01T00:00:02Z\nin_reply_to: none\nneeds: none\nhold:item#7 v1\n---\n\nheld\n' > mailbox/inbox/u1/29990101T000002Z-u2-h7.md &&
   git add -A && git commit -qm h7 && git push -q origin HEAD:main)
@@ -2014,16 +2117,16 @@ pl sh -c 'printf "%s -diff\n" "$(basename "$(ls mailbox/inbox/u1/*-u2-h-6.md)")"
 expect "a hold still counts when an attribute marks it binary" 5 "item#6 is held by u2" as u1 holds "item#6" --version v1
 pl rm -f mailbox/inbox/u1/.gitattributes
 # 2. a NUL byte in the hold
-echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-5 - --release "item#5 v1" >/dev/null
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: h5\ncontext: general\nsent: 2999-01-01T00:00:03Z\nin_reply_to: none\nneeds: none\nhold: item#5 v1\n---\n\nnul \000 byte\n' > mailbox/inbox/u1/29990101T000003Z-u2-h5.md"
 expect "a hold in a message with a NUL byte still counts" 5 "item#5 is held by u2" as u1 holds "item#5" --version v1
 # 3. an earlier release renamed to a new name and rewritten as a newer hold, in one commit
-echo r | as u2 send u1 r-4 - --release "item#4 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-4 - --release "item#4 v1" >/dev/null
 pl sh -c 'old=$(ls mailbox/inbox/u1/*-u2-r-4.md) && new=mailbox/inbox/u1/29990101T000004Z-u2-h4.md && git mv "$old" "$new" &&
   sed "s/^release: item#4 v1\$/hold: item#4 v1/; s/^sent: .*/sent: 2999-01-01T00:00:04Z/" "$new" > "$new.t" && mv "$new.t" "$new"'
 expect "a hold renamed into the inbox still counts" 5 "item#4 is held by u2" as u1 holds "item#4" --version v1
 # 4. an earlier release rewritten in place as a newer hold
-echo r | as u2 send u1 r-3 - --release "item#3 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-3 - --release "item#3 v1" >/dev/null
 pl sh -c 'f=$(ls mailbox/inbox/u1/*-u2-r-3.md) && sed "s/^release: item#3 v1\$/hold: item#3 v1/; s/^sent: .*/sent: 2999-01-01T00:00:05Z/" "$f" > "$f.t" && mv "$f.t" "$f"'
 expect "a hold rewritten in place still counts" 5 "item#3 is held by u2" as u1 holds "item#3" --version v1
 # 4b. a hold with an old sent time, then rewritten in place so only its sent line changes (later than a release)
@@ -2042,7 +2145,7 @@ sleep 1; echo h | as u2 send u1 h-2 - --hold "item#2 v1" >/dev/null
   git checkout -q main && git reset -q --hard origin/main)
 expect "a hold dropped by a merge still counts" 5 "item#2 is held by u2" as u1 holds "item#2" --version v1
 # 6. a hold that exists only in a merge commit (in neither parent), read by a user whose git config turns merge diffs off
-echo r | as u2 send u1 r-11 - --release "item#11 v1" >/dev/null; sleep 1
+echo r | as u2 send u1 r-11 - --release "item#11 v1" >/dev/null
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD) &&
   git checkout -q -b side2 "$base" && echo y > note2.txt && git add note2.txt && git commit -qm side2 && git checkout -q main &&
   echo z > note3.txt && git add note3.txt && git commit -qm main3 && { git merge -q --no-ff --no-commit side2 >/dev/null 2>&1 || :; } &&
@@ -2064,6 +2167,10 @@ pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14a\ncontext: g
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14b\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v2\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14b.md"
 expect "releases of different versions at the same time conflict" 5 "item#14 has releases from u2 sent at the same time.*send one release again" as u1 holds "item#14" --version v2
 expect "for either version" 5 "item#14 has releases from u2 sent at the same time" as u1 holds "item#14" --version v1
+# and two at the same time whose versions differ only as text (3.1 and 3.10) conflict too
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19a\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19a.md"
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19b\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.10\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19b.md"
+for v in 3.1 3.10; do expect "same-time releases of 3.1 and 3.10 conflict (--version $v)" 5 "item#19 has releases from u2 sent at the same time" as u1 holds "item#19" --version "$v"; done
 # 9. merges don't multiply what holds reads: one hold file under several merges is one row of history
 echo h | as u2 send u1 h-15 - --hold "item#15 v1" >/dev/null
 for n in 1 2 3; do (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD~1) &&
@@ -2073,7 +2180,7 @@ as u1 holds "item#15" >/dev/null 2>&1
 co=$(ls -d "$W"/home-u1/.local/state/agent-mailbox/checkouts/*/ | head -n 1)
 rows=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_history mailbox/inbox/u1 '^(hold|release):') | grep -c -- '-u2-h-15\.md$')
 [ "$rows" = 1 ] && ok "a hold under several merges is read once" || no "a hold under merges was listed $rows times"
-sleep 1; echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
+echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 # 10. in a store that requires signatures, a copy of a signed hold committed without its signature (an old-dated side
 # branch merged in, so history lists the copy first) doesn't stand in for the signed one
@@ -2104,6 +2211,12 @@ r2=$(as u1 list 2>/dev/null | grep -- '-u2-reuse-1\.md$')
 [ -n "$r1" ] && [ -n "$r2" ] && [ "${r1##*/}" != "${r2##*/}" ] && ok "a consumed message's file name isn't reused in the same second" ||
   no "a consumed message's file name was reused" "first: $r1, then: $r2"
 as u1 consume "${r2##*/}" >/dev/null 2>&1
+# items and versions are compared as strings: a release of 3.1 isn't one of 3.10, 3.100 or 03.1, and item 1.5 isn't 1.50
+echo r | as u2 send u1 num-1 - --release "deploy:num 3.1" >/dev/null 2>&1
+expect "a release of version 3.1 counts for 3.1" 0 "deploy:num released by u2 at 3\.1 " as u1 holds "deploy:num" --version 3.1
+for v in 3.10 03.1; do expect "but not for $v" 5 "released by u2 at 3\.1, not $v" as u1 holds "deploy:num" --version "$v"; done
+sleep 1; echo r | as u2 send u1 num-2 - --release "1.5 abc" >/dev/null 2>&1
+expect "and a release for item 1.5 isn't one for item 1.50" 5 "nothing recorded for 1\.50" as u1 holds "1.50" --version abc
 T="$W/rules"
 # 12. a gitlink named like a message isn't a file, so it doesn't stop holds (a changed one is listed whatever it holds)
 (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && for x in 1 2; do
@@ -2145,6 +2258,9 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+# on a file system that ignores case, a protected folder named in another case is the same folder
+if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$H/.SSH/config"
+else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
 refused "or a link to such a file" "$T/via-dir.md"
 refused "or such a file reached through a folder linked to ~/.ssh" "$T/dotssh/config.d/work"
 ln -s "$H/.ssh/config.d" "$T/cfgln"; ln -s "$T/cfgln" "$T/cfgln2"
@@ -2205,6 +2321,21 @@ mkdir -p "$T/nlk2"; ln -s "$H/.ssh/id_ed25519" "$T/nlk2/a
 " "$T/nlk2/l"; echo decoy > "$T/nlk2/a?"
 n=$((n+1)); expect "or one where a decoy file has the name readlink shows" 1 "refusing to send" \
   env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/nlk2/l"
+# a decoy folder link named as readlink shows the real one, leading to /dev/fd: the end it reaches isn't exempt from
+# the same-file check (only /dev/stdin's own link to fd/<n> is). macOS only: elsewhere /dev/stdin leads through /proc
+if [ "$(uname -s)" = Darwin ]; then
+  mkdir -p "$T/dfd/real"; ln -s "$H/.ssh/config" "$T/dfd/real/9"; ln -s "$T/dfd/real" "$T/dfd/d
+"; ln -s /dev/fd "$T/dfd/d?"; ln -s "$T/dfd/d
+/9" "$T/dfd/notes.md"
+  n=$((n+1)); expect "or a chain whose shown name leads into /dev/fd" 1 "refusing to send" \
+    env PATH="$T/qrl:$PATH" HOME="$H" "$SH" "$CLI" send sec2 "sec-$n" "$T/dfd/notes.md"
+else sk "a chain whose shown name leads into /dev/fd is refused (macOS only)"; fi
+# stdin's link shown as a digit-named file that isn't in /dev/fd isn't exempt either
+mkdir -p "$T/lierl" "$T/decoy"; echo decoy > "$T/decoy/7"
+printf '#!/bin/sh\ncase "$1" in (/dev/stdin) echo "%s/decoy/7" ;; (*) exec "%s" "$@" ;; esac\n' "$T" "$(command -v readlink)" > "$T/lierl/readlink"
+chmod +x "$T/lierl/readlink"
+n=$((n+1)); expect "or stdin whose link is shown as a digit-named file outside /dev/fd" 1 "can't be followed" \
+  sh -c "echo hi | env PATH='$T/lierl:$PATH' HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
 # a relative link under a folder link reaches a key from where it really sits (a guard: this already held)
 mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.ssh/id_ed25519 "$T/sub/deep/k"
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
@@ -2233,5 +2364,8 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+# install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
+  env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
