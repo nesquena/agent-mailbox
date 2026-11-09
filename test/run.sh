@@ -1077,7 +1077,7 @@ rm -f "$R1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session, naming the command that shows why" 2 \
-  "can't go on \(exit 1\)\. See why: .* --as rw doctor, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
+  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
 # the same error again doesn't wake it: the hook keeps retrying, quietly, and wakes for mail once it can go on
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error again doesn't wake it" ||

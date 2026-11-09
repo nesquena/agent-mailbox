@@ -262,4 +262,4 @@ First version.
   passphrase and host-key prompts for an SSH store (#64).
 - **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
   count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
-  `doctor`, or the watcher's last output, a local file (#85).
+  `agents`, or the watcher's last output, a local file (#85).

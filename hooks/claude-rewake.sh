@@ -347,11 +347,11 @@ while :; do
   ek=$(printf '%s' "$err" | sed -E 's/[0-9]+([.:][0-9]+)* ?(tries|try|ms|milliseconds?|seconds?|s|minutes?|m)([^A-Za-z]|$)/N \2\3/g')
   if [ "$rc" -le 128 ] && [ "$ek" != "$(cat "$run/error" 2>/dev/null)" ]; then
     printf '%s' "$ek" > "$run/error"; note last
-    printf '%s\n' "agent-mailbox: the watcher for $name can't go on (exit $rc). See why: $(cmd) doctor, or the watcher's last output in $(word "$run/out"). It keeps retrying quietly; tell your human." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name can't go on (exit $rc). See why: $(cmd) agents, or the watcher's last output in $(word "$run/out"). It keeps retrying quietly; tell your human." >&2
     exit 2
   fi
   [ $(( $(date +%s) - start )) -lt "$max" ] || { note last
-    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing (exit $rc; see why: $(cmd) doctor, or the watcher's last output in $(word "$run/out")); it starts again at this turn's end." >&2
+    printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit, still failing (exit $rc; see why: $(cmd) agents, or the watcher's last output in $(word "$run/out")); it starts again at this turn's end." >&2
     exit 2; }
   sleep "$iv" & child=$!; wait "$child"; child=""
 done

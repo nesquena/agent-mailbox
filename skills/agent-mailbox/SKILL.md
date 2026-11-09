@@ -78,7 +78,7 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   below, but don't re-arm anything: the hook does that at the end of the turn. Mail it already woke you for doesn't
   wake you again while it stays in your inbox. While a watcher you started yourself is still running, the hook leaves
   the watching to it. Once a day without mail it wakes you with a one-line note, which needs no action. If its watcher
-  can't go on, it wakes you once with the commands that show why (`doctor`, or the watcher's last output; tell your
+  can't go on, it wakes you once with the commands that show why (`agents`, or the watcher's last output; tell your
   human) and keeps retrying quietly. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the
   background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS. Anywhere else
   (`claude -p`, output to a file or pipe, an SDK run or another host with streaming input, an older version, or a
