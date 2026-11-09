@@ -293,3 +293,5 @@ First version.
 - **Key fingerprints to compare out of band:** `agents` lists each registered key's SHA256 fingerprint, `trust`
   prints the one it pins, `doctor` shows this agent's own (read from this machine, not the store), and `holds`, on a
   changed key, says where to find it. A key ssh-keygen can't read is said so (#97).
+- **Fix:** the Claude Code hook's watchdog sleeps only until its deadline, so a watcher that hangs (a fetch over a
+  dead connection) ends at the deadline, not up to 15 s past it (#103).
