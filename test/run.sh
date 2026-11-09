@@ -84,29 +84,40 @@ for AD in $ADAPTERS; do
   if [ -n "$SSH" ]; then expect "read verifies the signature, naming the signer" 0 "alice-review-1\.md \[verified: from alice\]$" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
-  # a header holds only plain "key: value" lines, each key once, or the message reads bad; a key read reads as before
-  mkdir -p "$T/hd"; hh='---\nprotocol: 1\nfrom: alice\nto: bob\ntopic: t\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n'
-  printf -- "$hh"'from\342\200\213: carol\n---\n\nx\n' > "$T/hd/20200101T000001Z-alice-hdr1.md"
-  printf -- "$hh"'from: carol\n---\n\nx\n' > "$T/hd/20200101T000002Z-alice-hdr2.md"
-  printf -- "$hh"'--- \nbody\n---\n\nx\n' > "$T/hd/20200101T000003Z-alice-hdr3.md"
-  printf -- "$hh"'x_extra: 1\n---\n\nx\n' > "$T/hd/20200101T000004Z-alice-hdr4.md"
-  # and a message whose file name names another sender is pointed out, whatever its status
-  cp "$T/hd/20200101T000004Z-alice-hdr4.md" "$T/hd/20200101T000005Z-carol-hdr5.md"
+  # a header holds only plain "key: value" lines (a key of lowercase letters, digits, _ and -), each key once, or the
+  # message reads bad; a key the protocol doesn't name reads as before
+  mkdir -p "$T/hd"; rm -f "$T/hd/"*
+  # hm <file name> <topic> <extra header lines>: an unsigned message from alice to bob
+  hm() { printf -- '---\nprotocol: 1\nfrom: alice\nto: bob\ntopic: %s\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n%s---\n\nx\n' "$2" "$3" > "$T/hd/$1"; }
+  hm 20200101T000001Z-alice-hdr1.md hdr1 "$(printf 'from\342\200\213: carol')
+"; hm 20200101T000002Z-alice-hdr2.md hdr2 'from: carol
+'; hm 20200101T000003Z-alice-hdr3.md hdr3 '--- 
+body
+'; hm 20200101T000004Z-alice-hdr4.md hdr4 'X_extra: 1
+'; hm 20200101T000005Z-alice-hdr5.md hdr5 '  x_extra: 1
+'; hm 20200101T000006Z-alice-hdr6.md hdr6 'from : carol
+'
+  hm 20200101T000007Z-alice-hdr7.md hdr7 'x_extra: 1
+x-trace:abc
+'
+  # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
+  hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
-  for n in 1 2 3; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
+  for n in 1 2 3 4 5 6; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
-  printf '%s\n' "$out" | grep -q "alice-hdr4\.md \[unsigned\]$" && ok "a key the protocol doesn't name still reads as before" ||
-    no "a key the protocol doesn't name still reads as before" "$out"
-  printf '%s\n' "$out" | grep -q "carol-hdr5\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
-    ok "a file name naming another sender is pointed out" || no "a file name naming another sender is pointed out" "$out"
+  printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
+    no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
+  for f in 20200101T000008Z-carol-hdr8 20200101T000009Z-alice-ops-x 2020-alice-hdr0; do
+    printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
   if [ -n "$SSH" ]; then
-    tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000006Z-carol-copy.md &&
-      cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000006Z-carol-copy.md.sig"
+    tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
+      cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
     expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
       "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
   fi
-  tamper "rm -f mailbox/inbox/bob/20200101T00000*"
+  tamper "rm -f mailbox/inbox/bob/20200101T0000* mailbox/inbox/bob/2020-alice-hdr0.md"
   expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
   expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
   expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
@@ -1692,12 +1703,33 @@ echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k
 echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
 echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
 echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
+for x in f1 f2 f3 g; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
+echo h | as k3 send k1 hh - --hold "h#1 v1" >/dev/null
+# sg <sender> <file name> <topic> <hold or release line> [<extra header lines>]: a message to k1, signed with that
+# sender's own key, placed in the store as a writer could
+sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
+  "$1" "$3" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
+  ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-$1/.config/agent-mailbox/keys/$1" "$T/sg/$2" && wr cp "$T/sg/$2" "$T/sg/$2.sig" mailbox/inbox/k1/; }
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
 # someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
 ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap
 wr sh -c "sed 's|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|' mailbox/agents/k2.md > mailbox/agents/k2.t && mv mailbox/agents/k2.t mailbox/agents/k2.md"
 expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 .*changed" as k1 holds "a#1" --version v1
+# a signed hold whose header isn't plain still holds, its key changed or not; a release whose header isn't plain doesn't
+# count: either way the gate stays shut
+sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
+"
+expect "a hold whose header isn't plain, from a sender whose key was swapped, still holds" 5 "g#1 is held by k2 .*changed" as k1 holds "g#1" --version v1
+sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
+sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
+"
+sg k3 29990101T000100Z-k3-hf3.md hf3 "hold: f3#1 v1" "needs: none
+"
+for x in f1 f2 f3; do expect "a signed hold whose header isn't plain still holds over an older release ($x)" 5 "$x#1 is held by k3" as k1 holds "$x#1" --version v1; done
+sg k3 29990101T000100Z-k3-rh.md rh "release: h#1 v1" "needs: none
+"
+expect "a signed release whose header isn't plain doesn't open the gate" 5 "h#1 is held by k3" as k1 holds "h#1" --version v1
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1

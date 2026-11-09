@@ -105,9 +105,10 @@ release: <item> <version>      optional
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
 - **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
-- **Every header line is `<key>: <value>`:** a key of lowercase letters and `_`, then `:`, then a space and the value
-  (or nothing). No key appears twice. A message whose header holds any other line is malformed, and reads `bad`. A
-  key this section doesn't name is allowed, and ignored.
+- **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value.
+  No key appears twice. A message whose header holds any other line is malformed, and reads `bad`, except in `holds`:
+  a signed hold whose header isn't plain still holds, while such a release doesn't count. A key this section doesn't
+  name is allowed, and ignored.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
