@@ -271,3 +271,6 @@ First version.
   none (#76).
 - **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
   names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
+- **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
+  it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
+  was typed in (#78).
