@@ -86,8 +86,9 @@ hops() {
   while case "$rp" in (*"$NL"*) return 1 ;; esac; rd=$(phys "$(dirname "$rp")"); do
     printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; case "$rd" in (/proc|/proc/*) pr=1 ;; esac
     # the hop's folders, from its own up: up to the root, or, for a relative target, up to the folder of the link it
-    # came from, which is physical (no links) all the way up. hd is absolute and has no trailing /, so cutting its last
-    # part needs no dirname
+    # came from, which is physical (no links) all the way up. Its last part is cut without a dirname per folder; a
+    # path that isn't the plain absolute form (a//b, or relative when PWD is unset) only ends the walk sooner, at . or
+    # where cutting leaves it unchanged
     hd=$(dirname "$rp"); [ -z "$hs" ] || hd=/; hs=""
     while [ "$hd" != / ] && [ "$hd" != . ] && [ "$hd" != "$hk" ]; do
       # a folder that's a link: where it sits and everything it leads to
