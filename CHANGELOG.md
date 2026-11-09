@@ -232,8 +232,7 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
-  8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
-  (#61).
-- **Changed:** `list` and `read` under a name that has no record in the mailbox stop with "'<name>' isn't
-  registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong name,
-  such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or none.
+- **Changed:** with no mail, `list` and `read` under a name that has no record in the mailbox stop with "'<name>'
+  isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
+  name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
+  none (#76).
