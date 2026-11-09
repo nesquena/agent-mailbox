@@ -2,7 +2,8 @@
 # test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
 # gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
-# Run it with a specific shell to test that shell: `dash test/run.sh`, `bash test/run.sh`.
+# Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
+# `TEST_SHELL=bash bash test/run.sh`.
 set -u
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
@@ -131,10 +132,11 @@ for AD in $ADAPTERS; do
   pm 20200101T000014Z-alice-space.md alice bob "2020-01-01 00:00:00Z" none
   mkdir -p "$T/ps/x_y"; pm 20200101T000015Z-alice-badname.md alice x_y 2020-01-01T00:00:00Z none
   pm 20200101T000016Z-alice-1900.md alice bob 1900-02-29T00:00:00Z none
+  pm 20200101T000017Z-alice-y2000.md alice bob 2000-02-29T00:00:00Z none
   pm 20200101T000010Z-alice-long.md alice bob 2020-01-01T00:00:00Z "$(printf '%0300d' 0)"
   tamper "cp -R '$T/ps/.' mailbox/inbox/"
   # (the skewed one's age depends on how long this run took, up to its 30 s head start)
-  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /; s/(alice-skew\.md to bob age )[0-9]+[sm]$/\1Ns/')
+  out=$(as alice sent 2>&1 | sed -E 's/ age [0-9]{4,}d[0-9]+h / age old /; s/(alice-skew\.md to bob age )[0-9]+s$/\1Ns/')
   want="mailbox/inbox/bob/20200101T000000Z-alice-old.md to bob age old stale needs: an\\x1b[2Janswer
 mailbox/inbox/bob/20200101T000003Z-alice-nosent.md to bob age ?
 mailbox/inbox/carol/20200101T000005Z-alice-else.md to carol age old stale
@@ -146,14 +148,15 @@ mailbox/inbox/bob/20200101T000011Z-alice-feb30.md to bob age ?
 mailbox/inbox/bob/20200101T000012Z-alice-leap.md to bob age old stale
 mailbox/inbox/bob/20200101T000013Z-alice-skew.md to bob age Ns
 mailbox/inbox/bob/20200101T000014Z-alice-space.md to bob age ?
-mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?"
+mailbox/inbox/bob/20200101T000016Z-alice-1900.md to bob age ?
+mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   long=$(printf '%s\n' "$out" | grep -- '-alice-long\.md '); out=$(printf '%s\n' "$out" | grep -v -- '-alice-long\.md ')
   case $long in (*" age "*" stale needs: 000"*...) [ ${#long} -le 300 ] && ok "a long needs is cut, keeping the age and stale mark" || no "a long needs isn't capped" "$long" ;;
     (*) no "a long needs isn't capped" "$long" ;; esac
   [ "$out" = "$want" ] && ok "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" ||
     no "sent lists only mail both named and headed as the sender's, oldest first, stale past 24 h" "$out"
   out=$(as alice sent bob 2>&1 | cut -d' ' -f1)
-  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900)" ] &&
+  [ "$out" = "$(printf 'mailbox/inbox/bob/20200101T0000%sZ-alice-%s.md\n' 00 old 03 nosent 06 h25 07 h23 08 range 09 ahead 10 long 11 feb30 12 leap 13 skew 14 space 16 1900 17 y2000)" ] &&
     ok "and sent <to> only that recipient's" || no "and sent <to> only that recipient's" "$out"
   tamper "rm -rf mailbox/inbox/carol mailbox/inbox/x_y mailbox/inbox/bob/sub mailbox/inbox/bob/20200101T*"
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
@@ -353,6 +356,24 @@ case " $ADAPTERS " in *" git "*)
   expect "init on a branch with a / in its name" 0 initialized as e2 init
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
+
+  echo "== git: the mailbox branch is matched by its exact name"
+  # ls-remote matches a pattern against the end of ref names: a store whose only ref is x/refs/heads/main has no main
+  T="$W/nested"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email s@s && git config user.name s &&
+    echo other > other.txt && git add other.txt && git commit -qm other && git push -q origin HEAD:refs/heads/x/refs/heads/main)
+  as nb1 setup --store "$T/store.git" --name nb1 >/dev/null
+  expect "init on a store with only a ref ending in refs/heads/main" 0 initialized as nb1 init
+  expect "the mailbox is on main itself" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only refs/heads/main | grep store.md"
+  [ -z "$(git --git-dir="$T/store.git" ls-tree -r --name-only refs/heads/x/refs/heads/main | grep store.md)" ] &&
+    ok "and the other ref is left alone" || no "init wrote to the ref that only ends in main"
+  as nb1 register --kind t --about t --no-key >/dev/null
+  # the poll token is that branch's tip alone, not every ref ending in its name
+  C=$(ls -d "$W/home-nb1/.local/state/agent-mailbox/checkouts/"*-nb1)
+  tok=$(BRANCH=main AD_DIR=$C "$SH" -c '. "$1/adapters/git.sh"; ad_poll' sh "$ROOTDIR")
+  [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
+    no "the poll token isn't the exact branch's tip" "$tok"
+  expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -2052,7 +2073,7 @@ echo "Host x" > "$T/ssh-config"; ln -s "$T/ssh-config" "$H/.ssh/config"; ln -s "
 # linked to ~/.ssh that holds such a folder
 mkdir -p "$T/dotfiles/config.d"; echo "Host w" > "$T/dotfiles/config.d/work"; ln -s "$T/dotfiles/config.d" "$H/.ssh/config.d"
 ln -s "$H/.ssh/config.d/work" "$T/via-dir.md"
-printf 'PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAA\n' > "$T/key.ppk"
+printf 'PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAA\nPrivate-MAC: 0123abcd\n' > "$T/key.ppk"
 # refused <description> <body file>: sec1's send of it fails, saying why (each on its own topic, so none is refused
 # for sharing a second with another)
 n=0; refused() { n=$((n+1)); expect "$1" 1 "refusing to send" as sec1 send sec2 "sec-$n" "$2"; }
@@ -2093,6 +2114,10 @@ n=$((n+1)); expect "or a key file on stdin whose first line was already read" 1 
 n=$((n+1)); expect "or a piped key whose first line was read off" 1 "holds a private key" \
   sh -c "printf -- '$pk' | { IFS= read -r l; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; }"
 refused "or a PuTTY key" "$T/key.ppk"
+n=$((n+1)); expect "or a PuTTY key on stdin with only its Private-Lines: line left" 1 "holds a private key" \
+  sh -c "{ IFS= read -r l; grep -v '^Private-MAC: '; } < '$T/key.ppk' | HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -"
+n=$((n+1)); expect "or one read up to its Private-MAC line" 1 "holds a private key" \
+  sh -c "{ for i in 1 2 3 4; do IFS= read -r l; done; HOME='$H' '$SH' '$CLI' send sec2 'sec-$n' -; } < '$T/key.ppk'"
 expect "and says what to do instead" 1 "describe it" as sec1 send sec2 sec-rsa2 "$T/rsa.md"
 mkdir -p "$T/nl
 "; echo hi > "$T/nl
@@ -2138,7 +2163,7 @@ mkdir -p "$T/sub/deep"; ln -s "$T/sub/deep" "$T/lf"; ln -s ../../../home-sec1/.s
 refused "or a relative link under a folder link, read from where it really sits" "$T/lf/k"
 [ -z "$(ls "$T/store/mailbox/inbox/sec2")" ] && ok "and writes nothing for any of them" || no "a refused send wrote mail" "$(ls "$T/store/mailbox/inbox/sec2")"
 # ordinary bodies still send: prose about keys, public keys, and a file beside ~/.ssh whose name starts the same
-printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here.\n' > "$T/prose.md"
+printf 'I rotated the private key on the server; its BEGIN PRIVATE KEY line is in the vault, not here, and so is its END PRIVATE KEY line.\nPuTTY files end with a Private-MAC: line.\n' > "$T/prose.md"
 printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me\n-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n' > "$T/pub.md"
 echo "notes" > "$H/.ssh-notes.md"
 expect "a body that mentions a private key in prose sends" 0 "^sent " as sec1 send sec2 prose "$T/prose.md"

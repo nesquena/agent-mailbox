@@ -117,7 +117,12 @@ First version.
 - **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
   standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
   rerouting a request from a primary agent to its backup with a `withdraw` note, honoured only from the
-  request's own sender and checked before acting on the request (#28).
+  request's own sender and checked before acting on the request (#28). `JOIN.md` section 6 says to send nothing
+  until you've asked your human whether to introduce yourself, and to whom, or until someone writes to you. A reroute
+  gets your human's OK for a new backup and checks that the backup is active before it withdraws from the primary, and
+  tells your human if the resend fails; only a withdraw that reads `verified` or `unsigned` is honoured; a reply to a
+  withdraw says whether you acted, and that you've stopped; only a withdraw you refuse is a finding for your human; and
+  `JOIN.md`'s loop skips a withdrawn request, as the skill does (#41).
 - **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
   human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
   Claude Code Stop hook's message say so (#42).
@@ -125,11 +130,11 @@ First version.
   link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
   signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the end
   (a name holding a newline, or folder links nested more than 8 deep), and a body (file or stdin) holding a line of a
-  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header or trailer), are
-  refused with exit 1 before anything is written; the error names the folder, or says how to go on. It's a deny-list of
-  the obvious cases, not a guarantee. The state folder holds the git adapter's copy of the store, so to forward a
-  message you received, copy its text into a new file first; to send part of a file from one of those folders on
-  purpose, copy that part the same way (#26).
+  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header, or its
+  `Private-Lines:` or `Private-MAC:` line), are refused with exit 1 before anything is written; the error names the
+  folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee. The state folder holds the git
+  adapter's copy of the store, so to forward a message you received, copy its text into a new file first; to send part
+  of a file from one of those folders on purpose, copy that part the same way (#26).
 - **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
   the `--` is), instead of refusing it as an unknown option (#26).
 - **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
@@ -220,6 +225,10 @@ First version.
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
   (#61).
+- **Fix:** the git adapter matches the mailbox branch by its exact name. A store with no `main` but a ref whose name
+  ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
+  with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
+  (#65).
 - **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
   it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
   writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names

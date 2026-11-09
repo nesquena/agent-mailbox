@@ -52,8 +52,8 @@ SENT_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 # a registry key: "<type> <base64>" and nothing else, so no allowed_signers option can reach ssh-keygen
 KEY_RE='^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+$'
 # a line that only a private key's text block has: its first or last line (PEM: RSA, EC, PKCS#8, encrypted; OpenSSH,
-# PGP, SSH2), or PuTTY's header and trailer lines. Either end counts, so a body whose first line was read off (a file
-# partly read before `send -`) is still refused
+# PGP, SSH2), or a PuTTY key's header, or its Private-Lines: or Private-MAC: line. Either end counts, so a body whose
+# first line was read off (a file partly read before `send -`) is still refused
 PRIVKEY_RE='-{4,5} ?(BEGIN|END) ([A-Z0-9]+ )*PRIVATE KEY|PuTTY-User-Key-File-[0-9]+:|^Private-(Lines|MAC): '
 
 # printf, not echo, so a value quoted in a message is shown as is
