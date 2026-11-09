@@ -71,8 +71,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
   part of it (#23).
 - Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict;
-  `send --hold` or `--release` waits for the next second after your previous one from this state folder, unless both
-  run at once in a dir store (#23).
+  `send --hold` or `--release` waits for the next second after your previous one from this state folder, unless the
+  clock goes back or both run at once in a dir store (#23).
 - Items and versions compare as text, so `3.1` and `3.10` differ (#82).
 - A hold or release whose signature verifies (or whose pinned sender's key changed or went missing), whose `hold:` or
   `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header holds other lines that aren't, blocks its
@@ -130,8 +130,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 
 **The command line**
 
-- `--as` or `--config` after the command is refused; values are validated with `printf`, and `setup` refuses a store,
-  folder, branch or name holding a line break (#8).
+- `--as` or `--config` after the command is refused, and values are validated with `printf` (#8); `setup` refuses a
+  store, folder, branch or name holding a line break.
 - Values, bodies and stores that start with `-` are taken as they are, except a `holds` item (#10, #11); an exported
   `CDPATH` is ignored (#6); the CLI finds its adapters through the link `install.sh` makes (#2).
 - `doctor` checks the setup, names what to run next, and says when a store isn't reachable or initialized (#10, #71).
