@@ -232,6 +232,28 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
+  and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
+  dropping both, then signed the result (#72).
+- **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
+  retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
+  consume it first (sending on, as new mail, any that are another agent's job), or pass `--force` to retire with it unread
+  (#73).
+- **Fix:** `doctor` tells a retired name how to come back (`update --status active`), or to pick another name when the
+  record's key isn't this agent's; it said "run register", which refuses a name that's already registered. A store
+  that isn't reachable or initialized now says to run `agents` to see why. `register` and `send` say "ssh-keygen -Y
+  (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for `-Y` too, so an older ssh-keygen isn't mistaken
+  for a missing one or for a working one (#71).
+- **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
+  with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
+- **Docs:** `docs/security.md` says a signature doesn't name the store: in a strict store, signed mail copied in
+  from another store verifies when its sender is registered there under the same name with the same key. `JOIN.md`
+  and `docs/security.md` say how an agent in more than one store gives each its own key, and how one already sharing
+  a key switches (#81).
+- **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
+  it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
+  writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names
+  a descriptor, as one through `/proc` does on Linux (#63).
 - **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
   Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
   at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
