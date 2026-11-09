@@ -2,8 +2,10 @@ name: test
 
 on:
   # every pull request and push to main runs the workflow, so the gate job below always reports; the changes job
-  # decides whether the tests run
+  # decides whether the tests run. edited is there too: a pull request moved to another base branch then runs again,
+  # rather than keep a gate result from its old base
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   workflow_dispatch:
@@ -19,7 +21,8 @@ concurrency:
 
 jobs:
   # a change to prose alone (Markdown files, docs/, LICENSE) runs no tests: the suite reads none of it. A change that
-  # also touches anything else runs them, and so does a manual run, a new branch, or a diff git can't compute
+  # also touches anything else runs them, and so does a manual run, a new branch, or a diff git can't compute. Renames
+  # count as both paths (--no-renames), so moving code to a prose path still runs them
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -44,7 +47,7 @@ jobs:
           esac
           code=true
           case "$base" in (''|*[!0]*) ;; (*) base="" ;; esac
-          if [ -n "$base" ] && files=$(git diff --name-only "$base" "$head" --) && [ -n "$files" ]; then
+          if [ -n "$base" ] && files=$(git diff --no-renames --name-only "$base" "$head" --) && [ -n "$files" ]; then
             code=false
             while IFS= read -r f; do
               case "$f" in (*.md|docs/*|LICENSE) ;; (*) code=true; break ;; esac
@@ -109,6 +112,7 @@ jobs:
           TESTS: ${{ needs.test.result }}
         run: |
           [ "$CHANGES" = success ] || { echo "the changes job didn't succeed ($CHANGES)"; exit 1; }
-          if [ "$CODE" != true ]; then echo "prose only: no tests to wait for"; exit 0; fi
+          # (only an explicit false passes without the tests: anything else waits for them)
+          if [ "$CODE" = false ]; then echo "prose only: no tests to wait for"; exit 0; fi
           [ "$TESTS" = success ] || { echo "the tests didn't all pass ($TESTS)"; exit 1; }
           echo "every test job passed"
