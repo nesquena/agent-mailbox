@@ -356,13 +356,23 @@ EOF_LINKS
 }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
-# verify_file <message path> [<inbox it sits in>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
-verify_file() {
+# verify_file and verify_sig print one word: verified | unsigned | bad | nokey | changed | misrouted
+# hdr_ok <file>: its header closes, and every line in it is a plain `key: value` (a key of lowercase letters, digits,
+# _ and -, then a colon), with no key twice: one reading, the one `field` gives
+hdr_ok() { awk 'NR == 1 { if ($0 != "---") exit 1; next } $0 == "---" { c = 1; exit }
+  { i = index($0, ":"); k = substr($0, 1, i - 1)
+    if (k !~ /^[a-z0-9_-]+$/ || (k in seen)) exit 1; seen[k] = 1 }
+  END { exit c ? 0 : 1 }' "$1"; }
+# verify_file <message path> [<inbox it sits in>]: a message whose header isn't plain reads bad; otherwise as verify_sig
+verify_file() { hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
+# verify_sig <message path> [<inbox it sits in>]: its signature alone, whatever else its header holds
+verify_sig() {
   f=$1 inb=${2:-}
   from=$(field from "$f"); to=$(field to "$f")
   matches "$NAME_RE" "$from" && matches "$NAME_RE" "$to" || { echo bad; return; }
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
-  [ -f "$f.sig" ] || { echo unsigned; return; }
+  # (a .sig that's a link isn't the message's own signature, as read's copy, which skips one, would also say)
+  { [ -f "$f.sig" ] && [ ! -L "$f.sig" ]; } || { echo unsigned; return; }
   rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
@@ -721,15 +731,30 @@ read)
                  *) unknown "$1" ;; esac
   done
   need_me; load_adapter; ad_sync; need_store
+  # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
+  # file swapped in the store meanwhile can't be shown under another's status
+  rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
-    v=$(verify_file "$p" "$ME")
+    cat -- "$p" > "$rt/m" 2>/dev/null || continue
+    if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
+    v=$(verify_file "$rt/m" "$ME")
+    # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
+    # name that doesn't name that sender (<stamp>-<from>-<topic>.md) is pointed out
+    fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); b=${p##*/}
+    st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    if matches "$NAME_RE" "$fr"; then
+      [ "$v" != verified ] || v="verified: from $fr"
+      if matches "$NAME_RE" "$tp"; then case "$b" in ($st-"$fr-$tp".md) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac
+      else case "$b" in ($st-"$fr"-*) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac; fi
+    fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
     # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes
     # first) is indented; a last line without its newline gets one, and each message ends with its own marker
-    clean 's/^[^ -~]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
+    clean 's/^[^ -~]*=/ &/' < "$rt/m"; [ -z "$(tail -c 1 < "$rt/m" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
+  rm -rf "$rt"
   [ -n "$shown" ] || no_mail
   printf '%s\n' "$shown" ;;
 consume)
@@ -785,12 +810,21 @@ holds)
       matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
         field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      v=$(verify_file "$tmpd/m" "$ME")
-      # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
-      # after this reader pinned it, still holds: dropping it would let a registry edit open the gate. unsigned and bad
+      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
+      # whose signature doesn't reads bad
+      v=$(verify_sig "$tmpd/m" "$ME")
+      if ! hdr_ok "$tmpd/m"; then
+        case "$v" in (verified|changed) kind=malformed ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (*) v=bad ;; esac
+      fi
+      # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
+      # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
+      # edit open the gate. unsigned and bad
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
-      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] ||
+      [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
         { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
     done)
@@ -801,12 +835,14 @@ holds)
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
-  # order mustn't decide between records with an equal sent time: a hold wins, and two releases naming different
-  # versions conflict (neither counts)
+  # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
+  # blocks, and two releases naming different versions conflict (neither counts)
   latest=$(echo "$records" | awk 'NF { k = $3 " " $5
       if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
       if ($1 < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
+      if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
+      if (kind[k] == "malformed") next
       if (kind[k] == "release" && ($4 "") != (v[k] "")) { kind[k] = "conflict"; last[k] = $1 " conflict " $3 " " v[k] "," $4 " " $5 " " $6 " " $7 } }
     END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
   if [ -z "$version" ]; then
@@ -817,6 +853,8 @@ holds)
   echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
+    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }

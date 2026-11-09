@@ -105,9 +105,75 @@ for AD in $ADAPTERS; do
   # a name with no record here is more likely the wrong name than no mail
   expect "list under a name that isn't registered says so" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody list
   expect "and so does read" 1 "'nobody' isn't registered in this mailbox" as alice --as nobody read
-  if [ -n "$SSH" ]; then expect "read verifies the signature" 0 "\[verified\]" as bob read
+  if [ -n "$SSH" ]; then expect "read verifies the signature, naming the signer" 0 "alice-review-1\.md \[verified: from alice\]$" as bob read
   else expect "read marks it unsigned" 0 "\[unsigned\]" as bob read; fi
   expect "read prints the header and body" 0 "needs: a yes or no" as bob read
+  # a header holds only plain "key: value" lines (a key of lowercase letters, digits, _ and -), each key once, or the
+  # message reads bad; a key the protocol doesn't name reads as before
+  mkdir -p "$T/hd"; rm -f "$T/hd/"*
+  # hm <file name> <topic> <extra header lines>: an unsigned message from alice to bob
+  hm() { printf -- '---\nprotocol: 1\nfrom: alice\nto: bob\ntopic: %s\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n%s---\n\nx\n' "$2" "$3" > "$T/hd/$1"; }
+  hm 20200101T000001Z-alice-hdr1.md hdr1 "$(printf 'from\342\200\213: carol')
+"; hm 20200101T000002Z-alice-hdr2.md hdr2 'from: carol
+'; hm 20200101T000003Z-alice-hdr3.md hdr3 '--- 
+body
+'; hm 20200101T000004Z-alice-hdr4.md hdr4 'X_extra: 1
+'; hm 20200101T000005Z-alice-hdr5.md hdr5 '  x_extra: 1
+'; hm 20200101T000006Z-alice-hdr6.md hdr6 'from : carol
+'
+  hm 20200101T000011Z-alice-hdr11.md hdr11 'abc
+'; hm 20200101T000012Z-alice-hdr12.md hdr12 ':v
+'
+  hm 20200101T000007Z-alice-hdr7.md hdr7 'x_extra: 1
+x-trace:abc
+'
+  # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
+  hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
+  tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
+  out=$(as bob read 2>&1)
+  for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
+    no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
+  printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
+    no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
+  for f in 20200101T000008Z-carol-hdr8 20200101T000009Z-alice-ops-x 2020-alice-hdr0; do
+    printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
+  if [ -n "$SSH" ]; then
+    tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
+      cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
+    expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
+      "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
+  fi
+  tamper "rm -f mailbox/inbox/bob/20200101T0000* mailbox/inbox/bob/2020-alice-hdr0.md"
+  # read takes each message once: a store file swapped right after its signature is checked (a stand-in ssh-keygen
+  # swaps it) can't be shown under the status of what was checked
+  if [ -n "$SSH" ]; then
+    echo hi | as alice send bob swapme - >/dev/null 2>&1
+    sp=$(as bob list | grep -- '-alice-swapme\.md$'); [ "$AD" = git ] && sp="$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts/"*-bob | head -n 1)/$sp" || sp="$STORE/$sp"
+    mkdir -p "$T/kgs"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y verify "*) ;; (*) exec "$REAL_KG" "$@" ;; esac' \
+      'p=; for a in "$@"; do [ "$p" != -s ] || [ "$a" != "$SWAP_FILE.sig" ] || : > "$SWAP_DONE.store"; p=$a; done' \
+      'm=$(mktemp); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
+      'if grep -q "^topic: swapme$" "$m" && [ ! -e "$SWAP_DONE" ]; then : > "$SWAP_DONE"; cp "$SWAP_FILE" "$SWAP_FILE.orig"' \
+      '  sed "s/^from: alice$/from: carol/" "$SWAP_FILE" > "$SWAP_FILE.t" && mv -f "$SWAP_FILE.t" "$SWAP_FILE"; fi' \
+      'rm -f "$m"; exit $rc' > "$T/kgs/ssh-keygen"; chmod +x "$T/kgs/ssh-keygen"; rm -f "$T/swapped"
+    rm -f "$T/swapped.store"; out=$(env PATH="$T/kgs:$PATH" REAL_KG="$(command -v ssh-keygen)" SWAP_FILE="$sp" SWAP_DONE="$T/swapped" HOME="$W/home-bob" \
+      XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" read 2>&1 |
+      awk '/^===== / && index($0, "swapme") { on = 1 } on && /^===== end/ { on = 0 } on')
+    case "$out" in (*"alice-swapme.md [verified: from alice]"*"from: alice"*) case "$out" in (*carol*) no "read shows the message it checked, once" "$out" ;;
+        (*) ok "read shows the message it checked, once" ;; esac ;; (*) no "read shows the message it checked, once" "$out" ;; esac
+    [ ! -e "$T/swapped.store" ] && ok "read verifies its own copy, never the store's file" ||
+      no "read verified the store's file, not its own copy"
+    [ ! -e "$sp.orig" ] || mv -f "$sp.orig" "$sp"; as bob consume "${sp##*/}" >/dev/null 2>&1
+  fi
+  # a .sig that's a link (a store folder can hold one) isn't the message's signature, for read, verify and holds alike
+  if [ "$AD" = dir ] && [ -n "$SSH" ]; then
+    echo hi | as alice send bob linked - --release "lk#1 v1" >/dev/null 2>&1; lp=$(as bob list | grep -- '-alice-linked\.md$')
+    mv "$STORE/$lp.sig" "$STORE/$lp.sig.real" && ln -s "$STORE/$lp.sig.real" "$STORE/$lp.sig"
+    expect "read takes a .sig that's a link as no signature" 0 "alice-linked\.md \[unsigned\]" as bob read
+    expect "and so does verify" 6 "^unsigned$" as bob verify "${lp##*/}"
+    expect "and so does holds" 0 "lk#1 released by alice at v1 \(.*, unsigned\)" as bob holds "lk#1" --version v1
+    rm -f "$STORE/$lp.sig" "$STORE/$lp.sig.real"; as bob consume "${lp##*/}" >/dev/null 2>&1
+  fi
   expect "sent lists mail still in the recipient's inbox" 0 "^mailbox/inbox/bob/[^ ]*-alice-review-1\.md to bob age [0-9]+[sm] needs: a yes or no$" as alice sent
   expect "sent <to> lists that recipient's" 0 "alice-review-1\.md to bob " as alice sent bob
   expect "and nothing for another" 3 "no mail from alice waiting for carol" as alice sent carol
@@ -651,7 +717,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   expect "a new checkout reads it too" 0 "p1-planted\.md" as p3 --as p2 list
   for C in "$W/home-p3/.local/state/agent-mailbox/checkouts/"*; do :; done
   cmp -s "$T/blob" "$C/$f" && ok "and holds it byte for byte" || no "the new checkout's copy differs from the store's"
-  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified\]" as p3 --as p2 read; fi
+  if [ -n "$SSH" ]; then expect "and its signature verifies" 0 "p1-planted\.md \[verified: from p1\]" as p3 --as p2 read; fi
   [ ! -e "$T/lfs-ran" ] && ok "nor on a checkout or read" || no "git ran the LFS filter on a checkout or read"
   [ ! -e "$T/hook-ran" ] && ok "and none of the agents' own git hooks ran in its checkout" || no "a git hook ran in the CLI's checkout" "$(cat "$T/hook-ran")"
   # nor does a command run from inside a git hook, where git names the caller's repository in GIT_DIR
@@ -866,7 +932,7 @@ if [ -n "$SSH" ]; then
   expect "register with your own key" 0 "register: w2" as w2 register --kind t --about t --key "$T/own.pub"
   expect "the key path is kept in the config" 0 "^key = .*/own$" grep '^key' "$W/home-w2/.config/agent-mailbox/config"
   expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
-  expect "and verify" 0 "signed-own.md \\[verified\\]" as w1 read
+  expect "and verify" 0 "signed-own.md \\[verified: from w2\\]" as w1 read
 fi
 
 echo "== the Claude Code Stop hook (dir)"
@@ -1821,7 +1887,7 @@ if [ -n "$SSH" ]; then
   elif grep -qxF "$m" "$T/signlog"; then no "a message appeared before its signature was made" "$(cat "$T/signlog")"
   elif [ -s "$T/mvlog" ]; then no "a message was moved into place before its signature" "$(cat "$T/mvlog")"
   else ok "a message appears only once its signature is in place"; fi
-  expect "and verifies" 0 "in-order\.md \[verified\]" as n2 read
+  expect "and verifies" 0 "in-order\.md \[verified: from n1\]" as n2 read
   expect "a send whose signing fails fails" 1 "signing failed" signing 1 sign-fails
   [ -z "$(ls -A "$N/n2" | grep sign-fails)" ] && ok "and leaves nothing in the inbox, temp files included" ||
     no "a failed signing left files in the inbox" "$(ls -A "$N/n2")"
@@ -1834,7 +1900,7 @@ if [ -n "$SSH" ]; then
     ok "a registry record appears only once its signature is in place"
   else no "register left no signature, or a temp file" "$(ls -A "$T/strict/mailbox/agents")"; fi
   as n3 send n2 hello "$T/b" >/dev/null
-  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified\]" as n2 read
+  expect "and its mail verifies against it" 0 "n3-hello\.md \[verified: from n3\]" as n2 read
   # an update whose final move fails leaves the record and the signature it had, so they still match
   A="$T/strict/mailbox/agents"; cp "$A/n3.md" "$T/rec3"; cp "$A/n3.md.sig" "$T/sig3"
   mv_fails() { (MVFAIL=$1 MVLOG="$T/mvlog" PATH="$T/sk:$PATH"; export MVFAIL MVLOG PATH; shift; as "$@"); }
@@ -1935,18 +2001,52 @@ echo r | as k3 send k1 ra - --release "a#1 v1" >/dev/null; echo h | as k2 send k
 echo r | as k3 send k1 rb - --release "b#1 v1" >/dev/null; echo h | as k2 send k1 hb - --hold "b#1 v1" >/dev/null
 echo r | as k3 send k1 rd - --release "d#1 v1" >/dev/null; echo h | as k4 send k1 hd - --hold "d#1 v1" >/dev/null
 echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
+for x in f1 f2 f3 g p; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
+echo h | as k3 send k1 hh - --hold "h#1 v1" >/dev/null
+# sg <sender> <file name> <topic> <hold or release line> [<extra header lines>]: a message to k1, signed with that
+# sender's own key, placed in the store as a writer could
+sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
+  "$1" "$3" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
+  ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-$1/.config/agent-mailbox/keys/$1" "$T/sg/$2" && wr cp "$T/sg/$2" "$T/sg/$2.sig" mailbox/inbox/k1/; }
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
 # someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
 ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap
 wr sh -c "sed 's|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|' mailbox/agents/k2.md > mailbox/agents/k2.t && mv mailbox/agents/k2.t mailbox/agents/k2.md"
 expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 .*changed" as k1 holds "a#1" --version v1
+# a signed record whose header isn't plain, hold or release, its key changed or not, blocks the gate, saying so
+sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
+"
+expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key .*out of band \(.agents. shows its fingerprint\) and ask" as k1 holds "g#1" --version v1
+sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
+sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
+"
+sg k3 29990101T000100Z-k3-hf3.md hf3 "hold: f3#1 v1" "needs: none
+"
+for x in f1 f2; do expect "a signed hold with an unusual but plain header still holds over an older release ($x)" 5 "$x#1 is held by k3" as k1 holds "$x#1" --version v1; done
+expect "a signed hold whose header isn't plain (a key twice) blocks over an older release" 5 "f3#1 has a record from k3 whose header isn't plain.*send it again" as k1 holds "f3#1" --version v1
+sg k3 29990101T000100Z-k3-rh.md rh "release: h#1 v1" "needs: none
+"
+expect "a signed release whose header isn't plain doesn't open the gate" 5 "h#1 has a record from k3 whose header isn't plain" as k1 holds "h#1" --version v1
+# a newer signed release whose header isn't plain blocks, rather than letting the sender's older release decide
+sg k3 29990101T000100Z-k3-rp.md rp "release: p#1 v2" "needs: none
+"
+expect "a newer signed release whose header isn't plain blocks, and the older one doesn't decide" 5 "p#1 has a record from k3 whose header isn't plain" as k1 holds "p#1" --version v1
+# two records at the same time, one of them not plain, block too
+sg k3 29990101T000100Z-k3-rq1.md rq1 "release: q#1 v1"
+sg k3 29990101T000100Z-k3-rq2.md rq2 "release: q#1 v1" "needs: none
+"
+expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a record from k3 whose header isn't plain" as k1 holds "q#1" --version v1
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1
 # ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
 wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
 expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
+# a record whose header isn't plain, from that sender (pinned, its key now missing), blocks with the key advice
+sg k4 29990101T000100Z-k4-hm.md hm "hold: m#1 v1" "needs: none
+"
+expect "a record whose header isn't plain, from a pinned sender whose key is missing, blocks" 5 "m#1 has a record from k4 whose header isn't plain .*nokey: confirm k4's new key .*out of band and ask" as k1 holds "m#1" --version v1
 # ... but a hold planted under a name k1 never pinned a key for (no record, a junk signature) doesn't count
 wr sh -c "printf -- '---\nprotocol: 1\nfrom: ghost\nto: k1\ntopic: hg\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: e#1 v1\n---\n\nx\n' > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md && echo junk > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md.sig"
 expect "a hold from a name never pinned, with a junk signature, doesn't count" 0 "e#1 released by k3" as k1 holds "e#1" --version v1
@@ -1969,6 +2069,18 @@ expect "or a shallow checkout can't fetch its full history" 1 "can't read this s
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+
+echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
+T="$W/loose"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+for a in j1 j2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+as j1 init >/dev/null; for a in j1 j2; do as $a register --kind t --about t >/dev/null; done
+echo r | as j2 send j1 ra - --release "m#1 v1" >/dev/null
+expect "(j2's release opens the gate)" 0 "m#1 released by j2" as j1 holds "m#1" --version v1
+git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom: j2\nto: j1\ntopic: rm\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\nrelease: m#1 v1\nneeds: none\n---\n\nx\n' \
+  > "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
+  ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-j2/.config/agent-mailbox/keys/j2" "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
+  git -C "$T/w" add -A && git -C "$T/w" -c user.name=e -c user.email=e@e commit -qm w && git -C "$T/w" push -q origin HEAD:main
+expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
 fi
 
 echo "== installed link (install.sh)"
@@ -2063,7 +2175,7 @@ for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" setup --store "$T/bs.git" --na
 HOME="$W/h\tq-q1" "$SH" "$CLI" init >/dev/null
 for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" register --kind t --about t >/dev/null 2>&1; done
 expect "a backslash in the home folder works (git adapter)" 0 "^sent " sh -c "echo hi | HOME='$W/h\tq-q1' '$SH' '$CLI' send q2 hq -"
-if [ -n "$SSH" ]; then st=verified; else st=unsigned; fi
+if [ -n "$SSH" ]; then st="verified: from q1"; else st=unsigned; fi
 expect "and the mail is read, $st" 0 "^===== mailbox/inbox/q2/[^/]*-q1-hq\\.md \\[$st\\]" env HOME="$W/h\tq-q2" "$SH" "$CLI" read
 # options' values starting with '-': --in-reply-to and --consume take them as file names; verify too
 mv "$T/store/mailbox/inbox/o2/-x.md" "$T/store/mailbox/inbox/o2/-y.md" 2>/dev/null || cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-y.md"
