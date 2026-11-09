@@ -108,8 +108,9 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   file-system monitor are off for it; only the mailbox branch is fetched; and a store that can't be reached is an
   error for every command (#27).
 - A store named by a URL, `host:path` or an absolute path is cloned from the agent's own state folder, so nothing in
-  the folder a command runs from stands in for it (#27); a credential git would prompt for fails at once, though ssh's
-  own prompts still wait (#64).
+  the folder a command runs from stands in for it (#27); git's own credential prompt is off, so a credential it would
+  ask for in the terminal fails at once; an askpass program, a credential helper's own prompt and ssh's prompts still
+  wait (#64).
 - The mailbox branch is matched by its exact name (#65), and a branch name git refuses is refused (#19).
 - A commit an earlier command couldn't push is published by the next command under the same name, a first `init`
   included (#67); a command that can't publish such a commit says it wrote nothing of its own (#102); and a clone
@@ -143,9 +144,10 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   run a command under no name, from a copy of the config without its `name =` line and with no name from the
   environment or a session:
   `env -u AGENT_MAILBOX_NAME -u AGENT_MAILBOX_SESSION -u CLAUDE_CODE_SESSION_ID agent-mailbox --config <copy> agents`.
-  It prints "publishing 1 commit(s) left from an earlier command" when it has published it from the clone all names
-  shared. Don't send the message again instead: the stranded commit would still be there, and a later command under no
-  name would publish it as a duplicate (#54).
+  It prints "publishing 1 commit(s) left from an earlier command", and exits 0 once it has published it from the clone
+  all names shared. If you already sent the message again, skip this: it would publish a second copy. Don't send the
+  message again instead: the stranded commit would still be there, and a later command under no name would publish it
+  as a duplicate (#54).
 - **A git mailbox on a branch named `HEAD` or starting with `-`** is refused. Copy it to a new branch and change each
   agent's `branch =` line:
   `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`. Pins
@@ -160,8 +162,10 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   your inbox can wake you once more, and one new message can wake you twice (#58).
 - **Behaviour that changed:** `holds` stops with an error when it can't read the store (#23); with no mail, `list` and
   `read` under an unregistered name exit 1 (#76); retiring with mail waiting needs `--force` (#73); a header key that
-  isn't plain makes a message read `bad` (#84); a credential git would prompt for fails at once, though ssh's own
-  prompts still wait (#64); a key with a passphrase and no `.pub` beside it makes a strict store refuse to send, and
-  an open one send unsigned (#40); and signing reads the message on stdin, so with no terminal a key with a passphrase
-  needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or later; on 8.1 to 8.3, askpass
-  with no terminal also needs `DISPLAY`) (#40).
+  isn't plain makes a message read `bad` (#84); git's own credential prompt is off, so a credential it would ask for
+  in the terminal fails at once; an askpass program, a credential helper's own prompt and ssh's prompts still wait
+  (#64); a key with a passphrase and no `.pub` beside it makes a strict store refuse to send, and an open one send
+  unsigned (#40); and signing reads the message on stdin, so a key with a passphrase is asked for through an askpass
+  program whenever `DISPLAY` is set, even in a terminal (unset `DISPLAY`, or on OpenSSH 8.4 or later set
+  `SSH_ASKPASS_REQUIRE=never`, to be asked in the terminal); with no terminal it needs `ssh-agent`, or `SSH_ASKPASS`
+  with `DISPLAY` set or, on OpenSSH 8.4 or later, `SSH_ASKPASS_REQUIRE=force` (#40).
