@@ -2037,6 +2037,10 @@ pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14a\ncontext: g
 pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r14b\ncontext: general\nsent: 2999-01-01T00:00:09Z\nin_reply_to: none\nneeds: none\nrelease: item#14 v2\n---\n\nok\n' > mailbox/inbox/u1/29990101T000009Z-u2-r14b.md"
 expect "releases of different versions at the same time conflict" 5 "item#14 has releases from u2 sent at the same time.*send one release again" as u1 holds "item#14" --version v2
 expect "for either version" 5 "item#14 has releases from u2 sent at the same time" as u1 holds "item#14" --version v1
+# and two at the same time whose versions differ only as text (3.1 and 3.10) conflict too
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19a\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.1\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19a.md"
+pl sh -c "printf -- '---\nprotocol: 1\nfrom: u2\nto: u1\ntopic: r19b\ncontext: general\nsent: 2999-01-01T00:00:30Z\nin_reply_to: none\nneeds: none\nrelease: item#19 3.10\n---\n\nok\n' > mailbox/inbox/u1/29990101T000030Z-u2-r19b.md"
+for v in 3.1 3.10; do expect "same-time releases of 3.1 and 3.10 conflict (--version $v)" 5 "item#19 has releases from u2 sent at the same time" as u1 holds "item#19" --version "$v"; done
 # 9. merges don't multiply what holds reads: one hold file under several merges is one row of history
 echo h | as u2 send u1 h-15 - --hold "item#15 v1" >/dev/null
 for n in 1 2 3; do (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null && base=$(git rev-parse HEAD~1) &&

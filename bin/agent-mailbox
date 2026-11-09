@@ -718,8 +718,9 @@ holds)
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
-  # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison)
-  [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '($3 "") == (i "")')
+  # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
+  # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
+  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, and two releases naming different
@@ -735,7 +736,7 @@ holds)
     exit 0
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
-  echo "$latest" | awk -v want="$version" '
+  echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
