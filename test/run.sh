@@ -2017,7 +2017,7 @@ expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 
 # a signed record whose header isn't plain, hold or release, its key changed or not, blocks the gate, saying so
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
-expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key" as k1 holds "g#1" --version v1
+expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key .*out of band \(.agents. shows its fingerprint\) and ask" as k1 holds "g#1" --version v1
 sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
 sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
 "
@@ -2046,7 +2046,7 @@ expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is hel
 # a record whose header isn't plain, from that sender (pinned, its key now missing), blocks with the key advice
 sg k4 29990101T000100Z-k4-hm.md hm "hold: m#1 v1" "needs: none
 "
-expect "a record whose header isn't plain, from a pinned sender whose key is missing, blocks" 5 "m#1 has a record from k4 whose header isn't plain .*nokey: confirm k4's new key" as k1 holds "m#1" --version v1
+expect "a record whose header isn't plain, from a pinned sender whose key is missing, blocks" 5 "m#1 has a record from k4 whose header isn't plain .*nokey: confirm k4's new key .*out of band and ask" as k1 holds "m#1" --version v1
 # ... but a hold planted under a name k1 never pinned a key for (no record, a junk signature) doesn't count
 wr sh -c "printf -- '---\nprotocol: 1\nfrom: ghost\nto: k1\ntopic: hg\ncontext: general\nsent: 2999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: e#1 v1\n---\n\nx\n' > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md && echo junk > mailbox/inbox/k1/29990101T000000Z-ghost-hg.md.sig"
 expect "a hold from a name never pinned, with a junk signature, doesn't count" 0 "e#1 released by k3" as k1 holds "e#1" --version v1
