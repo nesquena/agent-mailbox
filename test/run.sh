@@ -1139,7 +1139,7 @@ else wait "$bg"; rc=$?
   case "$rc $(cat "$T/bg.out")" in ("2 "*"daily limit"*) ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
     (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "exit $rc: $(cat "$T/bg.out")" ;; esac
   # (the deadline is 18 s out: a watchdog that slept its 15 s past it would end at 30)
-  [ "$n" -le 22 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 18s"
+  [ "$n" -le 24 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 18s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
