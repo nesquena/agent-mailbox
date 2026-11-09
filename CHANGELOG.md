@@ -232,6 +232,8 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
+  break (#83).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
@@ -267,6 +269,8 @@ First version.
   isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
   name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
   none (#76).
+- **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
+  names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
 - **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
   it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
   was typed in (#78).

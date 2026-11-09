@@ -285,8 +285,9 @@ active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = act
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
+# (names are listed one per line, so a name with a line break in it is skipped)
 inbox_files() { [ -d "$M/inbox/$1" ] || return 0
-  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' | sort | while IFS= read -r p; do
+  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" | sort | while IFS= read -r p; do
     basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done; }
 # no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
 # so a link a writer plants in a shared store can't redirect writes outside it
@@ -741,7 +742,9 @@ holds)
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
-  [ -z "$item" ] || records=$(echo "$records" | awk -v i="$item" '$3 == i')
+  # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
+  # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
+  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, and two releases naming different
@@ -750,18 +753,18 @@ holds)
       if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
       if ($1 < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
-      if (kind[k] == "release" && $4 != v[k]) { kind[k] = "conflict"; last[k] = $1 " conflict " $3 " " v[k] "," $4 " " $5 " " $6 " " $7 } }
+      if (kind[k] == "release" && ($4 "") != (v[k] "")) { kind[k] = "conflict"; last[k] = $1 " conflict " $3 " " v[k] "," $4 " " $5 " " $6 " " $7 } }
     END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
   if [ -z "$version" ]; then
     [ -n "$latest" ] && echo "$latest" || echo "no holds or releases recorded in mail to $ME${item:+ for $item}"
     exit 0
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
-  echo "$latest" | awk -v want="$version" '
+  echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
-    $4 != want { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
+    ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
     END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true makes holds tamper-proof" > "/dev/stderr"
           exit bad ? 5 : 0 }' ;;
