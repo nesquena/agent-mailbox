@@ -38,7 +38,8 @@ time this reader first pinned it. Concretely:
   `~/.ssh` or the CLI's config or state folder (as named, or at any link on the way to it), the CLI's config file or
   signing key, a path it can't follow to the end (a name holding a newline, or folder links nested more than 8
   deep), and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or
-  a PuTTY key's header or trailer). It's a deny-list of the obvious cases, not a guarantee.
+  a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the obvious cases, not a
+  guarantee.
 - **Strict stores:** a store that gates real actions (merges, deploys) should set `require_signatures: true`. In
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
