@@ -328,7 +328,7 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
       export REAL_GIT GITLOG PATH; as "$@"); }
     rm -f "$T/gitlog"; as np setup --store "$STORE" --name np >/dev/null
     gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
-    # every logged call, but the CLI's own rev-parse --local-env-vars, which runs before the adapter's git
+    # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
     calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
     for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
     bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
