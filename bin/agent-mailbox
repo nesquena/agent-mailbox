@@ -801,12 +801,14 @@ doctor)
       if active "$ME"; then echo ok
       elif [ -f "$(record "$ME")" ]; then
         rk=$(field key "$(record "$ME")"); mk=""; [ -z "$rk" ] || [ ! -f "$KEY" ] || mk=$(own_pub)
-        if [ -n "$rk" ] && [ -n "$mk" ]; then [ "$rk" = "$mk" ] && echo mine || echo other; else echo retired; fi
+        if [ -n "$rk" ] && [ -n "$mk" ]; then [ "$rk" = "$mk" ] && echo mine || echo other
+        elif [ -n "$rk" ] && [ -f "$KEY" ]; then echo nopub; else echo retired; fi
       fi ) in
     (ok) echo "ok   $ME is registered and active" ;;
     (mine) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
     (other) echo "FAIL $ME is registered and active: it's another agent's retired name here (its key isn't yours); pick another name"; ok=1 ;;
     (retired) echo "FAIL $ME is registered and active: it's retired here: if it's yours, run update --status active to come back; if not, pick another name"; ok=1 ;;
+    (nopub) echo "FAIL $ME is registered and active: it's retired here: if it's yours, restore your key's public half ('ssh-keygen -y -f $KEY > $KEY.pub'), then run update --status active; if not, pick another name"; ok=1 ;;
     (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
   esac
   [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
