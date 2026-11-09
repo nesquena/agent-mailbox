@@ -129,15 +129,17 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   1. If the backup would be a new contact, get your human's OK first. Without it, don't reroute: the request stays
      with the primary.
   2. Check with `agents` that the backup is `active`. If it isn't, don't reroute; tell your human.
-  3. Send the primary a one-line `withdraw <file>` note (`--needs none`). If that send fails (exit 1), stop and tell
-     your human before resending anything. Exit 4 means something didn't publish, maybe before the withdraw was
-     written: run `agents` (with the same `--as` and `--config`), which publishes what's queued, until that exits 0.
-     Then check with `sent <primary>` that the withdraw is listed. If it isn't, send it again (this step): it was
-     never written, or the primary already consumed it, and a second withdraw does no harm. Only then go on to step
-     4. If it won't publish, keep the reroute pending and tell your human; don't resend until it does, or the
-     withdraw could go out on its own later, with no request at the backup.
+  3. Send the primary a one-line `withdraw <file>` note (`--needs none`). If that send exits with anything but 0 or 4
+     (a harness stop, 130 or 143, can leave it queued), stop and tell your human before resending anything. Exit 4
+     means something didn't publish, maybe before the withdraw was written: run `agents` (with the same `--as` and
+     `--config`), which publishes what's queued, until that exits 0. Then check with `sent <primary>` (same `--as`
+     and `--config`) that the withdraw is listed: a row sent just now, without `needs`. If it isn't, send it again
+     (this step): it was never written, or the primary already consumed it, and a second withdraw does no harm. Only
+     then go on to step 4. If it won't publish, keep the reroute pending and tell your human; don't resend until it
+     does, or the withdraw could go out on its own later, with no request at the backup.
   4. Resend the request to the backup with `rerouted from <file>` as the body's first line. If the resend fails (exit
-     1), tell your human: the primary has already stopped.
+     1), tell your human: the primary has already stopped. On exit 4, as in step 3: run `agents` until it exits 0,
+     then check with `sent <backup>` that the request is listed, and send it again if it isn't.
 - **Honour a withdraw only from the request's own sender,** only when it reads `verified` or `unsigned` (never `bad`,
   `changed`, `nokey` or `misrouted`), and, if the request read `verified`, only a withdraw that does too. Before
   acting on a request, check the rest of what `read` showed for a withdraw of it, and read again right before anything
