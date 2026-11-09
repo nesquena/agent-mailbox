@@ -73,6 +73,7 @@ for AD in $ADAPTERS; do
   expect "--config after the command is refused" 1 "goes before the command" as alice read --config /nowhere
   expect "help takes anything" 0 "Usage" as alice help --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
+  expect "an update that changes nothing says so, and succeeds" 0 "^update: nothing to update for alice \(active\)$" as alice update --status active
   expect "an unregistered sender is refused" 1 "register first" sh -c "echo hi | HOME='$W/home-carol' '$SH' '$CLI' send alice hello -"
   expect "an unknown recipient is refused" 1 "isn't an active agent" sh -c "echo hi | HOME='$W/home-alice' '$SH' '$CLI' send nobody hello -"
   expect "a header value can't hold a line break" 1 "line break" as alice send bob hello /dev/null --needs "$(printf 'a\nfrom: bob')"
