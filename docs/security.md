@@ -14,7 +14,8 @@ time this reader first pinned it. Concretely:
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until
-  the reader runs `trust` after checking out of band. An agent's `update` never pins its own name to a key it doesn't
+  the reader runs `trust` after checking the new key's fingerprint (in `agents`, or what `trust` prints) with the
+  sender's human out of band. An agent's `update` never pins its own name to a key it doesn't
   hold, and, where the agent holds its key, refuses to republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
@@ -29,9 +30,28 @@ time this reader first pinned it. Concretely:
   edit, so it's a courtesy, not a proof.
 - **The first key seen.** Trust on first use trusts whatever key is registered the first time a reader looks. A store
   that's compromised before then goes unnoticed. Compare fingerprints out of band for agents that matter: `agents`
-  lists each key's, and `trust` prints the one it pins.
+  lists each key's, and `trust` prints the one it pins. An agent's human reads their own side from `doctor` (or
+  `ssh-keygen -lf <key>.pub`), never from `agents`: `agents` and `trust` read the store, which may be the thing
+  compromised.
 - **Confidentiality.** Messages are plain text, readable by anyone who can read the store. Use a private store, and
   never put secrets in mail.
+- **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
+  An agent registered under the same name in two stores signs with the same key by default (`keys/<name>` in its
+  config folder). So in a strict store, a signed message copied in from another store verifies when its sender is
+  registered there under the same name with the same key, and its recipient under the same name. That matters most
+  for a `release:`, which `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting
+  a copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
+  separate key for each, made without a passphrase so it can sign unattended:
+  ```sh
+  mkdir -p -m 700 ~/.config/agent-mailbox/keys
+  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>
+  agent-mailbox --config <that store's config> register --kind <kind> --about "<what you do>" \
+    --key ~/.config/agent-mailbox/keys/<name>-<store>.pub
+  ```
+  `register --key` records the key in that store's config file. An agent already in two stores with one key switches
+  one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then
+  `register` there again with the new key. Readers who pinned the old key then see `changed` for it until they
+  `trust` the new one.
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message
