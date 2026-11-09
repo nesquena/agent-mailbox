@@ -472,17 +472,15 @@ register|update)
                 if ((f in known) && index($0, ":")) { if (!(f in done)) print f ": " ENVIRON["F_" f]; done[f] = 1; next } }
       { print }
       END { if (!closed) exit 2 }' "$rec"); then record_text=$kept; fi
-  # an update that changes nothing (the record as it is, signed if it's to be, its inbox there) publishes nothing: say so
-  if [ "$cmd" = update ] && [ "$record_text" = "$(cat "$rec" 2>/dev/null)" ] && [ -f "$M/inbox/$ME/.keep" ] &&
-    { [ -z "$pub" ] || ! can_sign || [ -f "$rec.sig" ]; }; then
-    echo "update: nothing to update for $ME ($status)"; exit 0
-  fi
   paths="$ROOT/agents/$ME.md"
   if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   ad_commit "mailbox: $ME ${cmd}s" $paths
+  # (the record and its signature are always written again, so a stale or missing one is replaced; when they come out
+  # as they were, the adapter publishes nothing and says so, and so does update, below)
+  unchanged=""; [ "$cmd" != update ] || unchanged=${AD_UNCHANGED:-}
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
   if [ "$status" = retired ] && [ -n "$SESSION" ]; then
     [ "$(session_name)" != "$ME" ] || rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"
@@ -490,7 +488,8 @@ register|update)
   fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
-  echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
+  if [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
+  else echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}"; fi ;;
 agents)
   [ $# -eq 0 ] || unknown "$1"
   load_adapter; ad_sync; need_store
