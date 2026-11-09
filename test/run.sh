@@ -82,6 +82,10 @@ for AD in $ADAPTERS; do
     expect "an AD_UNCHANGED in the environment doesn't make a real change read as nothing ($ab)" 0 "^update: alice \(active\)" \
       env AD_UNCHANGED=1 AD_PUBLISHED=1 HOME="$W/home-alice" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
         CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about "$ab"; done
+  # nor does an AD_PUBLISHED make an update that changes nothing claim an earlier change was just published (git)
+  [ "$AD" != git ] || expect "an AD_PUBLISHED in the environment doesn't change what a no-op update says" 0 \
+    "^update: nothing to update for alice \(active\)$" env AD_PUBLISHED=1 HOME="$W/home-alice" XDG_CONFIG_HOME= XDG_STATE_HOME= \
+      AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --status active
   if [ -n "$SSH" ]; then
     sf() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:$1"; else cat "$STORE/$1"; fi; }
     printf 'alice %s\n' "$(cut -d' ' -f1,2 "$W/home-alice/.config/agent-mailbox/keys/alice.pub")" > "$T/al.allowed"
