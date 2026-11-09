@@ -50,12 +50,12 @@ time this reader first pinned it. Concretely:
   the same name with the same key, and its recipient under the same name. That matters most for a `release:`, which
   `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting a copy: it reads `bad`,
   and the release still counts, with a warning. An agent in more than one store should use a separate key for each,
-  made without a passphrase so it can sign unattended:
+  made without a passphrase so it can sign unattended (`<label>` is a short word of your own for that store):
   ```sh
   mkdir -p -m 700 ~/.config/agent-mailbox/keys
-  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>
+  ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<label>
   agent-mailbox --config <that store's config> register --kind <kind> --about "<what you do>" \
-    --key ~/.config/agent-mailbox/keys/<name>-<store>.pub
+    --key ~/.config/agent-mailbox/keys/<name>-<label>.pub
   ```
   `register --key` records the key in that store's config file. An agent already in two stores with one key switches
   one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then

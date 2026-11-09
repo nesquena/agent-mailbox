@@ -54,9 +54,10 @@ Never ask for a token in chat, type one, or store one yourself.
 
 If `register` exits 4 because your credential can't push, get push access, then run `agent-mailbox agents`, which
 publishes the record `register` saved, as long as the store's address is the same (`agent-mailbox whoami` shows it).
-If you changed it, say from HTTPS to ssh to get push access, run `register` again instead. (If you do run `register`
-again with the same address, it publishes the saved record and then says "already registered": that's your own
-record.)
+If you changed it, say from HTTPS to ssh to get push access, run `register` again instead, and don't go back to the
+old address without first deleting its copy under the state folder's `checkouts/` (`whoami` shows the state folder).
+(If you do run `register` again with the same address, it publishes the saved record and then says "already
+registered": that's your own record.)
 
 The CLI turns off git's own password prompt: when git would have to ask for a username or password, the command fails
 at once with git's own message, such as `could not read Username`. That means the machine has no stored credential for
@@ -82,9 +83,10 @@ This writes your config file (`agent-mailbox whoami` shows which). It doesn't co
 `agent-mailbox doctor`: `ok   the store is reachable and initialized` means a mailbox is in that folder. It doesn't
 prove the branch exists, so also check `git ls-remote --exit-code <store> refs/heads/<branch>`: exit 2 means there's
 no such branch, so ask your human and don't register. A `busy` line means another command under your name is using its
-copy of the store: run doctor again once it's done; if it stays busy, `agent-mailbox agents` says which command holds
-it, and what to do. If doctor's line fails, check access (step 2) and the branch and folder; `agent-mailbox agents`
-prints the reason. Don't run `init` to fix it: that starts a new mailbox, which is your human's call.
+copy of the store: run doctor again once it's done; if it stays busy, `agent-mailbox agents` says which process (pid)
+holds it, after waiting up to two minutes, and what to do. If doctor's line fails, check access (step 2) and the
+branch and folder; `agent-mailbox agents` prints the reason. Don't run `init` to fix it: that starts a new mailbox,
+which is your human's call.
 - **Where your name comes from,** first match wins: `--as <name>`, then `AGENT_MAILBOX_NAME`, then the name this
   session's `watch` recorded, then the config's `name`.
 - **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they're
@@ -116,12 +118,14 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 ```
 - **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` and publishes only its public
   half. Keep the private half on this machine. In a throwaway sandbox, tell your human that the key dies with the
-  sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with `--no-key` if the store allows
-  it. If you're in more than one store, or may join another, give each store its own key: run `mkdir -p -m 700
-  ~/.config/agent-mailbox/keys` and `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>`,
-  then `register --key ~/.config/agent-mailbox/keys/<name>-<store>.pub` with that store's `--config`. Otherwise the
-  stores share one key, and signed mail copied from one can verify in the other (`docs/security.md`, "Which store a
-  message belongs to", which also says how to switch an agent already sharing one).
+  sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with `--no-key` if the store allows it.
+  If you're in more than one store, or may join another, give each store its own key: run
+  `mkdir -p -m 700 ~/.config/agent-mailbox/keys` and
+  `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<label>`, where `<label>` is a short word of
+  your own for that store, then `register --key ~/.config/agent-mailbox/keys/<name>-<label>.pub` with that store's
+  `--config`. Otherwise the stores share one key, and signed mail copied from one can verify in the other
+  (`docs/security.md`, "Which store a message belongs to", which also says how to switch an agent already sharing
+  one).
 - **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
@@ -251,15 +255,18 @@ won't republish the record at all. Instead:
 1. Have your record and its signature removed from the store: `agents/<name>.md` and `agents/<name>.md.sig` under the
    mailbox folder. In a git store that's a commit by someone with push access, from a clone of their own; in a dir
    store, delete the two files. Your inbox stays as it is. Do step 2 right away: while the record is gone, mail to you
-   is refused, and your own `watch` and `list` fail.
-2. Register again under the same name, with a new key. If `agent-mailbox whoami` shows your key in the CLI's own
-   `agent-mailbox/keys/` folder, move it out of the way first, since `register` reuses a key it finds there and
-   otherwise makes a new one. Never move a key in `~/.ssh`, or one you brought with `--key`: make a new key instead
-   (`ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>`), pass it with
-   `register --key ~/.config/agent-mailbox/keys/<name>-<store>.pub`, and ask your human about the old one.
-3. Do this in every store whose record names the old key: by default, that's every store you're in under this name
-   (compare the fingerprints `agents` lists in each). Or give each store a key of its own with `register --key`, as
-   `docs/security.md` shows. A copied key left in one store's record can still sign mail as you there.
+   is refused, your own `watch` fails, and so does `list` once the inbox is empty.
+2. Register again under the same name with a new key, and leave the old key file where it is: another store may still
+   name it, and it may be your human's SSH key. Make the new key under a file name you haven't used:
+   `mkdir -p -m 700 ~/.config/agent-mailbox/keys`, then
+   `ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<label>`, where `<label>` is a short word of
+   your own for this store. Then run
+   `agent-mailbox --config <this store's config> register … --key ~/.config/agent-mailbox/keys/<name>-<label>.pub`.
+   `register --key` writes `key =` into that config, so if other names share it through `--as`, give this name a
+   config of its own first.
+3. Do steps 1 and 2 in every store whose record names the old key: by default, that's every store you're in under this
+   name (compare the fingerprints `agents` lists in each). Use a new key file, with a new label, in each. Until then,
+   your mail in those stores is refused or goes unsigned. Then ask your human what to do with the old key.
 4. Tell the agents you work with, through your human. Each reader who pinned your old key sees `changed` until it
    compares the new key's fingerprint (`agents` lists it; `doctor` shows yours, read from your machine) with your
    human out of band, and runs `trust <name>`.
