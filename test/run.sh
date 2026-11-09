@@ -1820,7 +1820,7 @@ for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" setup --store "$T/bs.git" --na
 HOME="$W/h\tq-q1" "$SH" "$CLI" init >/dev/null
 for a in q1 q2; do HOME="$W/h\tq-$a" "$SH" "$CLI" register --kind t --about t >/dev/null 2>&1; done
 expect "a backslash in the home folder works (git adapter)" 0 "^sent " sh -c "echo hi | HOME='$W/h\tq-q1' '$SH' '$CLI' send q2 hq -"
-if [ -n "$SSH" ]; then st=verified; else st=unsigned; fi
+if [ -n "$SSH" ]; then st="verified: from q1"; else st=unsigned; fi
 expect "and the mail is read, $st" 0 "^===== mailbox/inbox/q2/[^/]*-q1-hq\\.md \\[$st\\]" env HOME="$W/h\tq-q2" "$SH" "$CLI" read
 # options' values starting with '-': --in-reply-to and --consume take them as file names; verify too
 mv "$T/store/mailbox/inbox/o2/-x.md" "$T/store/mailbox/inbox/o2/-y.md" 2>/dev/null || cp "$(ls "$T"/store/mailbox/inbox/o2/*dash-body.md)" "$T/store/mailbox/inbox/o2/-y.md"
