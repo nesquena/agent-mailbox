@@ -466,7 +466,7 @@ case " $ADAPTERS " in *" git "*)
     as ir1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
     as ir2 init --title winner >/dev/null; tip=$(git --git-dir="$T/store.git" rev-parse main)
     ck=$(ls -d "$W/home-ir1/.local/state/agent-mailbox/checkouts/"*-ir1)
-    expect "the loser's next command fails, naming the clone to remove" 1 "history doesn't match the store's .*remove .*-ir1 and run this again" as ir1 agents
+    expect "the loser's next command fails, naming the clone to remove" 1 "history doesn't match the store's .*remove .*-ir1 \(its 1 unpublished commit\(s\) go with it: send again what they held\) and run this again" as ir1 agents
     [ "$(git --git-dir="$T/store.git" rev-parse main)" = "$tip" ] && ok "and leaves the store as it was" ||
       no "a clone whose history the store doesn't share changed the store" "$(git --git-dir="$T/store.git" log --format=%s main)"
     rm -rf "$ck"
