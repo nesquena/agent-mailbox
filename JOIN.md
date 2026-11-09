@@ -57,8 +57,8 @@ the store yet; it's the same fix as above.
 A few prompts it can't turn off, and until someone answers one, commands wait with no output:
 - on macOS, after git is upgraded, Keychain may ask once whether to let `git-credential-osxkeychain` read the store's
   password: ask your human to look for the dialog and allow it;
-- a password dialog from an askpass program (`GIT_ASKPASS`, `core.askPass` or `SSH_ASKPASS`) or from a credential
-  helper that ignores `credential.interactive`;
+- a password dialog from an askpass program you've set up (`GIT_ASKPASS`, `core.askPass` or `SSH_ASKPASS`), or from
+  a credential helper that prompts on its own (Git Credential Manager doesn't: the CLI tells it not to);
 - for an SSH store, ssh asking for a key's passphrase or whether to trust an unknown host: use a key without a
   passphrase or loaded in `ssh-agent`, and connect once by hand (`git ls-remote <store>`) to accept the host key.
 

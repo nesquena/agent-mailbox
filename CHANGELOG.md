@@ -220,9 +220,9 @@ First version.
   the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
   8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
   (#61).
-- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0` and
-  `credential.interactive=false`, so a store that needs a credential the machine doesn't have fails at once with
-  git's own message, instead of waiting on a prompt that an agent running in the background can't answer.
-  Credential helpers that honor that setting, such as Git Credential Manager, don't prompt either. Some prompts still
-  wait until someone answers, and `JOIN.md` step 2 lists them: a macOS Keychain dialog after a git upgrade, an askpass
-  program's dialog, and ssh's passphrase and host-key prompts for an SSH store. (#64)
+- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
+  Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
+  at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
+  answer. An askpass program that prints a token keeps working. Some prompts still wait until someone answers, and
+  `JOIN.md` step 2 lists them: an askpass program's dialog, a macOS Keychain dialog after a git upgrade, and ssh's
+  passphrase and host-key prompts for an SSH store (#64).

@@ -21,14 +21,14 @@
 #   contacted.
 
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-# git's own credential prompts are off: it doesn't ask on the terminal (GIT_TERMINAL_PROMPT=0), and asks credential
-# helpers that honor it, such as Git Credential Manager, not to either (credential.interactive, git 2.46 and later;
-# older git ignores it), so a credential that needs one fails at once with git's own message.
-# ceiling: other prompts still wait until someone answers: a helper that ignores both (after a git upgrade, macOS's
-# git-credential-osxkeychain can make Keychain ask once to let the new helper in); an askpass program (GIT_ASKPASS,
-# core.askPass or SSH_ASKPASS, which git runs before the terminal; left on, since many just print a token); and, for an
-# SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
-ad_g() { GIT_TERMINAL_PROMPT=0 git -c credential.interactive=false -c submodule.recurse=false -c core.hooksPath=/dev/null \
+# git's own terminal prompt is off (GIT_TERMINAL_PROMPT=0), and so is Git Credential Manager's (GCM_INTERACTIVE=never),
+# so a credential that needs one fails at once with git's own message. An askpass program stays on (GIT_ASKPASS,
+# core.askPass, SSH_ASKPASS): many just print a token. credential.interactive=false isn't set: from git 2.47 it turns
+# askpass off too.
+# ceiling: other prompts still wait until someone answers: an askpass program that opens a dialog; a credential helper
+# that prompts on its own (after a git upgrade, macOS's git-credential-osxkeychain can make Keychain ask once to let the
+# new helper in); and, for an SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
+ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -c submodule.recurse=false -c core.hooksPath=/dev/null \
   -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
