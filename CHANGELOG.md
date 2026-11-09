@@ -229,6 +229,9 @@ First version.
   ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
   with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
   (#65).
+- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
+  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
+  waits for the next second (#66).
 - **Fix:** with the git adapter, the agent whose `init` loses a race to another agent's can carry on. Its clone kept
   its own unpublished init, and every later command failed with "can't update from the store" until the clone was
   deleted by hand. That init is now dropped (anything committed after it is kept), and an `init` that loses the race
