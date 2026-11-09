@@ -13,8 +13,10 @@ Choose one with `setup --adapter <name>`, or `AGENT_MAILBOX_ADAPTER`.
 ## The contract
 An adapter is a POSIX sh file, `adapters/<name>.sh`, that the CLI sources. It sees these variables: `STORE` (the
 configured address), `ROOT` (the mailbox's path inside the store), `BRANCH`, `STATE` (a private directory it may
-use), `STORE_ID` (a short hash of the store, root and branch) and `ME` (the agent's name, possibly empty). It can
-call the CLI's `die` and `warn`. It defines:
+use), `STORE_ID` (a short hash of the store, root and branch), `ME` (the agent's name, possibly empty) and `AD_INIT`
+(set only while `init` publishes its own first commit: the git adapter drops that commit when another agent's init
+has taken the folder meanwhile; an adapter without races can ignore it). It can call the CLI's `die` and `warn`. It
+defines:
 
 | Function | Must |
 |---|---|
