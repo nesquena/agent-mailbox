@@ -37,5 +37,5 @@ keeps history.
 Don't open an issue for it: see [`SECURITY.md`](SECURITY.md).
 
 ## Proposing larger work
-The roadmap (`docs/roadmap.md`) lists what's planned, including the Padrino web UI. Open an issue to claim an item
-or propose a design before building, so two people don't build the same thing.
+What's planned is in the issues labelled `enhancement`, including the Padrino web UI (#90). Comment on one to claim
+it, or open an issue to propose a design before building, so two people don't build the same thing.

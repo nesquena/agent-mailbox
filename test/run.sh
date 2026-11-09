@@ -2237,6 +2237,10 @@ else sk "a file in ~/.ssh named in another case is refused (this file system min
 # where a link kept in ~/.ssh leads, named directly: the file one leads to, and a file under the folder one leads to
 refused "or the file a link in ~/.ssh leads to, named directly" "$T/ssh-config"
 ln "$T/ssh-config" "$T/hl-ssh-config" && refused "or a hard link to the file a link in ~/.ssh leads to" "$T/hl-ssh-config"
+# a link to / in ~/.ssh leads to every file, so it's skipped: an ordinary file reached through a link to / still sends
+ln -s / "$H/.ssh/root"; ln -s / "$T/rootln"; echo ok > "$T/ok.md"
+expect "a link to / in ~/.ssh doesn't refuse an ordinary file reached through a link to /" 0 "^sent " as sec1 send sec2 rootok "$T/rootln$T/ok.md"
+rm -f "$H/.ssh/root" "$T/rootln"
 refused "or a file under the folder a link in ~/.ssh leads to, named directly" "$T/dotfiles/config.d/work"
 # at any hop of the walk: a link inside that folder, named there; and a folder link written with a trailing / that
 # leads through another link
@@ -2265,7 +2269,9 @@ refused "or a file in its state folder" "$S/note"
 refused "or one named with a leading //" "/$H/.ssh/id_ed25519"
 # only where /dev/stdin is a link through /proc (Linux) can send see which file was redirected in
 case $(readlink /dev/stdin 2>/dev/null) in
-  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI" ;;
+  (/proc/*) expect "or one redirected to stdin" 1 "refusing to send" in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir - < "$1/.ssh/id_ed25519"' x "$H" "$SH" "$CLI"
+    expect "or a hard link to a ~/.ssh link's target, redirected to stdin" 1 "refusing to send" \
+      in_dir "$T" sh -c 'HOME="$1" "$2" "$3" send sec2 sec-redir-hl - < "$4"' x "$H" "$SH" "$CLI" "$T/hl-ssh-config" ;;
   (*) sk "or one redirected to stdin (/dev/stdin isn't a link through /proc here)" ;;
 esac
 for f in own own.pub; do

@@ -33,11 +33,12 @@ time this reader first pinned it. Concretely:
   never put secrets in mail.
 - **Which store a message belongs to.** A signature covers the message's bytes, and nothing in them names the store.
   An agent registered under the same name in two stores signs with the same key by default (`keys/<name>` in its
-  config folder). So in a strict store, a signed message copied in from another store verifies when its sender is
-  registered there under the same name with the same key, and its recipient under the same name. That matters most
-  for a `release:`, which `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting
-  a copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
-  separate key for each, made without a passphrase so it can sign unattended:
+  config folder: `agent-mailbox/keys/` under `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use). So
+  in a strict store, a signed message copied in from another store verifies when its sender is registered there under
+  the same name with the same key, and its recipient under the same name. That matters most for a `release:`, which
+  `holds` counts. In a store that isn't strict, a separate key doesn't stop `holds` counting a copy: it reads `bad`,
+  and the release still counts, with a warning. An agent in more than one store should use a separate key for each,
+  made without a passphrase so it can sign unattended:
   ```sh
   mkdir -p -m 700 ~/.config/agent-mailbox/keys
   ssh-keygen -q -t ed25519 -N '' -f ~/.config/agent-mailbox/keys/<name>-<store>
@@ -47,7 +48,8 @@ time this reader first pinned it. Concretely:
   `register --key` records the key in that store's config file. An agent already in two stores with one key switches
   one of them: remove its record and the record's `.sig` from that store (`update` can't change a key), then
   `register` there again with the new key. Readers who pinned the old key then see `changed` for it until they
-  `trust` the new one.
+  `trust` the new one, and in a strict store, after `trust`, its holds signed with the old key stop counting: once
+  registered with the new key, re-send any hold it still means, before readers trust it.
 
 ## Operating rules
 - **Private keys:** keep them on the agent's machine, or in its host's secret store, never in the store, a message or
@@ -59,9 +61,16 @@ time this reader first pinned it. Concretely:
   that file, hard links included; a path it can't follow to the end (a name holding a newline, or folder links nested
   more than 8 deep); and any body holding a line of a private-key block (its `-----BEGIN ... PRIVATE KEY` or
   `-----END` line, or a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line). It's a deny-list of the
-  obvious cases, not a guarantee: for files inside a protected folder it follows symlinks, not hard links or bind
-  mounts, and on macOS and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path, where
-  only the private-key check applies.
+  obvious cases, not a guarantee: it catches a mistake, or mail asking an agent to send one of those files, not any
+  other secret (a cloud credentials file or a `.env` file passes), and not another user of the same machine who can
+  write to the folder a body is in, and so change the file between `send`'s check and its read. For files inside a
+  protected folder, or under a folder a link leads to, it follows symlinks, not hard links (or a hard link to one) or
+  bind mounts; and on macOS and BSD it can't see which file is behind a redirected stdin or a `/dev/fd/<n>` path,
+  where only the private-key check applies.
+- **Keys in a synced folder:** the CLI makes keys in its config folder (`agent-mailbox/keys/` under
+  `$XDG_CONFIG_HOME`, or `~/.config`, whichever config file you use), as do the per-store keys above. If that folder
+  is synced or kept in a repository (Dropbox, iCloud, a dotfiles repository), the private key goes wherever it does:
+  make the key in a folder that isn't, and pass its `.pub` to `register --key`, with the private key beside it.
 - **Strict stores:** a store that gates real actions (merges, deploys) should set `require_signatures: true`. In
   such a store, unsigned or unverified mail is ignored for holds. In a store that isn't strict, anyone with write
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
@@ -82,6 +91,19 @@ time this reader first pinned it. Concretely:
   inbox, so renames, rewrites and merges can't hide a hold. A force-push that rewrites the store's history can. For a
   strict store, protect the mailbox branch against force-pushes and deletion (on GitHub, a branch ruleset). The dir
   adapter keeps no history, so `holds` there sees only the mail still in the inbox.
+- **Anyone who can push can stop the mailbox.** With the git adapter, a commit whose files git refuses to check out
+  makes commands fail, for every agent whose system refuses the path, until the store's branch no longer holds it:
+  "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
+  doesn't. Signatures don't help: pushing needs no key. To recover, someone with push access removes the entry in a
+  new commit on top of the branch, from a bare clone of the store, without checking it out. Check what the commit
+  removes before pushing it: only the files git refuses, and none of the mailbox's own files (messages, registry
+  records, `store.md`). Never paste the entry's name into a command: whoever pushed it chose it. If you're unsure how to
+  do this safely, ask in an issue, and leave the branch as it is until then. If the push is refused because the branch
+  has moved since the clone (agents it doesn't affect go on sending), fetch it (`git fetch origin <branch>:<branch>`; a
+  bare clone has no fetch refspec) and start again.
+  Don't move the branch back instead: agents whose systems took the commit would publish it again. Once the branch no
+  longer holds it, every agent's next command works; if an agent's commands still fail, remove its clone
+  (`checkouts/<id>-<name>` in its state folder). Give push access only to agents and people you'd trust with that.
 - **The store's git settings don't apply.** With the git adapter, a `.gitattributes` or `.lfsconfig` committed to
   the store can't change how the CLI's own clone checks out or merges files (line endings, filters such as Git LFS,
   merge drivers), and that clone never recurses into submodules or runs git hooks, so a store writer can't alter mail
