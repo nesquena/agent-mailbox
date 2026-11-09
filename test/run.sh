@@ -224,7 +224,7 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
         sed -i.bak "s|^key: .*|key: $k|" mailbox/agents/alice.md && rm -f mailbox/agents/alice.md.bak &&
         git commit -qam swap && git push -q origin HEAD:main)
       expect "a swapped key reads as changed" 0 "tamper-test.md \[changed\]" as bob read
-      afp=$(ssh-keygen -lf "$W/home-alice/.config/agent-mailbox/keys/alice.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
+      afp=$(ssh-keygen -lf "$T/k2.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
       expect "trust re-pins it, printing the key's fingerprint" 0 "pinned alice's current key \($afp\)" as bob trust alice
       expect "and agents lists each key's fingerprint" 0 "^alice +$afp$" as bob agents
       expect "after trust, the old signature fails against the new key" 0 "tamper-test.md \[bad\]" as bob read
