@@ -11,7 +11,7 @@ SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
-  AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT
+  AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
@@ -340,13 +340,17 @@ notes.md"'
       bfp=$(ssh-keygen -lf "$W/home-bob/.config/agent-mailbox/keys/bob.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
       expect "doctor shows this agent's own key's fingerprint, read from this machine" 0 "^ok   signing key at .* \($bfp\)$" as bob doctor
       # and so it does after bob's record in the store is given another key: the fingerprint is the local key's
-      (cd "$T/swap" && git pull -q --rebase origin main && ssh-keygen -q -t ed25519 -N '' -f "$T/k3" &&
+      # (only a swap that landed is tested, then reverted, and a revert that fails says so)
+      if (cd "$T/swap" && git pull -q --rebase origin main && ssh-keygen -q -t ed25519 -N '' -f "$T/k3" &&
         sed -i.bak "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/k3.pub")|" mailbox/agents/bob.md && rm -f mailbox/agents/bob.md.bak &&
-        git commit -qam "swap bob" && git push -q origin HEAD:main)
-      printf '%s\n' "$(as bob doctor 2>&1)" | grep -Eq "signing key at .* \($bfp\)" &&
-        ok "with bob's record swapped in the store, doctor still shows the local key's fingerprint" ||
-        no "with bob's record swapped in the store, doctor still shows the local key's fingerprint" "$(as bob doctor 2>&1)"
-      (cd "$T/swap" && git revert -q --no-edit HEAD && git push -q origin HEAD:main)
+        git commit -qam "swap bob" && git push -q origin HEAD:main); then
+        printf '%s\n' "$(as bob doctor 2>&1)" | grep -Eq "signing key at .* \($bfp\)" &&
+          ok "with bob's record swapped in the store, doctor still shows the local key's fingerprint" ||
+          no "with bob's record swapped in the store, doctor still shows the local key's fingerprint" "$(as bob doctor 2>&1)"
+        (cd "$T/swap" && [ "$(git log -1 --format=%s)" = "swap bob" ] && git revert --no-edit HEAD >/dev/null &&
+          git push -q origin HEAD:main) ||
+          no "bob's swapped record was restored" "$(git --git-dir="$STORE" log -3 --format=%s main)"
+      else no "bob's record could be swapped in the store" "$(git --git-dir="$STORE" log -3 --format=%s main)"; fi
       # a key that looks like one but that ssh-keygen can't read is said so, not left blank
       T2="$W/fpbad-$AD"; mkdir -p "$T2"; for a in fq1 fq2; do as $a setup --store "$T2/s" --adapter dir --name $a >/dev/null; done
       as fq1 init >/dev/null; as fq1 register --kind t --about t >/dev/null 2>&1; as fq2 register --kind t --about t --no-key >/dev/null 2>&1
@@ -2284,7 +2288,7 @@ expect "after which the store's own setting applies" 0 "c#1 released by k3" as k
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
   'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
 gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
-expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*[[:space:]]-G*'
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*--no-textconv[[:space:]]-G*'
 expect "or the walk over every version fails" 1 "can't read this store's full, latest history" gf '*--reverse*'
 expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
