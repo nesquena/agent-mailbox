@@ -232,3 +232,6 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
+  and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
+  dropping both, then signed the result (#72).

@@ -243,6 +243,25 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
     tamper "rm -f mailbox/agents/ka.md mailbox/agents/ka.md.sig $m $m.sig"
     expect "registering again restores the record" 0 "register: ka \(active\), signing key" as ka register --kind t --about t
     expect "then update works" 0 "update: ka \(active\)" as ka update --about back
+    # update keeps what it doesn't manage (PROTOCOL.md section 2): other header lines, and the text below the header
+    printf '%s\n' 'NR == 2 { print "x-example: 1" }' '{ print }' 'END { print "notes below the header" }' > "$T/addx.awk"
+    tamper "awk -f '$T/addx.awk' mailbox/agents/ka.md > ka.tmp && mv ka.tmp mailbox/agents/ka.md"
+    rec_of() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:mailbox/agents/$1"; else cat "$STORE/mailbox/agents/$1"; fi; }
+    expect "update with fields it doesn't manage in the record works" 0 "update: ka \(active\)" as ka update --about kept
+    rec_of ka.md > "$T/ka.rec"
+    grep -qx 'x-example: 1' "$T/ka.rec" && grep -qx 'notes below the header' "$T/ka.rec" && grep -qx 'about: kept' "$T/ka.rec" &&
+      ok "and keeps the record's other header lines and its body" || no "update dropped what it doesn't manage" "$(cat "$T/ka.rec")"
+    if [ -n "$SSH" ]; then
+      rec_of ka.md.sig > "$T/ka.rec.sig"; printf 'ka %s\n' "$(sed -n 's/^key: //p' "$T/ka.rec")" > "$T/ka.allowed"
+      ssh-keygen -Y verify -f "$T/ka.allowed" -I ka -n agent-mailbox -s "$T/ka.rec.sig" < "$T/ka.rec" >/dev/null 2>&1 &&
+        ok "and the record's signature covers them" || no "the updated record's signature doesn't verify"
+    fi
+    # a field update manages appears once: a second copy, such as a key: planted after the agent's own, is dropped
+    printf '%s\n' '/^key: / && !d { print; print "key: ssh-ed25519 AAAAplanted"; d = 1; next }' '{ print }' > "$T/dupkey.awk"
+    tamper "awk -f '$T/dupkey.awk' mailbox/agents/ka.md > ka.tmp && mv ka.tmp mailbox/agents/ka.md"
+    as ka update --about once >/dev/null 2>&1; rec_of ka.md > "$T/ka.rec"
+    [ "$(grep -c '^key:' "$T/ka.rec")" = 1 ] && ! grep -q AAAAplanted "$T/ka.rec" &&
+      ok "and a second copy of a field it manages is dropped, not kept and signed" || no "update kept a planted second key line" "$(cat "$T/ka.rec")"
     # a record left with no key is republished as it is
     tamper "sed -i.bak 's|^key: .*|key: |' mailbox/agents/ka.md && rm -f mailbox/agents/ka.md.bak"
     expect "update republishes a record whose key was removed" 0 "update: ka \(active\)" as ka update --about x
