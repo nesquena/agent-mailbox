@@ -317,6 +317,15 @@ First version.
   stale history into the new mailbox, and others failed with git's own rebase error. An `init` that loses a race for
   one folder, on a new branch or one that already exists, fails saying so, with the winner's title and
   `require_signatures`, instead of exit 4. Mailboxes in other folders of the same branch are published as before (#68).
+- **Fix:** with the git adapter, commands under one name take turns in its clone of the store. Two at once (say, two
+  replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
+  it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it; a
+  lock left by a command that's gone is broken at once; a lock from another machine name (a state folder shared
+  between machines, or this one renamed) is waited for, and the message says which file to delete if nothing is
+  running there; and what a command cut off part-way leaves in the clone is cleared at the next one. `watch` takes its
+  turn only for its first sync, and `doctor` waits a few seconds, then says the store is busy. Adapters gain
+  `ad_unlock` (a no-op for one without a clone). Update every copy of the CLI you run: one from before this doesn't
+  wait its turn (#87).
 - **`send`'s path check is much faster on deep link chains:** it no longer runs `dirname` for every folder of every
   hop, and after a link with a relative target it doesn't walk again the folders it already knows hold no links. A
   chain of 20 links 300 folders deep went from about 29 s to under 1 s (#80).
