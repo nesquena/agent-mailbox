@@ -390,9 +390,9 @@ init)
   ours=$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
     "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
   put "$M/store.md" "$ours"
-  ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"
-  # another agent's init can win the race while this one publishes: the adapter then drops this one, and the store keeps
-  # the winner's settings, which may differ
+  # another agent's init can win the race while this one publishes: AD_INIT lets the git adapter drop this commit, and
+  # only this one, and the store keeps the winner's settings, which may differ
+  AD_INIT=1; ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"; AD_INIT=""
   [ "$(cat "$M/store.md" 2>/dev/null)" = "$ours" ] ||
     die "another agent initialized the mailbox at '$ROOT/' first, so this init was dropped; its settings are in $ROOT/store.md (title: $(field title "$M/store.md" | clean "$CAP"), require_signatures: $(field require_signatures "$M/store.md" | clean "$CAP"))"
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;

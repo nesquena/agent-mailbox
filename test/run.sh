@@ -385,19 +385,23 @@ case " $ADAPTERS " in *" git "*)
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 2
 
-  echo "== git: the agent whose init loses a race to another's can carry on"
+  echo "== git: a clone whose history the store doesn't share fails, saying how to recover"
   # an init left unpublished (the store's folders read-only for its push), then another agent's init wins
   T="$W/initrace"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir1 ir2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
   if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
-    sk "an init left unpublished is dropped once another agent's wins (read-only folders don't stop this user)"
+    sk "a clone holding an unpublished init fails once another agent's wins (read-only folders don't stop this user)"
   else
     as ir1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
-    as ir2 init --title winner >/dev/null
-    expect "the loser's next command drops its unpublished init" 0 "dropping this clone's own unpublished init" as ir1 agents
-    expect "and its clone has the winner's store.md" 0 "^title: winner$" cat "$W/home-ir1/.local/state/agent-mailbox/checkouts/"*-ir1/mailbox/store.md
-    expect "and later commands work" 0 "^register: ir1 " as ir1 register --kind t --about t --no-key
+    as ir2 init --title winner >/dev/null; tip=$(git --git-dir="$T/store.git" rev-parse main)
+    ck=$(ls -d "$W/home-ir1/.local/state/agent-mailbox/checkouts/"*-ir1)
+    expect "the loser's next command fails, naming the clone to remove" 1 "history doesn't match the store's .*remove .*-ir1 and run this again" as ir1 agents
+    [ "$(git --git-dir="$T/store.git" rev-parse main)" = "$tip" ] && ok "and leaves the store as it was" ||
+      no "a clone whose history the store doesn't share changed the store" "$(git --git-dir="$T/store.git" log --format=%s main)"
+    rm -rf "$ck"
+    expect "once the clone is removed, commands work" 0 "^register: ir1 " as ir1 register --kind t --about t --no-key
+    expect "on the winner's mailbox" 0 "^title: winner$" git --git-dir="$T/store.git" show main:mailbox/store.md
   fi
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -409,8 +413,8 @@ case " $ADAPTERS " in *" git "*)
       RACE_CMD="HOME='$W/home-ir4' '$SH' '$CLI' init --title winner" HOME="$W/home-ir3" "$SH" "$CLI" init --title loser
   expect "and the store keeps the winner's settings" 0 "^title: winner$" git --git-dir="$T/store.git" show main:mailbox/store.md
   expect "and the loser's next command works" 0 "NAME" as ir3 agents
-  # a clone that saw the store's branch before it was reset and initialized again is left to fail its rebase, as
-  # before: its old history isn't published into the new mailbox
+  # a clone that saw the store's branch before it was reset and initialized again fails the same way, every time: its
+  # old registrations and mail aren't published into the new mailbox
   T="$W/initreset"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in rs1 rs2 rs3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   echo hi > "$T/msg"; as rs1 init >/dev/null; as rs1 register --kind t --about t --no-key >/dev/null
@@ -418,21 +422,10 @@ case " $ADAPTERS " in *" git "*)
   # the store is reset, and initialized again by an agent with no copy of the old branch (one that had a copy would be
   # told the branch is gone)
   git --git-dir="$T/store.git" update-ref -d refs/heads/main; as rs3 init --title fresh >/dev/null 2>&1
-  expect "a clone that saw a store's old branch doesn't publish it into the new mailbox" 1 "can't update from the store" as rs1 agents
+  expect "a clone that saw a store's old branch fails, naming the clone to remove" 1 "history doesn't match the store's" as rs1 agents
+  expect "and fails again on its next command" 1 "history doesn't match the store's" as rs1 agents
   [ "$(git --git-dir="$T/store.git" log --format=%s main | tr '\n' ' ')" = "mailbox: init " ] &&
     ok "and the new mailbox holds only its own init" || no "a stale clone's history reached the new mailbox" "$(git --git-dir="$T/store.git" log --format=%s main)"
-  # an unpublished init for another mailbox folder on the same branch isn't another agent's: it's published, not dropped
-  T="$W/initroots"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  as ro1 setup --store "$T/store.git" --root a --name ro1 >/dev/null; as ro2 setup --store "$T/store.git" --root b --name ro2 >/dev/null
-  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
-  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
-    sk "an unpublished init in another folder of the branch is published (read-only folders don't stop this user)"
-  else
-    as ro1 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"; as ro2 init >/dev/null
-    expect "an unpublished init in another folder of the branch is published, not dropped" 0 "publishing 1 commit" as ro1 agents
-    [ "$(git --git-dir="$T/store.git" ls-tree -r --name-only main | grep -c 'store\.md$')" = 2 ] &&
-      ok "and both mailboxes are on the branch" || no "a mailbox in another folder was dropped" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
-  fi
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main

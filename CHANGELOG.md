@@ -232,7 +232,8 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
-- **Fix:** with the git adapter, the agent whose `init` loses a race to another agent's can carry on. Its clone kept
-  its own unpublished init, and every later command failed with "can't update from the store" until the clone was
-  deleted by hand. That init is now dropped (anything committed after it is kept), and an `init` that loses the race
-  fails saying so, with the winner's title and `require_signatures`, instead of exit 4 (#68).
+- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share (another agent's `init` won
+  the race with this one's, or the mailbox was re-created) fails saying how to recover: remove the clone it names,
+  and run the command again. Nothing it holds is published into the store. Before, every command failed with git's
+  own rebase error. An `init` that loses the race fails saying so, with the winner's title and
+  `require_signatures`, instead of exit 4 (#68).
