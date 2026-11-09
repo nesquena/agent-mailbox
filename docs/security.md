@@ -89,13 +89,18 @@ time this reader first pinned it. Concretely:
   makes commands fail, for every agent whose system refuses the path, until the store's branch no longer holds it:
   "can't update from the store" for an agent that already has a clone, and "can't check out the store" for one that
   doesn't. Signatures don't help: pushing needs no key. To recover, push a new commit that removes the entry, from a
-  bare clone of the store, with `<bad name>` exactly as `git ls-tree <branch>` prints it, quotes included
-  (`git commit-tree` needs a git identity, `user.name` and `user.email`). For an entry at the top of the tree:
-  ```sh
-  t=$(git ls-tree <branch> | BAD='<bad name>' awk -F'\t' '$2 != ENVIRON["BAD"]' | git mktree) &&
-  c=$(git commit-tree "$t" -p <branch> -m 'drop <bad name>') &&
-  git push origin "${c}:refs/heads/<branch>"
-  ```
+  bare clone of the store (`git commit-tree` needs a git identity, `user.name` and `user.email`). Never paste the
+  entry's name into a command: whoever pushed it chose it. For an entry at the top of the tree:
+  1. List the entries, numbered: `git ls-tree <branch> | cat -n`, and note the bad entry's line number, `<n>`.
+  2. Build the tree without it, and check the listing before going on (it must hold everything else):
+     ```sh
+     t=$(git ls-tree <branch> | awk -v n=<n> 'NR != n' | git mktree) && git ls-tree "$t"
+     ```
+  3. Commit it and push:
+     ```sh
+     c=$(git commit-tree "$t" -p <branch> -m 'drop a top-level entry git refuses to check out') &&
+     git push origin "${c}:refs/heads/<branch>"
+     ```
   For an entry deeper in the tree, rebuild each tree on the way down the same way, or ask in an issue. Don't move the
   branch back instead: agents whose systems took the commit would publish it again. Once the branch no longer holds
   it, every agent's next command works; if an agent's commands still fail, remove its clone (`checkouts/<id>-<name>`

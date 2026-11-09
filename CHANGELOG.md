@@ -237,7 +237,8 @@ First version.
   commit git won't check out, and how to recover; to keep signing keys out of synced folders; where the default key
   lives; and that an agent switching keys re-sends the holds it still means. `JOIN.md` says `git ls-remote` passes a
   read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
-  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too (#86).
+  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup treats a request rerouted to it
+  twice as one request (#86).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
