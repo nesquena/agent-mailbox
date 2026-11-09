@@ -11,7 +11,7 @@
 #                                       create the mailbox layout in an empty store (once per store)
 #   register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]
 #                                       add yourself to the registry; generates a signing key unless --no-key
-#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired]
+#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired [--force]]
 #                                       change your own registry record
 #   agents                              list registered agents
 #   trust <name>                        accept <name>'s current key after it changed (re-pins it)
@@ -393,9 +393,9 @@ init)
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
-  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey=""
+  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey="" force=""
   while [ $# -gt 0 ]; do
-    case "$1" in --no-key) nokey=1; shift; continue ;; esac
+    case "$1" in --no-key) nokey=1; shift; continue ;; --force) [ "$cmd" = update ] || unknown "$1"; force=1; shift; continue ;; esac
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
                  --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
@@ -410,6 +410,15 @@ register|update)
     watchv="${watchv:-$(field watch "$rec")}"; status="${status:-$(field status "$rec")}"
   fi
   case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
+  # an agent retires once its inbox is empty (PROTOCOL.md section 4): mail still waiting would no longer wake it.
+  # --force retires anyway, leaving that mail unread
+  if [ "$cmd" = update ] && [ "$status" = retired ] && [ "$(field status "$rec")" != retired ] && [ -z "$force" ]; then
+    left=$(inbox_files "$ME" | while IFS= read -r p; do basename "$p"; done)
+    if [ -n "$left" ]; then nl=$(printf '%s\n' "$left" | grep -c .)
+      shown=$(printf '%s\n' "$left" | head -n 5 | tr '\n' ' '); [ "$nl" -le 5 ] || shown="$shown(and $((nl - 5)) more) "
+      die "your inbox still holds $nl message(s): $shown- read and consume them first (sending on to another agent, as new mail, any that are its job), or pass --force to retire with them unread"
+    fi
+  fi
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
   pub="" own=""
   if [ "$cmd" = update ]; then

@@ -235,3 +235,7 @@ First version.
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
   and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
   dropping both, then signed the result (#72).
+- **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
+  retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
+  consume it first (sending on, as new mail, any that are another agent's job), or pass `--force` to retire with it unread
+  (#73).
