@@ -406,15 +406,15 @@ case " $ADAPTERS " in *" git "*)
 
   echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
   T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  for a in e1 e2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
-  as e1 init >/dev/null; for a in e1 e2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  for a in xq1 xq2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as xq1 init >/dev/null; for a in xq1 xq2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   echo hi > "$T/m"
-  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" as e1 send e2 first "$T/m"
-  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" as e1 send e2 second "$T/m"
-  rm -f "$T/store.git/hooks/pre-receive"; as e1 agents >/dev/null 2>&1
-  [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/e2 | grep -- '-e1-first\.md$')" ] &&
-    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/e2 | grep -- '-e1-second\.md$')" ] &&
+  expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" as xq1 send xq2 first "$T/m"
+  expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" as xq1 send xq2 second "$T/m"
+  rm -f "$T/store.git/hooks/pre-receive"; as xq1 agents >/dev/null 2>&1
+  [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-first\.md$')" ] &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq2 | grep -- '-xq1-second\.md$')" ] &&
     ok "and it didn't: once the store takes pushes, only the first is there" ||
     no "a command that said it wrote nothing wrote something" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
 
