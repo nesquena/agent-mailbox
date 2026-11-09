@@ -93,8 +93,8 @@ time this reader first pinned it. Concretely:
   entry's name into a command: whoever pushed it chose it. The commands are for sh, bash or zsh. For an entry at the
   top of the tree:
   1. List the entries, numbered, with a `$` at each line's end: `git -c core.quotePath=true ls-tree <branch> | cat -ne`.
-     The bad entry is the one whose name matches what git's error quotes, closing quote included (a name can differ
-     from another only by a trailing space). Note its line number, `<n>`.
+     The bad entry is the one whose name matches the first part of the path git's error quotes, up to the first `/`
+     or the closing quote (a name can differ from another only by a trailing space). Note its line number, `<n>`.
   2. Build the tree without it, and check the listing before going on: it must hold everything but the bad entry,
      which must be gone. Run this step and the next in one shell, since the next uses `$t`.
      ```sh
