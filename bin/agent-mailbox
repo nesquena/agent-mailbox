@@ -317,6 +317,8 @@ rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${
 secret_file() {
   # a path hops can't follow to the end counts as secret: refuse rather than guess
   SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"
+  # (the body as a file, found here: inside the find pipeline below, a body named /dev/stdin would be find's pipe)
+  bf=$(real "$1") || bf=$1
   # the account's own home, from its login name (a name that's safe to expand with ~), when HOME isn't it
   ah=""; an=$(id -un 2>/dev/null) && matches '^[A-Za-z0-9._][A-Za-z0-9._-]*$' "$an" && eval "ah=~$an" &&
     case "$ah" in (/*) [ "$ah" != "${HOME:-}" ] || ah="" ;; (*) ah="" ;; esac
@@ -331,9 +333,10 @@ secret_file() {
     [ "$SF" != "$STATE" ] || continue
     # (a link whose target is the body itself, as a file, by another name, a hard link say, counts by the body's own path)
     lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do
-      if [ -d "$l" ]; then phys "$l"; elif [ "$1" -ef "$l" ]; then real "$1"; else real "$l"; fi; done)
+      if [ -d "$l" ]; then phys "$l"; elif [ "$bf" -ef "$l" ]; then printf '%s\n' "$bf"; else real "$l"; fi; done)
     while IFS= read -r lt; do
-      case "$sd/" in ("$lt"/*) continue ;; esac
+      # (a link to / leads to every file: hops shows a hop that is / itself as //, which it would match)
+      case "$lt" in (/) continue ;; esac; case "$sd/" in ("$lt"/*) continue ;; esac
       case "$sp" in (*"$NL$lt$NL"*|*"$NL$lt/"*) SF="$lt, where a link in $SF leads"; return 0 ;; esac
     done <<EOF_LINKS
 $lts

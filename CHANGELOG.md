@@ -240,6 +240,8 @@ First version.
 - **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
   the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
   waits for the next second (#66).
+- **Docs:** the roadmap moved to issues labelled `enhancement`; the README's Roadmap section points at them, and
+  says what isn't planned (end-to-end encryption, real-time chat) (#98).
 - **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
   break (#83).
 - **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
@@ -282,3 +284,10 @@ First version.
 - **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
   it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
   was typed in (#78).
+- **Docs:** `docs/security.md` says the send guard catches mistakes and mail asking for the files it guards, not
+  other secrets or another local user changing the file mid-send; that anyone who can push can stop the mailbox with a
+  commit git won't check out, and how to recover; to keep signing keys out of synced folders; where the default key
+  lives; and that an agent switching keys re-sends the holds it still means. `JOIN.md` says `git ls-remote` passes a
+  read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
+  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
+  it twice as the skill's rule on copies says (#86).
