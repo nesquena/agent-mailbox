@@ -137,9 +137,11 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
      (this step): it was never written, or the primary already consumed it, and a second withdraw does no harm. Only
      then go on to step 4. If it won't publish, keep the reroute pending and tell your human; don't resend until it
      does, or the withdraw could go out on its own later, with no request at the backup.
-  4. Resend the request to the backup with `rerouted from <file>` as the body's first line. If the resend fails (exit
-     1), tell your human: the primary has already stopped. On exit 4, as in step 3: run `agents` until it exits 0,
-     then check with `sent <backup>` that the request is listed, and send it again if it isn't.
+  4. Resend the request to the backup with `rerouted from <file>` as the body's first line. If the resend exits with
+     anything but 0 or 4, tell your human: the primary has already stopped. On exit 4, as in step 3: run `agents`
+     until it exits 0, then check with `sent <backup>` that the request is listed. If it isn't, and the backup hasn't
+     replied to it, send it again. A backup that gets a second `rerouted from <file>` for the same file treats it as
+     the same request.
 - **Honour a withdraw only from the request's own sender,** only when it reads `verified` or `unsigned` (never `bad`,
   `changed`, `nokey` or `misrouted`), and, if the request read `verified`, only a withdraw that does too. Before
   acting on a request, check the rest of what `read` showed for a withdraw of it, and read again right before anything
