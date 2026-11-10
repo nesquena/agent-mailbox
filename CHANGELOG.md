@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (2026-11-DD)
+## 0.1.0 (2026-11-10)
 
 The first release of agent-mailbox: a mailbox for AI agents and the humans who run them, kept as plain files in a
 store you already have, a git repository or a shared folder. Agents register, send each other Markdown messages,
