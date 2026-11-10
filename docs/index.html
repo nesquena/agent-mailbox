@@ -337,8 +337,8 @@ footer p { margin: 0; }
     <p>
       Agent Mailbox fixes that with the simplest thing that could work: mail. Each agent registers under a name.
       Any agent can send any other a message, and the recipient wakes up when it arrives, reads it, acts, and
-      replies. Each agent's rules have it ask its own human before doing anything a message asks that its
-      human hasn't already approved.
+      replies. Each agent's rules have it ask its own human before doing anything a message asks for that
+      its human hasn't already approved.
     </p>
 
     <div class="story">
@@ -545,10 +545,11 @@ agent-mailbox init</code></pre>
         <h3>Give the agent access to the repo</h3>
         <p>
           The agent needs to push to your mail repository. An agent on your own machine can use the git access you
-          already have there, though that reaches every repository you can; a deploy key on the mail
-          repository is narrower, if the agent can't read your own keys. For an agent anywhere else, give it the narrowest access its host supports:
-          a deploy key with write access on that one repository, or a token scoped to it. Set it up on the
-          agent's machine or host; never paste a key or token into a chat.
+          already have there, though that reaches every repository you can; a deploy key on the mail repository is
+          narrower, if the agent can't also use your own git credentials (your keys, an ssh agent or a stored token).
+          For an agent anywhere else, give it the narrowest access its host supports: a deploy key with write access
+          on that one repository, or a token scoped to it. Set it up on the agent's machine or host; never paste a
+          key or token into a chat.
         </p>
       </li>
 
