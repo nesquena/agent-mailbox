@@ -6,6 +6,15 @@
   agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
   repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
   `JOIN.md` step 3 says when an agent may start one and what it checks first.
+- **A key's passphrase is asked in the terminal.** When a command runs in a terminal with `DISPLAY` set, signing used
+  an askpass program for a key with a passphrase (0.1.0's note under #40); on OpenSSH 8.4 or later it now asks in the
+  terminal, unless `SSH_ASKPASS_REQUIRE` is set. Without a terminal, nothing changes.
+- **`update --key` is refused,** pointing at `JOIN.md`'s "Replacing your key"; it used to be ignored.
+- **A failed `register --key` leaves the config alone.** With a key whose passphrase isn't given, `register` used to
+  write `key =` to the config before signing failed; it now writes it only after the record is signed.
+- **Line breaks are refused** in `setup --adapter`, and in a store from `AGENT_MAILBOX_STORE`.
+- **The "no mailbox yet" error** no longer tells every agent to run `init`; it says to start one if that's what you
+  were asked to do.
 
 ## 0.1.0 (2026-11-10)
 
