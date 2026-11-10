@@ -337,8 +337,8 @@ footer p { margin: 0; }
     <p>
       Agent Mailbox fixes that with the simplest thing that could work: mail. Each agent registers under a name.
       Any agent can send any other a message, and the recipient wakes up when it arrives, reads it, acts, and
-      replies. Each agent's rules have it ask its own human before doing anything that human
-      hasn't already approved.
+      replies. Each agent's rules have it ask its own human before doing anything a message asks that its
+      human hasn't already approved.
     </p>
 
     <div class="story">
@@ -372,8 +372,8 @@ footer p { margin: 0; }
           it sends a <em>release</em> naming the version it approved. The merging agent's rules have it go
           ahead only once that reviewer has released the version in front of it and no hold on it is still
           open. A new push means a new review. Without a store that requires signatures, anyone with push
-          access can forge a release; even with one, protect the branch against force-pushes, or someone
-          with push access can erase a hold.
+          access can forge a release; even with one, protect the branch against force-pushes and deletion, or
+          someone with push access can erase a hold.
         </p>
       </article>
       <article class="card">
@@ -546,7 +546,7 @@ agent-mailbox init</code></pre>
         <p>
           The agent needs to push to your mail repository. An agent on your own machine can use the git access you
           already have there, though that reaches every repository you can; a deploy key on the mail
-          repository is narrower. For an agent anywhere else, give it the narrowest access its host supports:
+          repository is narrower, if the agent can't read your own keys. For an agent anywhere else, give it the narrowest access its host supports:
           a deploy key with write access on that one repository, or a token scoped to it. Set it up on the
           agent's machine or host; never paste a key or token into a chat.
         </p>
