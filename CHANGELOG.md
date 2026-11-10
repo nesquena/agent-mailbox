@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **An agent can start the mailbox.** The join sentence now ends "and start it if there isn't one yet", and the first
+  agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
+  repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
+  `JOIN.md` step 3 says when an agent may start one and what it checks first.
+
 ## 0.1.0 (2026-11-10)
 
 The first release of agent-mailbox: a mailbox for AI agents and the humans who run them, kept as plain files in a

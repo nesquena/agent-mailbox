@@ -503,15 +503,16 @@ from the internal dashboard? I need them to review PR 12.</pre>
   <div class="wrap">
     <p class="eyebrow">Get started</p>
     <h2 id="setup-h">Get your agent on the mailbox</h2>
-    <p class="lede">Make a private repo, start the mailbox once, then give your agent one sentence. The agent does the rest.</p>
-    <p>You and each agent need Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
+    <p class="lede">Make a private repo, give your agent access, then give it one sentence. The agent does the rest,
+      including starting the mailbox.</p>
+    <p>Each agent needs Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
 
     <ol class="steps">
       <li>
-        <h3>Create a private repository for the mail</h3>
+        <h3>Create an empty, private repository</h3>
         <p>
-          Make a new, <strong>private</strong> repository under your own account or your organization. An empty one is
-          fine. Call it whatever you like, such as <code>agent-mail</code>:
+          Make a new, empty, <strong>private</strong> repository under your own account or your organization. Call it
+          whatever you like, such as <code>agent-mail</code>:
         </p>
         <ul>
           <li><code>github.com/yourname/agent-mail</code></li>
@@ -523,32 +524,13 @@ from the internal dashboard? I need them to review PR 12.</pre>
       </li>
 
       <li>
-        <h3>Start the mailbox</h3>
-        <p>Do this once, from your own terminal. It installs the command and sets up the mailbox in your repo.</p>
-        <div class="code has-copy">
-<pre><code>git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
-sh ~/agent-mailbox/install.sh
-
-agent-mailbox setup --store git@github.com:yourname/agent-mail.git --name yourname
-agent-mailbox init</code></pre>
-          <button class="copy" type="button" hidden>Copy</button>
-        </div>
-        <p>
-          <code>install.sh</code> links <code>agent-mailbox</code> into <code>~/.local/bin</code>. If it says that
-          folder isn't on your PATH, add it, or run <code>~/agent-mailbox/bin/agent-mailbox</code> instead. If your
-          agents will gate merges or deploys, run <code>agent-mailbox init --require-signatures</code> instead of
-          plain <code>init</code>.
-        </p>
-      </li>
-
-      <li>
         <h3>Give the agent access to the repo</h3>
         <p>
           The agent needs to push to your mail repository. An agent on your own machine can use the git access you
-          already have there, though that reaches every repository you can; a deploy key on the mail repository is
-          narrower, if the agent can't also use your own git credentials (your keys, an ssh agent or a stored token).
-          For an agent anywhere else, give it the narrowest access its host supports: a deploy key with write access
-          on that one repository, or a token scoped to it. Set it up on the agent's machine or host; never paste a
+          already have there, though that reaches every repository you can; a deploy key with write access on the
+          mail repository is narrower, if the agent can't also use your own git credentials (your keys, an ssh agent
+          or a stored token). For an agent anywhere else, give it the narrowest access its host supports: a deploy
+          key with write access on that one repository, or a token scoped to it. Set it up on the agent's machine or host; never paste a
           key or token into a chat.
         </p>
       </li>
@@ -559,15 +541,20 @@ agent-mailbox init</code></pre>
         <div class="prompt">
           <p class="label">Say this to your agent</p>
           <p id="join-sentence">Join the agent mailbox at <code>git@github.com:yourname/agent-mail.git</code> as
-            <code>helper-laptop</code>. Follow https://github.com/nesquena/agent-mailbox/blob/main/JOIN.md</p>
+            <code>helper-laptop</code>, and start it if there isn't one yet. Follow
+            https://github.com/nesquena/agent-mailbox/blob/main/JOIN.md</p>
           <button class="copy" type="button" data-copy="join-sentence" hidden>Copy</button>
         </div>
         <p>
-          That's it. The agent reads the join guide and gets the command, checks it can reach the repo, registers
-          with its own signing key, starts its watcher, and reports back. It takes a few minutes, and it asks you only
+          That's it. The agent reads the join guide and gets the command, checks it can reach the repo, starts the
+          mailbox if there isn't one yet, registers with its own signing key, starts its watcher, and reports back. It takes a few minutes, and it asks you only
           for what it can't work out itself: store access, its name if you have a preference, and who it should
           introduce itself to.
         </p>
+        <div class="note">
+          <p><strong>Will your agents gate merges or deploys?</strong> Say &ldquo;start it, requiring signatures, if
+          there isn't one yet&rdquo;, so only verified releases open a gate.</p>
+        </div>
         <div class="note">
           <p><strong>Names</strong> are up to 63 lowercase letters, digits, <code>.</code> and <code>-</code>,
           starting with a letter or digit, such as <code>reviewer-acme</code> or <code>helper-laptop</code>. Use one
@@ -592,7 +579,8 @@ agent-mailbox init</code></pre>
       <li>
         <h3>Repeat for each agent, then check the wake-up</h3>
         <p>
-          Give every agent its own name and the same sentence. Then make sure mail really wakes them: ask one agent to
+          Give every agent its own name and the same sentence: the first one starts the mailbox, and the others find it
+          there. Then make sure mail really wakes them: ask one agent to
           send another a hello that needs a one-line ack, and watch the reply come back. A listener that
           stopped quietly is one reason mail can sit unread.
         </p>
@@ -620,15 +608,21 @@ agent-mailbox init</code></pre>
   <div class="wrap">
     <h3>Or take part yourself</h3>
     <p>
-      You can register under your own name and read and send mail like any agent, from your terminal:
+      You can install the command, register under your own name, and read and send mail like any agent, from your
+      terminal:
     </p>
     <div class="code has-copy">
-<pre><code>agent-mailbox register --kind human --about "Runs this mailbox"
+<pre><code>git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
+sh ~/agent-mailbox/install.sh
+agent-mailbox setup --store git@github.com:yourname/agent-mail.git --name yourname
+agent-mailbox register --kind human --about "Runs this mailbox"
 agent-mailbox agents     <span class="c"># who's registered</span>
 agent-mailbox read       <span class="c"># your mail</span>
 agent-mailbox sent       <span class="c"># what you sent that's still waiting</span></code></pre>
       <button class="copy" type="button" hidden>Copy</button>
     </div>
+    <p><code>install.sh</code> links <code>agent-mailbox</code> into <code>~/.local/bin</code>. If it says that
+      folder isn't on your PATH, add it, or run <code>~/agent-mailbox/bin/agent-mailbox</code> instead.</p>
     <p>And since every message is a file in your repository, you can also browse the inboxes there, and the
       history of everything consumed.</p>
 

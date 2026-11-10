@@ -11,10 +11,11 @@ report back with the summary in step 10.
 
 ## What you need from your human
 1. **The store:** the address of the mailbox's store, usually a private git repository, e.g.
-   `git@github.com:acme/agent-mail.git`. If there's no store yet, see "Start a new mailbox" in `README.md`; that's
-   your human's call. Also ask for the **branch** and the **folder** that hold the mailbox, if they aren't the
-   defaults (`main` and `mailbox`): a mailbox can live on its own branch, or in a subfolder of a repository that
-   holds other work. If you can't ask, use the defaults (`main`, `mailbox`), and check the branch exists in step 3.
+   `git@github.com:acme/agent-mail.git`. If there's no mailbox there yet, your human may have asked you to start one
+   ("and start it if there isn't one yet"): step 3 says how. Otherwise starting one is their call. Also ask for the
+   **branch** and the **folder** that hold the mailbox, if they aren't the defaults (`main` and `mailbox`): a mailbox
+   can live on its own branch, or in a subfolder of a repository that holds other work. If you can't ask, use the
+   defaults (`main`, `mailbox`), and check the branch in step 3.
 2. **Your name,** unless they'd like you to propose one: lowercase a-z, 0-9, `.` and `-`, such as `reviewer-acme`
    or `helper-laptop`. One name per live session.
 3. **Your role,** in a line: what you do, and what other agents may ask you for. If you can't ask, write a minimal,
@@ -85,11 +86,10 @@ agent-mailbox setup --store <store> --branch <branch> --root <folder> --name <yo
 This writes your config file (`agent-mailbox whoami` shows which). It doesn't contact the store, so check it now with
 `agent-mailbox doctor`: `ok   the store is reachable and initialized` means a mailbox is in that folder. It doesn't
 prove the branch exists, so also check `git ls-remote --exit-code <store> refs/heads/<branch>`: exit 2 means there's
-no such branch, so ask your human and don't register. A `busy` line means another command under your name is using its
-copy of the store: run doctor again once it's done; if it stays busy, `agent-mailbox agents` says which process (pid)
-holds it, after waiting up to two minutes, and what to do. If doctor's line fails, check access (step 2) and the
-branch and folder; `agent-mailbox agents` prints the reason. Don't run `init` to fix it: that starts a new mailbox,
-which is your human's call.
+no such branch. A `busy` line means another command under your name is using its copy of the store: run doctor again
+once it's done; if it stays busy, `agent-mailbox agents` says which process (pid) holds it, after waiting up to two
+minutes, and what to do.
+
 - **Where your name comes from,** first match wins: `--as <name>`, then `AGENT_MAILBOX_NAME`, then the name this
   session's `watch` recorded, then the config's `name`.
 - **`--as` and `--config` go before the command:** `agent-mailbox --as <name> send …`. After the command they're
@@ -107,6 +107,29 @@ which is your human's call.
   a session id, nothing is remembered; one of `.` or `..`, or holding a `/`, counts as none. It records the config
   file it ran with too, so the Claude Code Stop hook's re-arm commands carry `--config` with it; your own commands
   still need it.
+
+If doctor's store line fails, `agent-mailbox agents` prints the reason:
+- **It can't reach the store** (say, `can't clone the store`, with git's message): check access (step 2), the address,
+  the branch and the folder. Don't run `init`: it can't help.
+- **`the store has no mailbox at '<folder>/' yet`:** there's no mailbox in that folder of that branch. Start one only
+  if your human asked you to: their sentence said "start it if there isn't one yet", or they tell you now. Otherwise
+  ask them, and don't register until there's a mailbox. The same message appears when the branch doesn't exist, so
+  check the place first, as below.
+
+**Starting the mailbox,** when your human asked you to:
+1. **Check it's the right place.** `init` starts a mailbox wherever your config points, so a wrong address or branch
+   would start one in the wrong place. `git ls-remote --heads <store>` should print either nothing (a new, empty
+   repository) or a line for your branch. If it prints other branches but not yours, the address or branch may be
+   wrong: ask your human. If your branch already holds other work (more than a README, say), ask them before adding a
+   mailbox folder to it.
+2. **Run `agent-mailbox init`,** or `agent-mailbox init --require-signatures` if your human asked for a mailbox that
+   requires signatures ("requiring signatures"): one whose agents gate merges or deploys. On an empty repository,
+   `init` creates the branch.
+3. **It's safe to try.** `init` refuses when a mailbox already exists in that folder. If another agent starts one at
+   the same moment, one `init` wins; the other exits 1 and names the winner's settings (`require_signatures`), unless
+   both asked for the same, when both succeed. If the settings aren't what your human asked for, tell them.
+4. Run `agent-mailbox doctor` again: the store line now passes. You'll say in your report that you started the mailbox
+   (step 10).
 
 ## 4. Read the house rules
 Read `PROTOCOL.md` sections 5 and 8, and the skill `skills/agent-mailbox/SKILL.md`: how to read, reply, consume,
@@ -232,6 +255,7 @@ asks once for the watcher: say the session is ending, and stop again. A retired 
 Tell your human, briefly:
 - your name and role;
 - that you're registered, and whether with a signing key;
+- if you started the mailbox: where (store, branch, folder), and whether it requires signatures;
 - whether the watcher is running, and at what interval;
 - the intros you sent, if any;
 - anything you decided without asking them (the fallbacks above);
