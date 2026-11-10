@@ -105,6 +105,10 @@ release: <item> <version>      optional
 - **Header values are single lines.** A client must reject a value containing a line break, so no field can smuggle
   in another header.
 - **The header must close** (section 1): a message whose header doesn't is malformed, and reads `bad`.
+- **Every header line is `<key>: <value>`:** a key of lowercase letters, digits, `_` and `-`, then `:` and the value
+  (the space after the colon is optional). No key appears twice. A message whose header holds any other line is
+  malformed, and reads `bad` (section 5's Holds says how `holds` reads one). A key this section doesn't name is
+  allowed, and ignored.
 - **`<item>`** matches `^[A-Za-z0-9._/#:@-]{1,200}$`, e.g. `org/repo#12` or `deploy:prod`. **`<version>`** matches
   `^[A-Za-z0-9._-]{1,64}$`, e.g. a commit id.
 - **Body:** any text. A client displaying several messages must keep body text from imitating a message boundary;
@@ -129,15 +133,24 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
 - **The acting agent** checks right before acting, from every message ever delivered to it (consumed ones
   included, where the adapter keeps history). For each sender, the latest record for the item counts. The action
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
+- **Reading a record:** a hold or release is read by its first plain `hold:` line (or, without one, its first plain
+  `release:` line) and its first plain `from:`, `to:` and `sent:` lines, so a header naming several items or times is
+  placed by the first. A header with no plain `hold:` or `release:` line, or no plain `from:` or `sent:` line (one
+  spelled `Hold:`, say), isn't read as a record; one with no plain `to:` reads `bad`. A record whose header holds
+  other lines that aren't plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a
+  sender this reader has pinned), blocks that item, as a conflict does, until that sender's next record. One whose
+  signature doesn't check out reads `bad`, and counts only as unsigned mail does: as the hold or release it names
+  where signatures aren't required, and not at all where they are.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history
   (under a store writer's control) mustn't decide. A hold counts over a release. Two releases from one sender with
   the same `sent` and different versions conflict, and a conflict blocks like a hold until a later record from that
   sender.
-- **Strict stores:** where signatures are required, only `verified` records count, with one exception that fails
+- **Strict stores:** where signatures are required, only `verified` records count, with two exceptions that fail
   closed: a hold whose sender's key is `changed`, or missing (`nokey`) for a sender whose key this reader has pinned,
-  still holds, since a registry edit mustn't open the gate. Until the reader accepts the new key, that brings back
+  still holds, since a registry edit mustn't open the gate; and a record whose header isn't plain (section 5) but
+  whose signature checks out, the same way, blocks. Until the reader accepts a changed key, the first brings back
   every hold the sender ever sent, even one it has since released (its releases read `changed` too, and are dropped).
   Once the reader accepts it, mail signed with the old key, holds included, no longer counts, so before accepting a
   changed key, the reader should ask the sender to re-send any hold it still means. A reader that has seen a store
@@ -153,8 +166,10 @@ Signing is optional per agent, and required per store when `require_signatures: 
 - **Verifying a message** gives exactly one status:
   - `verified`: the signature checks out against the `from` agent's registered key, under the `from` identity and
     the namespace.
-  - `unsigned`: there is no `.sig`.
-  - `bad`: the signature doesn't verify, for example after tampering, or when someone else signed it.
+  - `unsigned`: there is no `.sig` (or it's a link, which is no signature of the message's own; where a store keeps
+    links as plain files, as the git adapter's clone does, it's a file holding the link's target, and reads `bad`).
+  - `bad`: the signature doesn't verify, for example after tampering, or when someone else signed it; or the
+    header isn't plain `key: value` lines (section 5).
   - `nokey`: the sender has no registered key (or its `key` isn't a plain `<type> <base64>` key), or this client
     can't verify.
   - `misrouted`: the header's `to` isn't the inbox the message sits in.

@@ -23,7 +23,10 @@ TEST_SHELL=bash bash test/run.sh       # the CLI under bash
 The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. CI runs it on Linux and
 macOS for every pull request, every push to main and every manual run (Actions, "test", "Run workflow", on your
 branch). A change only to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or
-a newer manual run on the same branch, cancels the run it supersedes.
+a newer manual run on the same branch, cancels the run it supersedes. The `gate` job reports on every run: it passes
+at once for a prose-only change, and otherwise only when every test job passed, so it's the one check a branch rule
+needs to require. After retargeting a pull request to another base branch, push a commit, or close and reopen the pull
+request, so the gate checks the new base (a re-run checks the old one).
 
 `sh test/bench.sh [messages] [senders]` prints rough timings (sends, concurrent senders, `holds`) against a throwaway
 local store. It isn't part of the suite; use it when a change could affect speed.

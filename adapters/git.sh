@@ -71,8 +71,9 @@ ad_open() {
   # one clone per agent name, so names sharing a state folder (one HOME, a config each) never work in the same clone
   AD_ID=$STORE_ID; [ -z "${ME:-}" ] || ! matches "$NAME_RE" "$ME" || AD_ID="$STORE_ID-$ME"
   AD_DIR="$STATE/checkouts/$AD_ID"
+  mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
+  ad_lock
   if [ ! -d "$AD_DIR/.git" ]; then
-    mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
     # stays behind (removing another command's could break a setup still running); delete it by hand
@@ -117,6 +118,8 @@ ad_open() {
 
 # fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
 ad_pull() {
+  # whether this clone had seen the store's branch before this fetch, and where it was then
+  seen="" pre=""; ! ad_remote_has_branch || { seen=1; pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH"); }
   ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
@@ -126,6 +129,36 @@ ad_pull() {
       return 1 ;; esac
     printf '%s\n' "$ferr"; return 1; }
   ad_remote_has_branch || return 0
+  post=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH")
+  # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
+  rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
+  taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+  # the commit `init` made in this same command (AD_INIT), when the branch now has a mailbox in its folder, is a race
+  # lost just now: init saw no mailbox there, and its own sync published anything left before, so that commit is all
+  # this clone holds unpublished. It's dropped, and init reports the winner
+  if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
+    [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ]; then
+    ad_git reset -q --hard "origin/$BRANCH"; return 0
+  fi
+  # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
+  # it, so nothing it holds is published into that mailbox, when it had seen the store's branch before (one since
+  # reset, deleted or re-created) or the branch now has a mailbox in its own folder (another agent's init took it). A
+  # clone that never saw the branch, whose mailbox folder the branch doesn't have (a mailbox in another folder of the
+  # same branch), is rebased and published as before. It returns 3, so a push retrying doesn't add "don't resend"
+  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1; then
+    if [ -n "$seen" ] || [ -n "$taken" ]; then
+      # (what goes with the clone: its commits the store never had, past where it last saw the store's branch)
+      if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..HEAD"); else un=$(ad_git rev-list --count HEAD); fi
+      lost=""; [ "${un:-0}" = 0 ] || lost=" (its $un unpublished commit(s) go with it: send again what they held)"
+      printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s%s and run this again\n" "$AD_DIR" "$lost"
+      # (the fetch moved the tracking ref to the store's new tip: it goes back to where it was, so a command run again
+      # counts from the same point, not from a tip this clone shares nothing with; only while it still holds what this
+      # fetch set, so a later fetch's value is never overwritten with an older one)
+      if [ -n "$pre" ]; then ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre" "$post" 2>/dev/null
+      else ad_git update-ref -d "refs/remotes/origin/$BRANCH" "$post" 2>/dev/null; fi
+      return 3
+    fi
+  fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
   else
@@ -133,13 +166,24 @@ ad_pull() {
   fi
 }
 
+# ad_unpublished <why>: say what's saved locally but not published. A command publishing what an earlier one left
+# (AD_LEFTOVER, from ad_sync) has written nothing of its own yet, so it says so: that one is to be run again
+ad_unpublished() {
+  if [ -n "${AD_LEFTOVER:-}" ]; then
+    warn "this command wrote nothing: an earlier command's change is saved locally but not published ($1); re-run a command with the same name to publish it, then run this one again"
+  else warn "written locally, not published ($1); re-run a command with the same name to publish it, don't resend"; fi
+}
+
 ad_push() {
   n=0
   until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
     n=$((n+1))
-    [ $n -lt 10 ] || { warn "written locally, not published (push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)); re-run a command with the same name to publish it, don't resend"; exit 4; }
+    [ $n -lt 10 ] || { ad_unpublished "push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)"; exit 4; }
     ad_jitter
-    rerr=$(ad_pull) || { warn "written locally, not published: $(printf '%s\n' "$rerr" | ad_gist); re-run a command with the same name, don't resend"; exit 4; }
+    rerr=$(ad_pull); pr=$?
+    # (a clone whose history the store doesn't share: its own message says what to do, and what goes with the clone)
+    [ "$pr" != 3 ] || die "$(printf '%s\n' "$rerr" | ad_gist)"
+    [ "$pr" = 0 ] || { ad_unpublished "$(printf '%s\n' "$rerr" | ad_gist)"; exit 4; }
   done
   # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
   # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
@@ -147,7 +191,95 @@ ad_push() {
   ad_git update-ref "refs/remotes/origin/$BRANCH" HEAD 2>/dev/null || :
 }
 
+# ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
+# in its clone instead of working in it at once. The lock is a file in the state folder's locks/<clone id>/ (where no
+# clone name can reach it), created with noclobber, naming its holder: "<pid> <epoch it took the lock> <host> <the
+# holder's start, from ad_started>". A holder on this host that's gone, or a pid now another process's (its start
+# differs), is broken at once; a lock that can't be read is broken once it's a minute old; a holder on another host (a
+# state folder shared between machines, or this one's name since changed) can't be checked, so it's waited for, and the
+# message says which file to delete if nothing is running there. Breaking a lock takes a guard file first, so two
+# waiters never both break it. A command waits up to AGENT_MAILBOX_LOCK_WAIT seconds (120), then stops, naming the
+# holder.
+# ceiling: a breaker killed while holding the guard leaves it; it's taken as abandoned, and removed, once a minute old
+# ad_started <pid>: when that process started, in a form that reads the same every time. Where /proc has it (Linux), its
+# start in clock ticks since boot (field 22 of /proc/<pid>/stat, counted after the name's closing parenthesis, since a
+# name can hold spaces) and the boot's id: a clock step moves ps's start time for every process, but not these, and a
+# lock from an earlier boot reads as another process's. Elsewhere, ps's start time, in UTC and the C locale
+ad_started() {
+  if [ -r "/proc/$1/stat" ]; then
+    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0; st=${st##*')'}
+    set -f; set -- $st; set +f; [ $# -ge 20 ] || return 0
+    # (without a boot id, the ticks alone, with no trailing space: a waiter reads the lock's fields split on spaces)
+    eval "st=\${20}"; bi=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); printf '%s\n' "$st${bi:+ $bi}"; return 0
+  fi
+  LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+# ad_same_start <one> <other>: two ad_started values name the same start. When both are /proc's ticks and one has no
+# boot id (its side couldn't read it, in a sandbox that hides /proc/sys, say), the ticks alone decide
+ad_same_start() {
+  [ "$1" = "$2" ] && return 0
+  case "${1%% *}" in (''|*[!0-9]*) return 1 ;; esac; case "${2%% *}" in (''|*[!0-9]*) return 1 ;; esac
+  { [ "${1#* }" = "$1" ] || [ "${2#* }" = "$2" ]; } && [ "${1%% *}" = "${2%% *}" ]
+}
+AD_LOCK="" AD_LOCKED=""
+ad_lock() {
+  ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
+  lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
+  mine="$$ $(date +%s) $host $(ad_started $$)"
+  lw=${AGENT_MAILBOX_LOCK_WAIT:-120}; case "$lw" in (''|*[!0-9]*) lw=120 ;; esac; [ "${#lw}" -le 5 ] || lw=120
+  t0=$(date +%s)
+  while :; do
+    stale=""
+    (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then)
+    if [ ! -e "$lk" ] && [ ! -L "$lk" ]; then
+      (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+      [ -e "$lk" ] || [ -L "$lk" ] || die "can't create the lock $lk"
+    fi
+    held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
+    set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
+    case "$hp$he" in
+      (''|*[!0-9]*) [ -z "$(find "$lk" -prune -mmin +1 2>/dev/null)" ] || stale=1 ;;
+      (*) [ "$hh" != "$host" ] || { kill -0 "$hp" 2>/dev/null && ad_same_start "$(ad_started "$hp")" "$hs"; } || stale=1 ;;
+    esac
+    if [ -n "$stale" ]; then
+      # (a guard just released by another waiter is tried once more)
+      if (set -C; : > "$ld/break") 2>/dev/null || { [ ! -e "$ld/break" ] && (set -C; : > "$ld/break") 2>/dev/null; }; then
+        # (removed only while it still holds what was found stale)
+        if [ "$(cat "$lk" 2>/dev/null)" = "$held" ]; then
+          rm -f "$lk" 2>/dev/null || { rm -f "$ld/break"; die "can't remove the stale lock $lk"; }
+        fi
+        rm -f "$ld/break"; continue
+      fi
+      # (still no guard there, and the folder can't be written: the stale lock can't be removed either. One that can
+      # be is only another waiter's guard, come and gone: wait, and try again)
+      [ -e "$ld/break" ] || [ -w "$ld" ] || die "can't remove the stale lock $lk"
+      [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
+    fi
+    [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
+      case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
+      if [ -n "$hh" ] && [ "$hh" != "$host" ]; then
+        die "another agent-mailbox command (pid ${hp:-unknown} on $hh) has been working in this name's copy of the store$age: if none is running on $hh (or this machine's name has changed), delete $lk, then run this again"
+      fi
+      die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again (its lock: $lk)"; }
+    sleep 1
+  done
+  AD_LOCK=$lk AD_LOCKED=$mine
+  trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
+}
+# ad_unlock: release the lock, if this command still holds it
+ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
+
 ad_sync() {
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: a rebase it
+  # was in, git's own lock on the index, and changes it never committed (a message written but not added, a consumed
+  # one removed but not committed). Commits it made but couldn't push are kept, and published below
+  if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
+    ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
+  rm -f "$AD_DIR/.git/index.lock"
+  if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
+  # (-x: files the store's own .gitignore names are debris too)
+  ad_git clean -fdqx -- "$ROOT" 2>/dev/null
   err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)
@@ -158,18 +290,22 @@ ad_sync() {
     ad_git rev-parse -q --verify HEAD >/dev/null || return 0
     warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
-  ad_push
+  AD_LEFTOVER=1; ad_push; AD_LEFTOVER= AD_PUBLISHED=1
 }
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
 ad_commit() {
-  msg=$1; shift; keep=""
+  msg=$1; shift; keep=""; AD_UNCHANGED=""
   for p in "$@"; do
     if [ -e "$AD_DIR/$p" ] || ad_git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then keep="$keep $p"; fi
   done
   [ -n "$keep" ] || return 0
   # shellcheck disable=SC2086
   ad_git add -A -f -- $keep || die "git add failed"
+  # nothing staged (the files came out as they were: an ed25519 signature of the same bytes is the same bytes) is
+  # nothing to publish, not a failure; AD_UNCHANGED tells the caller
+  # shellcheck disable=SC2086
+  if ad_git diff --cached --quiet -- $keep; then AD_UNCHANGED=1; return 0; fi
   # shellcheck disable=SC2086
   ad_git commit -q -m "$msg" -- $keep >/dev/null || die "git commit failed"
   ad_push

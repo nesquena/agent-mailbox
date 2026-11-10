@@ -37,12 +37,20 @@
 #   whoami | doctor                     show the resolved config | check this machine's setup
 #   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
-# Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 written locally but not published
-# (re-run a command with the same name to publish; don't resend); 5 not released; 6 signature not verified.
+# Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 a change saved locally isn't published
+# (re-run a command with the same name to publish; don't resend, unless it says this command wrote nothing: then run it
+# again once that's published); 5 not released; 6 signature not verified.
 set -u
 VERSION=0.1.0
+# (set only by init, around its own commit: never taken from the environment)
+AD_INIT=
 PROTOCOL=1
 NS=agent-mailbox
+# (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
+AD_LEFTOVER=
+# (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
+# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
@@ -80,30 +88,36 @@ hops() {
   # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too.
   # $2: how many folder links deep this call is (8 at most); $3 set: skip the folders above the first hop, which the
   # caller walks itself
-  rp=$1 hl=${2:-0} hs=${3:-} pr=; [ "$hl" -le 8 ] || return 1
+  rp=$1 hl=${2:-0} hs=${3:-} pr= hk=; [ "$hl" -le 8 ] || return 1
   case "$rp" in (/*) ;; (*) rp=${PWD:-.}/$rp ;; esac; n=0 h1=$rp
   # a name holding a newline can't be followed exactly ($(...) drops trailing ones): refuse it
   while case "$rp" in (*"$NL"*) return 1 ;; esac; rd=$(phys "$(dirname "$rp")"); do
     printf '%s/%s\n' "${rd%/}" "$(basename "$rp")"; case "$rd" in (/proc|/proc/*) pr=1 ;; esac
+    # the hop's folders, from its own up: up to the root, or, for a relative target, up to the folder of the link it
+    # came from, which is physical (no links) all the way up. Its last part is cut without a dirname per folder; a
+    # path that isn't the plain absolute form (a//b, or relative when PWD is unset) only ends the walk sooner, at . or
+    # where cutting leaves it unchanged
     hd=$(dirname "$rp"); [ -z "$hs" ] || hd=/; hs=""
-    while [ "$hd" != / ] && [ "$hd" != . ]; do
+    while [ "$hd" != / ] && [ "$hd" != . ] && [ "$hd" != "$hk" ]; do
       # a folder that's a link: where it sits and everything it leads to
       [ ! -L "$hd" ] || (hops "$hd" $((hl + 1)) 1) || return 1
-      hn=$(dirname "$hd"); [ "$hn" != "$hd" ] || break; hd=$hn; done
+      hn=${hd%/*}; [ -n "$hn" ] || hn=/; [ "$hn" != "$hd" ] || break; hd=$hn; done
     # the end must be the very file named, or a link was read as a name other than the one stored (macOS's readlink
-    # prints some bytes as ?): refuse, not guess. A walk through /proc (a pipe on stdin) ends at a name that's no file.
-    # So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor; and on macOS a stat of it fails
-    # now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one hop, isn't compared either.
-    # Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see the file behind a
-    # descriptor, so a secret file redirected to stdin is caught only by the private-key check on the body's text (as
-    # before: comparing /dev/fd/<n> with /dev/stdin never refused one)
+    # prints some bytes as ?): refuse, not guess. ceiling: a walk through /proc (a pipe on stdin) ends at a name that's
+    # no file, so it skips that check. So does /dev/stdin's own link to fd/<n> (macOS, BSD), which names a descriptor;
+    # and on macOS a stat of it fails now and then while a pipe's writer exits, so that one walk, from /dev/stdin in one
+    # hop, isn't compared either. Any other walk that ends in /dev/fd is. ceiling: on macOS and BSD the walk can't see
+    # the file behind a descriptor, so a secret file redirected to stdin, or named as /dev/fd/<n>, is caught only by the
+    # private-key check on the body's text (as before: comparing /dev/fd/<n> with /dev/stdin never refused a secret).
+    # $PWD names the folder the command runs in: sh, dash and bash keep an inherited PWD only when it's that same
+    # folder, so $PWD/<file> and <file> are one file
     if [ ! -L "$rp" ] || [ "$n" -ge 40 ]; then [ -n "$pr" ] || { [ "$h1" = /dev/stdin ] && [ "$n" -eq 1 ] &&
       [ "$rd" = /dev/fd ] && case $(basename "$rp") in (''|*[!0-9]*) false ;; esac; } || [ "$rp" -ef "$h1" ]; return; fi
     rl=$(readlink "$rp" && echo .) || return 1; rl=${rl%.}; rl=${rl%"$NL"}
     # a relative target starts from the link's physical folder, as the kernel reads it, so the folder links above it
     # aren't walked again; but not under /proc, where self names the subshell phys ran in
-    n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
-      (*) rp=${rd%/}/$rl ;; esac ;; esac; done; return 1
+    n=$((n+1)) hk=; case "$rl" in (/*) rp=$rl ;; (*) case "$rd" in (/proc|/proc/*) rp=$(dirname "$rp")/$rl ;;
+      (*) rp=${rd%/}/$rl hk=${rd%/} ;; esac ;; esac; done; return 1
 }
 real() { rp=$1; case "$rp" in (-*) rp=./$rp ;; esac; n=0
   while [ -L "$rp" ] && [ "$n" -lt 40 ] && rl=$(readlink "$rp" && echo .); do rl=${rl%.}; rl=${rl%"$NL"}; n=$((n+1)); case "$rl" in (/*) rp=$rl ;; (*) rp=$(dirname "$rp")/$rl ;; esac; done
@@ -281,6 +295,10 @@ require_sigs() {
 record() { printf '%s\n' "$M/agents/$1.md"; }
 # reg_key <record file>: the key the record names, or nothing when it names none or the value isn't a plain key
 reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf '%s\n' "$rk"; }
+# fingerprint <public key>: its SHA256 fingerprint, as ssh-keygen -l prints it, for comparing out of band; empty
+# without ssh-keygen. fpnote <public key>: that, or a note when ssh-keygen can't read the key
+fingerprint() { printf '%s\n' "$1" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2; }
+fpnote() { fn=$(fingerprint "$1"); [ -n "$fn" ] || ! have_ssh || fn="ssh-keygen can't read this key"; printf '%s' "$fn"; }
 active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
@@ -299,30 +317,72 @@ no_link() {
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
 rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
-# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh or this CLI's config or state folder
-# (set in SF), or the file is its config file or signing key (either half; SF empty), or its path can't be followed
-# to the end (SF is -), so `send` won't mail it out
-# however it's asked to.
-# ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine
+# secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh (this HOME's, or the account's own
+# when HOME is elsewhere) or this CLI's config or state folder, or is (or is under) where a link kept in ~/.ssh or the
+# config folder leads (set in SF); or the file is the same file as the CLI's config file or signing key (either half;
+# SF empty), by path or as a file (a hard link, or a name in another case on a file system that ignores case); or its
+# path can't be followed to the end (SF is -), or a folder whose links are checked holds one whose path has a line break
+# (SF is !<folder>). Then `send` won't mail it out, however it's asked to.
+# ceiling: a deny-list of the obvious places, not a guarantee; only the agent's human knows every secret on the machine.
+# Another name for a protected file by a hard link, or through a bind mount, is caught (by -ef) for the config file and
+# key, and for the file a link kept in ~/.ssh or the config folder leads to, but not for a file inside a protected
+# folder. The state folder's links aren't followed out: the CLI keeps none there
 secret_file() {
   # a path hops can't follow to the end counts as secret: refuse rather than guess
   SF=""; sp=$(hops "$1") || { SF=-; return 0; }; sp="$NL$sp$NL"
-  for SF in "${HOME:+$HOME/.ssh}" "$CONFIG_HOME" "$STATE"; do
+  # (the body as a file, found here: inside the find pipeline below, a body named /dev/stdin would be find's pipe)
+  bf=$(real "$1") || bf=$1
+  # the account's own home, from its login name (a name that's safe to expand with ~), when HOME isn't it
+  ah=""; an=$(id -un 2>/dev/null) && matches '^[A-Za-z0-9._][A-Za-z0-9._-]*$' "$an" && eval "ah=~$an" &&
+    case "$ah" in (/*) [ "$ah" != "${HOME:-}" ] || ah="" ;; (*) ah="" ;; esac
+  for SF in "${HOME:+$HOME/.ssh}" "${ah:+$ah/.ssh}" "$CONFIG_HOME" "$STATE"; do
     [ -n "$SF" ] && sd=$(phys "$SF") || continue
     case "$sp" in (*"$NL${sd%/}"/*) return 0 ;; esac
+    # where a link kept in ~/.ssh or the config folder leads (a ~/.ssh/config from a dotfiles folder, say): that file,
+    # or anything under that folder, named directly, at any hop of the walk. A link to a folder is resolved as a folder,
+    # whatever its target says (a trailing /, a .., a link on the way). ceiling: a link to a folder that holds the
+    # protected folder itself (~ or /) is skipped, since every file under it would be refused; and only links kept in
+    # those folders count, not a link inside the folder one leads to, when its own target is named directly
+    [ "$SF" != "$STATE" ] || continue
+    # (the links are read one per line, so a link whose path holds a line break, in its own name or a folder's on the
+    # way, can't be checked: refuse, naming the folder)
+    [ -z "$(find "$sd" -type l -path "*$NL*" 2>/dev/null)" ] || { SF="!$SF"; return 0; }
+    # (a link whose target is the body itself, as a file, by another name, a hard link say, counts by the body's own path)
+    lts=$(find "$sd" -type l 2>/dev/null | while IFS= read -r l; do
+      if [ -d "$l" ]; then phys "$l"; elif [ "$1" -ef "$l" ] || [ "$bf" -ef "$l" ]; then printf '%s\n' "$bf"; else real "$l"; fi; done)
+    while IFS= read -r lt; do
+      # (a link to / leads to every file: hops shows a hop that is / itself as //, which it would match)
+      case "$lt" in (/) continue ;; esac; case "$sd/" in ("$lt"/*) continue ;; esac
+      case "$sp" in (*"$NL$lt$NL"*|*"$NL$lt/"*) SF="$lt, where a link in $SF leads"; return 0 ;; esac
+    done <<EOF_LINKS
+$lts
+EOF_LINKS
   done; SF=""
-  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] && rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac; done
+  for sk in "$CONFIG" "$KEY" "${KEY:+$KEY.pub}"; do [ -n "$sk" ] || continue
+    rk=$(real "$sk") && case "$sp" in (*"$NL$rk$NL"*) return 0 ;; esac
+    [ ! -e "$sk" ] || [ ! "$1" -ef "$sk" ] || return 0
+  done
   return 1
 }
 
 # --- signatures ----------------------------------------------------------------------------------------------------
-# verify_file <message path> [<inbox it sits in>] prints one word: verified | unsigned | bad | nokey | changed | misrouted
-verify_file() {
+# verify_file and verify_sig print one word: verified | unsigned | bad | nokey | changed | misrouted
+# hdr_ok <file>: its header closes, and every line in it is a plain `key: value` (a key of lowercase letters, digits,
+# _ and -, then a colon), with no key twice: one reading, the one `field` gives
+hdr_ok() { awk 'NR == 1 { if ($0 != "---") exit 1; next } $0 == "---" { c = 1; exit }
+  { i = index($0, ":"); k = substr($0, 1, i - 1)
+    if (k !~ /^[a-z0-9_-]+$/ || (k in seen)) exit 1; seen[k] = 1 }
+  END { exit c ? 0 : 1 }' "$1"; }
+# verify_file <message path> [<inbox it sits in>]: a message whose header isn't plain reads bad; otherwise as verify_sig
+verify_file() { hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
+# verify_sig <message path> [<inbox it sits in>]: its signature alone, whatever else its header holds
+verify_sig() {
   f=$1 inb=${2:-}
   from=$(field from "$f"); to=$(field to "$f")
   matches "$NAME_RE" "$from" && matches "$NAME_RE" "$to" || { echo bad; return; }
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
-  [ -f "$f.sig" ] || { echo unsigned; return; }
+  # (a .sig that's a link isn't the message's own signature, as read's copy, which skips one, would also say)
+  { [ -f "$f.sig" ] && [ ! -L "$f.sig" ]; } || { echo unsigned; return; }
   rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
@@ -402,9 +462,14 @@ init)
   [ -f "$M/store.md" ] && die "a mailbox already exists at '$ROOT/' in this store"
   no_link "$M/agents/.keep"; no_link "$M/inbox/.keep"; no_link "$M/store.md"
   mkdir -p "$M/agents" "$M/inbox"; : > "$M/agents/.keep"; : > "$M/inbox/.keep"
-  put "$M/store.md" "$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
-    "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
-  ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"
+  ours=$(printf -- '---\nprotocol: %s\ntitle: %s\nrequire_signatures: %s\ncreated: %s\n---\n\nThis folder is an agent mailbox. Spec: https://github.com/nesquena/agent-mailbox/blob/main/PROTOCOL.md\n' \
+    "$PROTOCOL" "$title" "$req" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  put "$M/store.md" "$ours"
+  # another agent's init can win the race while this one publishes: AD_INIT lets the git adapter drop this commit, and
+  # only this one, and the store keeps the winner's settings, which may differ
+  AD_INIT=1; ad_commit "mailbox: init" "$ROOT/store.md" "$ROOT/agents/.keep" "$ROOT/inbox/.keep"; AD_INIT=""
+  [ "$(cat "$M/store.md" 2>/dev/null)" = "$ours" ] ||
+    die "another agent initialized the mailbox at '$ROOT/' first, so this init was dropped; its settings are in $ROOT/store.md (title: $(field title "$M/store.md" | clean "$CAP"), require_signatures: $(field require_signatures "$M/store.md" | clean "$CAP"))"
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
@@ -492,7 +557,10 @@ register|update)
   else put "$rec" "$record_text"; fi
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
-  ad_commit "mailbox: $ME ${cmd}s" $paths
+  AD_UNCHANGED=; ad_commit "mailbox: $ME ${cmd}s" $paths
+  # (the record and its signature are always written again, so a stale or missing one is replaced; when they come out
+  # as they were, the adapter publishes nothing and says so, and so does update, below)
+  unchanged=""; [ "$cmd" != update ] || unchanged=${AD_UNCHANGED:-}
   # a retired agent has no watcher to keep armed: drop this session's marker, so a harness hook stops asking for one
   if [ "$status" = retired ] && [ -n "$SESSION" ]; then
     [ "$(session_name)" != "$ME" ] || rm -f "$STATE/sessions/$SESSION" "$STATE/session-configs/$SESSION"
@@ -500,20 +568,25 @@ register|update)
   fi
   # pin your own name only to a key you hold
   [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
-  echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}" ;;
+  if [ -n "$unchanged" ] && [ -n "$AD_PUBLISHED" ]; then echo "update: nothing new to update for $ME ($status): the earlier change is now published"
+  elif [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
+  else echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}"; fi ;;
 agents)
   [ $# -eq 0 ] || unknown "$1"
   load_adapter; ad_sync; need_store
-  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT
+  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT; fps=
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
-    k=no; [ -n "$(reg_key "$r")" ] && k=yes
+    k=no; rk=$(reg_key "$r") && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
+    [ -z "$rk" ] || { fp=$(fpnote "$rk"); [ -z "$fp" ] || fps="$fps$(printf '%-24s %s' "$n" "$fp")$NL"; }
     # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows
     printf '%s\n%s\n%s\n' "$(field status "$r")" "$(field kind "$r")" "$(field about "$r")" | clean "$CAP" |
       { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
-  done ;;
+  done
+  # each key's fingerprint, to compare with its agent's human out of band (`trust` prints the one it pins)
+  [ -z "$fps" ] || printf '\nkey fingerprints:\n%s' "$fps" ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name> | trust --relax"
   if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict"
@@ -521,7 +594,8 @@ trust)
   valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
-  echo "pinned $1's current key; mail $1 signed with an earlier key (holds included) no longer counts" ;;
+  fp=$(fpnote "$pub")
+  echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key (holds included) no longer counts" ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -555,6 +629,7 @@ send)
       h="; to forward a message, copy its text into a new file first"
     w="this CLI's config file or signing key"; [ -z "$SF" ] || w="in $SF"
     [ "$SF" != - ] || w="a path whose links can't be followed to the end"
+    case $SF in ("!"*) w="unchecked: ${SF#!} holds a link whose path has a line break (rename it)" ;; esac
     die "refusing to send $body: it's $w$h (never put secrets in mail)"
   fi
   # stdin itself is read as fd 0, not reopened by name, so a socket works and a write-only stdin isn't read from its file
@@ -667,15 +742,30 @@ read)
                  *) unknown "$1" ;; esac
   done
   need_me; load_adapter; ad_sync; need_store
+  # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
+  # file swapped in the store meanwhile can't be shown under another's status
+  rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
-    v=$(verify_file "$p" "$ME")
+    cat -- "$p" > "$rt/m" 2>/dev/null || continue
+    if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
+    v=$(verify_file "$rt/m" "$ME")
+    # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
+    # name that doesn't name that sender (<stamp>-<from>-<topic>.md) is pointed out
+    fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); b=${p##*/}
+    st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    if matches "$NAME_RE" "$fr"; then
+      [ "$v" != verified ] || v="verified: from $fr"
+      if matches "$NAME_RE" "$tp"; then case "$b" in ($st-"$fr-$tp".md) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac
+      else case "$b" in ($st-"$fr"-*) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac; fi
+    fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
     # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes
     # first) is indented; a last line without its newline gets one, and each message ends with its own marker
-    clean 's/^[^ -~]*=/ &/' < "$p"; [ -z "$(tail -c 1 < "$p" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
+    clean 's/^[^ -~]*=/ &/' < "$rt/m"; [ -z "$(tail -c 1 < "$rt/m" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
+  rm -rf "$rt"
   [ -n "$shown" ] || no_mail
   printf '%s\n' "$shown" ;;
 consume)
@@ -731,12 +821,21 @@ holds)
       matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
         field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
         basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      v=$(verify_file "$tmpd/m" "$ME")
-      # in a strict store, only verified records count, except that a hold whose sender's key changed, or vanished
-      # after this reader pinned it, still holds: dropping it would let a registry edit open the gate. unsigned and bad
+      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
+      # whose signature doesn't reads bad
+      v=$(verify_sig "$tmpd/m" "$ME")
+      if ! hdr_ok "$tmpd/m"; then
+        case "$v" in (verified|changed) kind=malformed ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (*) v=bad ;; esac
+      fi
+      # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
+      # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
+      # edit open the gate. unsigned and bad
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
-      [ -z "$strict" ] || [ "$v" = verified ] || { [ "$kind" = hold ] && { [ "$v" = changed ] ||
+      [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
         { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
       echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
     done)
@@ -747,12 +846,14 @@ holds)
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
-  # order mustn't decide between records with an equal sent time: a hold wins, and two releases naming different
-  # versions conflict (neither counts)
+  # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
+  # blocks, and two releases naming different versions conflict (neither counts)
   latest=$(echo "$records" | awk 'NF { k = $3 " " $5
       if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
       if ($1 < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
+      if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
+      if (kind[k] == "malformed") next
       if (kind[k] == "release" && ($4 "") != (v[k] "")) { kind[k] = "conflict"; last[k] = $1 " conflict " $3 " " v[k] "," $4 " " $5 " " $6 " " $7 } }
     END { for (k in last) print last[k] }' | sort -k3,3 -k1,1)
   if [ -z "$version" ]; then
@@ -761,8 +862,10 @@ holds)
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
   echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
-    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
+    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
@@ -784,6 +887,9 @@ watch)
   [ "$interval" -ge 1 ] && [ ${#interval} -le 6 ] && [ ${#max} -le 9 ] || die "the interval or max is out of range"
   load_adapter; ad_sync; need_store
   need_active_me
+  # (the watch itself only peeks and polls, which leave the clone alone, so other commands under this name go ahead;
+  # an adapter from before ad_unlock has none)
+  ! command -v ad_unlock >/dev/null 2>&1 || ad_unlock
   # the session marker lets `send` find your name in shells without exports; the pid file lets a harness hook check
   # that this watcher is alive (hooks/claude-watch-guard.sh). The config path, made physical as the key's is (or just
   # absolute, if its folder can't be reached), goes in a folder of its own (session-configs/), so that hook's re-arm
@@ -844,8 +950,13 @@ doctor)
   chk "the CLI finds its adapter" 'matches "^[a-z0-9-]+\$" "$ADAPTER" && lib_ok && [ -f "$LIB_DIR/$ADAPTER.sh" ]' "run it by its path or through install.sh's link, or set AGENT_MAILBOX_LIB"
   sok=""
   if [ -n "$STORE" ]; then
-    if ( load_adapter && ad_sync && need_store ) >/dev/null 2>&1; then echo "ok   the store is reachable and initialized"; sok=1
-    else echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1; fi
+    # (another command working in this name's copy of the store is waited for a few seconds, then said to be busy)
+    if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
+    then echo "ok   the store is reachable and initialized"; sok=1
+    else case $derr in
+      (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
+      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
+    fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
   # record isn't active (retired) comes back with update, not register, which would refuse it; but only its own agent
@@ -864,7 +975,9 @@ doctor)
     (nopub) echo "FAIL $ME is registered and active: it's retired here: if it's yours, restore your key's public half ('ssh-keygen -y -f $KEY > $KEY.pub'), then run update --status active; if not, pick another name"; ok=1 ;;
     (*) echo "FAIL $ME is registered and active: run register"; ok=1 ;;
   esac
-  [ -z "$KEY" ] || { [ -f "$KEY" ] && printf 'ok   signing key at %s\n' "$KEY" || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
+  # (with its fingerprint, read from this machine: the side an agent's human compares with what others see)
+  [ -z "$KEY" ] || { [ -f "$KEY" ] && { kf=""; ! have_ssh || kf=$(fpnote "$(own_pub)")
+      printf 'ok   signing key at %s%s\n' "$KEY" "${kf:+ ($kf)}"; } || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   exit $ok ;;
 help|-h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
 *) die "unknown command '$cmd' (try: agent-mailbox help)" ;;
