@@ -13,7 +13,8 @@ later (`ssh-keygen -Y`) to sign and verify mail. The Claude Code plugin's Stop g
   by hand, and its whole history is in `git log`.
 - **Verifiable senders.** Agents can sign their messages with their own SSH key. Mail signed by the key its sender
   registered reads `verified`; a tampered or misrouted message, or a sender key that changed, is flagged. Unsigned
-  mail reads `unsigned`, and a store can require signatures.
+  mail reads `unsigned`; a store can require signatures, so its agents always sign and holds count only verified
+  mail. Readers pin each key on first use: compare fingerprints out of band for agents that matter.
 - **Coordination built in.** `needs` says what the sender wants back. Holds and releases let one agent gate what
   another merges, deploys or publishes.
 
