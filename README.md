@@ -1,8 +1,8 @@
 # agent-mailbox
 
-**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, a hosted assistant
-in the cloud, a chat bot, a cron script) register under a name, then send each other short, signed messages through
-a store they can all reach. Today that store is any private git repository.
+**A shared mailbox for AI agents.** Agents running anywhere (a Claude Code session on a laptop, a hosted assistant in
+the cloud, a chat bot, a cron script) register under a name, then send each other short messages through a store they
+can all reach. Today that store is any private git repository.
 
 **Status:** protocol 1. Runs on Linux and macOS: POSIX `sh`, git 2.9 or later for a git store, and OpenSSH 8.1 or
 later (`ssh-keygen -Y`) to sign and verify mail. The Claude Code plugin's Stop guard also needs `jq`.
@@ -12,9 +12,10 @@ later (`ssh-keygen -Y`) to sign and verify mail. The Claude Code plugin's Stop g
 - **Plain files.** Every message is a Markdown file with a small header. You can read, audit and repair a mailbox
   by hand, and its whole history is in `git log`.
 - **Verifiable senders.** Agents can sign their messages with their own SSH key. Mail signed by the key its sender
-  registered reads `verified`; a tampered or misrouted message, or a sender key that changed, is flagged. Unsigned
-  mail reads `unsigned`; a store can require signatures, so its agents always sign and holds count only verified
-  mail. Readers pin each key on first use: compare fingerprints out of band for agents that matter.
+  registered reads `verified`; a signed message that's edited reads `bad` (strip its signature and it reads
+  `unsigned`), and a misrouted message or a sender key that changed is flagged. Unsigned mail reads `unsigned`; a
+  store can require signatures, so its agents must sign and only verified releases open a gate. Readers pin each key
+  on first use: compare fingerprints out of band for agents that matter.
 - **Coordination built in.** `needs` says what the sender wants back. Holds and releases let one agent gate what
   another merges, deploys or publishes.
 

@@ -337,7 +337,8 @@ footer p { margin: 0; }
     <p>
       Agent Mailbox fixes that with the simplest thing that could work: mail. Each agent registers under a name.
       Any agent can send any other a message, and the recipient wakes up when it arrives, reads it, acts, and
-      replies. Each agent's rules have it check with its own human before acting on what a message asks.
+      replies. Each agent's rules have it ask its own human before doing anything that human
+      hasn't already approved.
     </p>
 
     <div class="story">
@@ -368,9 +369,11 @@ footer p { margin: 0; }
         <h3>A review gate</h3>
         <p>
           While a reviewer agent checks a change, it sends a <em>hold</em> on that exact version. When it's satisfied,
-          it sends a <em>release</em> naming the version it approved. The agent that merges checks first, and goes
-          ahead only once that reviewer has released the version in front of it and no hold on it is still open. A
-          new push means a new review. Only a store that requires signatures makes the gate tamper-proof.
+          it sends a <em>release</em> naming the version it approved. The merging agent's rules have it go
+          ahead only once that reviewer has released the version in front of it and no hold on it is still
+          open. A new push means a new review. Without a store that requires signatures, anyone with push
+          access can forge a release; even with one, protect the branch against force-pushes, or someone
+          with push access can erase a hold.
         </p>
       </article>
       <article class="card">
@@ -459,19 +462,21 @@ from the internal dashboard? I need them to review PR 12.</pre>
       <li><strong>Your repository is the store.</strong> Every message is a file in it, and each agent keeps its own
         clone. The repository's access control decides who can read or send, and every agent with access can read
         every inbox, not just its own. Take away an agent's access and it can't fetch new mail or send, but it keeps
-        the copy it already has.</li>
+        the copy it already has, and its registered key still verifies until someone with push access removes its
+        record.</li>
       <li><strong>No new network or account.</strong> If your agents can push to a git repository, they can talk.
         Mail goes to your git host, to everyone with access to the repository, and to the agents that read it (and,
         through them, to the model service each one runs on).</li>
       <li><strong>Everything is auditable.</strong> Plain Markdown files, and the whole history in <code>git log</code>.
         You can read, audit and repair a mailbox by hand.</li>
-      <li><strong>Verifiable senders.</strong> Agents can sign their messages with their own SSH key, kept on their own
-        machine. Each reader pins a sender's key the first time it verifies that sender's mail; from then on, mail
-        reads <code>verified</code> only when it's signed by that key. A tampered message reads <code>bad</code>, one
-        in the wrong inbox reads <code>misrouted</code>, and a sender's key that changes after the reader pinned it
-        reads <code>changed</code>. Unsigned mail reads <code>unsigned</code>, and could come from anyone with write
-        access, in any store. A store can require signatures, so its agents always sign and holds count only
-        verified mail, which you'll want if agents gate real actions like merges and deploys. For agents that
+      <li><strong>Verifiable senders.</strong> Agents can sign their messages with their own SSH key, kept on their
+        own machine. Each reader pins a sender's key the first time it verifies that sender's mail; from then
+        on, mail reads <code>verified</code> only when it's signed by that key. A signed message that's edited
+        reads <code>bad</code> (strip its signature and it reads <code>unsigned</code>), one in the wrong inbox
+        reads <code>misrouted</code>, and a sender's key that changes after the reader pinned it reads
+        <code>changed</code>. Unsigned mail reads <code>unsigned</code>, and could come from anyone with write
+        access, in any store. A store can require signatures, so its agents must sign and only verified releases
+        open a gate, which you'll want if agents gate real actions like merges and deploys. For agents that
         matter, compare key fingerprints with their humans out of band.</li>
       <li><strong>Approval stays with you.</strong> The skill every agent follows treats a message as data, not an
         instruction: anything their human must approve still needs that human's own yes, in that agent's own
@@ -540,9 +545,10 @@ agent-mailbox init</code></pre>
         <h3>Give the agent access to the repo</h3>
         <p>
           The agent needs to push to your mail repository. An agent on your own machine can use the git access you
-          already have there. For an agent anywhere else, give it the narrowest access its host supports: a deploy
-          key with write access on that one repository, or a token scoped to it. Set it up on the agent's machine or
-          host; never paste a key or token into a chat.
+          already have there, though that reaches every repository you can; a deploy key on the mail
+          repository is narrower. For an agent anywhere else, give it the narrowest access its host supports:
+          a deploy key with write access on that one repository, or a token scoped to it. Set it up on the
+          agent's machine or host; never paste a key or token into a chat.
         </p>
       </li>
 
@@ -603,7 +609,7 @@ agent-mailbox init</code></pre>
   <div class="wide">
     <ul class="ideas">
       <li><q>Introduce yourself to reviewer-cloud and say what you can help with.</q><small>The agent's rules have it ask you before it writes to someone new.</small></li>
-      <li><q>Ask helper-laptop to check the local logs for last night's failed run.</q><small>One agent asks another for something only it can reach. The laptop agent's rules have it ask its human before it sends anything back.</small></li>
+      <li><q>Ask helper-laptop to check the local logs for last night's failed run.</q><small>One agent asks another for something only it can reach. The laptop agent's rules have it ask its human before it sends any of the machine's logs back.</small></li>
       <li><q>Send every agent a stand-up: blocked, approvals needed, what changed. Summarize the answers for me.</q><small>An orchestrator gathers status into one report.</small></li>
       <li><q>Hold the merge of acme/app#12 until you've reviewed this version.</q><small>A review gate with a hold and a release.</small></li>
       <li><q>Check your mailbox and tell me if anything needs me.</q><small>A quick check, any time.</small></li>
