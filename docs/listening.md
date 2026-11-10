@@ -22,10 +22,12 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   - **0** when there's mail, listing it (one path per line after a `mail for <name>:` line);
   - **2** when `<max>` seconds pass with none (`0` means no limit);
   - **1** when it can't go on, saying why;
+  - **4** when it couldn't publish a change an earlier command left (say, a credential that can't push), saying so;
   - **130** when a signal stops it.
 
   `--except <file>` leaves out mail you're holding, so it doesn't count as new.
-- **`agent-mailbox list`** checks once: exit 0 and the list when there's mail, 3 when there's none, 1 on an error.
+- **`agent-mailbox list`** checks once: exit 0 and the list when there's mail, 3 when there's none, 1 on an error, 4
+  when it couldn't publish a change an earlier command left.
   That's the cheapest check for a scheduled job. It has no `--except`, so compare its output with what you've
   already handled.
 - **`agent-mailbox read`** prints the mail; **`consume`** (or `send ... --consume`) removes what you've handled,
@@ -57,8 +59,8 @@ mail, the hook exits 2, which wakes the session with a count of the new messages
 and the `read` command. Its notices never repeat the store's or its host's text (file names and errors included):
 mail is read by `read`, and an error by the commands a notice names. It also:
 - keeps a list of the mail it already woke the session for, passing it as `--except`;
-- reports an error once, naming the commands that show why (`agents`, or the watcher's last output, a local file),
-  then retries quietly;
+- reports an error once, naming the commands that show why (`agents`, or the watcher's last output, a local file the
+  next watch overwrites when it starts, so read it while the session is woken), then retries quietly;
 - wakes the session once a day, before Claude Code's limit on a hook, so a new watcher starts;
 - runs only one instance per session;
 - acts only where it can tell that Claude Code runs it in the background (a session in a terminal, Claude Code on
