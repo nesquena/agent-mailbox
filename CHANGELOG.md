@@ -70,9 +70,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
   counting after `trust`; in an open store it still counts (#23).
 - `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
   part of it (#23).
-- Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict;
-  `send --hold` or `--release` waits for the next second after your previous one from this state folder, unless the
-  clock goes back or both run at once in a dir store (#23).
+- Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict
+  (#23).
 - Items and versions compare as text, so `3.1` and `3.10` differ (#82).
 - A hold or release whose signature verifies (or whose pinned sender's key changed or went missing), whose `hold:` or
   `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header holds other lines that aren't, blocks its
@@ -99,9 +98,8 @@ What 0.1.0 does, grouped by topic. The numbers are the pull requests that made i
 - An inbox file in a subfolder, or whose name holds a line break, isn't a message (#12, #83).
 - With no mail, `list` and `read` under a name with no record in the mailbox stop with an error, not "no mail" (#76).
 - A reply without `--context` takes the context of the message it answers, while that message is still in your inbox
-  (a `--consume` in the same send counts) (#8); `send` never reuses a file name it used from this state folder, unless
-  the clock goes back, two sends under one agent name run at once in a dir store, or it couldn't keep its record of
-  the name (it warns) (#66).
+  (a `--consume` in the same send counts) (#8); `send` normally waits for the next second rather than reuse a
+  file name from the same second (#66).
 - `send -` reads stdin as it is: a closed stdin fails at once, a socket works, and on macOS a pipe no longer fails now
   and then (#49, #63).
 - `update` keeps the fields and text it doesn't manage in your record (#72), succeeds when nothing changed (#88,
