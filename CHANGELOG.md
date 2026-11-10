@@ -6,6 +6,10 @@
   agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
   repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
   `JOIN.md` step 3 says when an agent may start one and what it checks first.
+- **`trust` and `holds` say what happens to an old key's holds.** In a store that doesn't require signatures, mail
+  signed with an agent's earlier key reads `bad` after `trust`, and its holds still count; both messages now say so,
+  rather than saying those holds stop counting, which is true only in a store that requires signatures. `holds`'
+  warning about an unverified release now also says a hold needs a protected branch to stay put.
 
 ## 0.1.0 (2026-11-10)
 

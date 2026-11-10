@@ -2212,6 +2212,37 @@ if [ -n "$SSH" ]; then
 fi
 
 if [ -n "$SSH" ]; then
+echo "== after a key change: holds' advice and trust's message, open or strict (git)"
+# a sender holds an item, then its registered key is swapped. What its old key signed stops counting after trust only
+# in a store that requires signatures; elsewhere the old hold reads bad and still counts, and both messages say which
+for mode in o s; do
+  T="$W/rekey-$mode"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  for a in k${mode}1 k${mode}2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  if [ $mode = s ]; then as k${mode}1 init --require-signatures >/dev/null; else as k${mode}1 init >/dev/null; fi
+  for a in k${mode}1 k${mode}2; do as $a register --kind t --about t >/dev/null; done
+  echo h | as k${mode}2 send k${mode}1 hz - --hold "z#1 v1" >/dev/null
+  as k${mode}1 holds "z#1" --version v1 >/dev/null 2>&1
+  rm -rf "$T/w"; git clone -q -b main "$T/store.git" "$T/w" && ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap &&
+    (cd "$T/w" && git config user.email e@e && git config user.name e &&
+     sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|" mailbox/agents/k${mode}2.md > "$T/rec" &&
+     cat "$T/rec" > mailbox/agents/k${mode}2.md && git commit -qam swap && git push -q origin HEAD:main)
+  if [ $mode = s ]; then
+    expect "strict: the changed-key advice says trusting drops the old key's holds" 5 \
+      "z#1 is held by ks2 .*then trust ks2 \(mail signed with its old key, holds included, then stops counting\)" as ks1 holds "z#1" --version v1
+    expect "strict: trust says what the old key signed no longer counts" 0 "earlier key \(holds included\) no longer counts" as ks1 trust ks2
+    expect "strict: and after trust, the old hold no longer counts" 5 "nothing recorded for z#1" as ks1 holds "z#1" --version v1
+  else
+    expect "open: the changed-key advice says the old key's holds still count after trust" 5 \
+      "z#1 is held by ko2 .*then trust ko2 \(its old key's holds still count after that, since this store doesn't require signatures: ask it to release them\)" as ko1 holds "z#1" --version v1
+    expect "open: trust says the old key's mail reads bad and its holds still count" 0 \
+      "earlier key now reads bad, and its holds still count, since this store doesn't require signatures" as ko1 trust ko2
+    expect "open: and after trust, the old hold reads bad" 0 "ko2-hz.md \[bad" as ko1 read
+    expect "open: and still holds" 5 "z#1 is held by ko2" as ko1 holds "z#1" --version v1
+  fi
+done
+fi
+
+if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in k1 k2 k3 k4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done

@@ -305,10 +305,11 @@ old key still signs there. If the old key was the CLI's default one (`keys/<name
 reuses it in any store you join later without `--key`: once no store names it, have your human move it out of that
 folder.
 
-Holds need care in a store that requires signatures. A reader that never pinned your old key (it hasn't read or
-checked your mail) stops counting your old holds as soon as your record is removed, and a reader that uses your state
-folder (`whoami` shows it) does once you register again, since your `register` re-pins your name for it; for both,
-until you re-send, your old holds don't block. So re-send any hold or release you still mean as soon as you've
+Holds need care in a store that requires signatures. A reader that pinned your old key keeps counting your old holds
+while your record is gone (`holds` reports them as `nokey`). A reader that never pinned your old key (it hasn't read
+or checked your mail) stops counting your old holds as soon as your record is removed, and a reader that uses your
+state folder (`whoami` shows it) does once you register again, since your `register` re-pins your name for it; for
+both, until you re-send, your old holds don't block. So re-send any hold or release you still mean as soon as you've
 registered the new key (a re-sent release counts for a reader that pinned your old key only once it trusts the new
 one). Then tell the agents you work with, through your human. Each reader who pinned your old key sees `changed` until
 it checks the new fingerprint with your human out of band and runs `trust <name>`, after which the holds you signed

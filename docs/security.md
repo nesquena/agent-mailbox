@@ -100,8 +100,14 @@ time this reader first pinned it. Concretely:
   open a gate. While the key reads `changed`, any hold claiming to be from that sender that carries a signature file
   counts, whether or not the signature is valid, even one it has since released, since its releases read `changed`
   too and are dropped. A hold under a name this reader never pinned a key for, with no valid record, doesn't count.
-- **Trusting a changed key drops what the old key signed.** After `trust`, mail signed with the sender's old key,
-  holds included, no longer counts. Before trusting, ask the sender to re-send any hold it still means.
+- **Trusting a changed key drops what the old key signed, in a strict store.** After `trust`, mail signed with the
+  sender's old key, holds included, no longer counts there. Before trusting, ask the sender to re-send any hold it
+  still means. In a store that doesn't require signatures, that mail reads `bad` after `trust`, and its holds still
+  count: ask the sender to release what it no longer means.
+- **Removing an agent's record leaves its holds blocking.** For every reader that pinned the agent's key, its open
+  holds still block (`holds` reports them as `nokey`), and `trust` stops with "no registered key". To revoke an agent,
+  have it release its holds first; if its record is already gone, restore the record so it can release them, then
+  remove it again.
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
   version in it can't be read), it stops with an error rather than decide from part of it.
 - **History must not be rewritten.** With the git adapter, `holds` reads every version of every file ever in an
