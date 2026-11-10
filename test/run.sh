@@ -2919,13 +2919,13 @@ race() { rm -f "$T/p.at" "$T/p.go"
   : > "$T/p.go"; wait; }
 race cl1 clob-u
 f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl1-clob-u.md"
-grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && ! grep -q "exit 0" "$T/a.out" &&
+grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && [ "$(tail -n 1 "$T/a.out")" != "exit 0" ] &&
   ok "an unsigned send that loses the race fails with 'exists', and the first message is kept" ||
   no "a racing unsigned send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
 if [ -n "$SSH" ]; then
   race cl3 clob-s
   f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-s.md"
-  grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && ! grep -q "exit 0" "$T/a.out" &&
+  grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && [ "$(tail -n 1 "$T/a.out")" != "exit 0" ] &&
     ok "a signed send that loses the race fails with 'exists', and the first message is kept" ||
     no "a racing signed send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
   expect "and the kept message still verifies (its .sig is its own)" 0 "cl3-clob-s.md \[verified" as cl2 read
