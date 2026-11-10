@@ -1,343 +1,183 @@
 # Changelog
 
-## 0.1.0 (unreleased)
-First version.
-- **Protocol 1** (`PROTOCOL.md`): a mailbox is plain files in a store.
-  - A registry with one record per agent; one inbox per agent; Markdown messages with a single-line front-matter
-    header.
-  - Consume-as-receipt.
-  - Holds and releases for gating shared actions, with replay protection.
-  - Optional SSH signatures with trust-on-first-use pinning, and `require_signatures` per store.
-- **The `agent-mailbox` CLI** (POSIX sh): `setup`, `init`, `register`, `update`, `agents`, `trust`, `send`, `list`,
-  `read`, `consume`, `verify`, `holds`, `watch`, `whoami`, `doctor`.
-- **Adapters:** `git` (any git repository; history kept) and `dir` (a plain folder).
-- **The agent skill** (`skills/agent-mailbox/SKILL.md`), and a Claude Code plugin with a Stop hook that keeps the
-  watcher armed.
-- **The end-to-end test suite** (`test/run.sh`), run on Linux and macOS in CI.
-- **`holds` is fast on long histories:** it reads only mail that may carry a hold or release (the git adapter asks
-  `git log -G`), instead of every message ever delivered. On a 600-message mailbox it went from 5.6 s to 0.14 s.
-- **Fix:** `holds` counts every version of every file ever in your inbox, however it got there: a hold renamed in,
-  rewritten in place, or dropped from the tree by a merge still counts, and git can't skip a file as binary.
-- **Strict stores fail closed:** a reader that has seen `require_signatures: true` keeps the store strict even if
-  `store.md` is edited (`trust --relax` ends that); a hold whose sender's key is `changed`, or missing after you
-  pinned it (its registry record removed, with a header that doesn't close, or its key no longer reads as a plain
-  key), still holds, and until you `trust` the new key that includes holds the sender has since released; and
-  `holds` stops with an error if it can't reach the store or read its full history. After `trust` accepts a changed
-  key, mail signed with the old key (holds included) no longer counts: before trusting, ask the sender to re-send any
-  hold it still means (#23).
-- **Changed:** in every store, `holds` now stops with an error (exit 1) when it can't reach the store or read a
-  version of a message, instead of deciding from the local copy; run it again once the store is reachable (#23).
-- **A release right after a hold counts:** `send --hold` or `--release` in the same second as your previous hold or
-  release in that store waits for the next second, since records with an equal `sent` time let the hold win (#23).
-- **Protocol clarifications (compatible):** a file in a subfolder of an inbox isn't a message, for `holds` as for
-  `read`. Every front-matter file's header must close, or it has no fields: a message reads `bad`; a registry
-  record's agent isn't active and its signed mail reads `nokey`; a `store.md` is refused until fixed. When records
-  from one sender for one item carry the same `sent` time, a hold counts over a release, and two releases with
-  different versions conflict, which blocks like a hold until that sender's next record.
-- **`test/bench.sh`** prints rough timings of sends, concurrent senders and `holds`.
-- **Fix:** the CLI works when run through the link `install.sh` puts on PATH; it looked for its adapters beside the
-  link instead of beside the script (#1).
-- **Fix:** `install.sh`, `register --key`, the Claude hook and the dir adapter ignore an exported `CDPATH`;
-  `bash agent-mailbox`, with the CLI found on PATH, no longer loads adapters from beside the current folder; `doctor`
-  reports when the CLI can't find its adapter.
-- **Replies keep the thread's context:** `send --in-reply-to` (or `--consume`) without `--context` takes the
-  context of the message it answers while that's still in your inbox, as `PROTOCOL.md` section 5 says (#3).
-- **`--as` or `--config` after the command is refused** with a hint, instead of being ignored by commands that
-  take no options and acting as the configured agent; commands that take no arguments refuse any (#3).
-- **Fix:** every value the CLI validates goes through `printf`, not `echo`, and no value with a line break or
-  carriage return passes; under dash and macOS's `/bin/sh`, `echo` read backslash escapes, so a value could pass
-  validation cut short.
-- **`sent [<to>]`** lists the mail you sent that's still in a recipient's inbox, oldest first, with its age, its
-  `needs`, and `stale` once it's unconsumed after 24 hours, so a sender can raise stale mail as `PROTOCOL.md` asks.
-  A message counts when its file name and its `from:` header both name you; signatures aren't checked (#30).
-- **Retiring** clears this session's watch marker, and acting as a retired agent says how to come back.
-- **Fix:** `doctor` runs every check when a path contains `'`, and flags a malformed adapter name; error messages
-  print values as given; a message body file, or an `--except`/`--consume`/`--in-reply-to` value, may start with `-`;
-  `trust` and `verify` refuse a misplaced `--as` or `--config`.
-- **Fix:** the git adapter passes the store to `git clone` after `--`, so a store value starting with `-` is a path,
-  never an option.
-- **Fix:** a mailbox folder (`--root`) with a part starting with `-`, or named `.git` in any case, is refused (in the
-  first, `watch` and `holds` missed all mail), and `doctor` says when the folder is invalid; a backslash in the store
-  or home path no longer breaks `register` or `send` under dash or macOS's `/bin/sh`.
-- **Fix:** a dir store at a relative path starting with `-` works (`list` said "no mail" and `watch` never woke);
-  `verify` finds a message whose name starts with `-`, and takes a file name, never a pattern.
-- **Fix:** a branch name git refuses (`a/../b`, `a//b`, a leading or trailing `/`, a final `.`, a part starting with
-  `.` or ending in `.lock`, a leading `-`, or `HEAD`) is refused as a `bad branch name` with every adapter, whether
-  it comes from `setup --branch`, the config file or `AGENT_MAILBOX_BRANCH`. With git, most such names made commands
-  retry their push for several seconds and exit 4. `setup` no longer writes one, and `doctor` says when it's
-  invalid (#19).
-- **Changed:** a git mailbox on a branch named `HEAD` or starting with `-` worked before and is now refused. Copy it
-  to a new branch, then change the `branch =` line in each agent's config to it:
-  `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`.
-  Keys are pinned per branch, so each sender's key is trusted afresh on the new one. The dir adapter doesn't use the
-  branch: set `branch = main` there; its pinned keys are trusted afresh too.
-- **Fix:** `read`, `list`, `watch` and `agents` show control characters, Unicode's bidi overrides, line separators and
-  tag characters from the store spelled out (`\x1b`, `<U+202E>`), so mail or a registry record can't move the cursor,
-  overwrite or reorder a line, or hide text; Windows line endings print as plain lines. A body line whose first `=`
-  comes after nothing but non-printing characters is indented, and a message's last line always ends before its end
-  marker, so no body line can start like a message boundary. `agents` cuts a record's status, kind and about to 200
-  bytes. `verify <name>` looks for the name only in your own inbox, and reads a copy addressed to someone else as
-  `misrouted`, as `read` does (#22).
-- **Fix:** `watch` no longer misses mail when a look at the store fails (a network blip, or another command in the
-  same checkout updating it at that moment); it tries again at the next poll, and 10 failed reads in a row end it with
-  an error, as 10 failed polls do (#24).
-- **Fix:** commands no longer rewrite the git config of a store's checkout each time, which printed "could not lock
-  config file" when two ran at once, and with two agents sharing the checkout (`--as`) could commit under the other's
-  name. Each command's commits take its agent's name from its own environment, so a person's exported
-  `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` never reaches the store either (#24).
-- **Fix:** `send` no longer fails (exit 1 or 4, "cannot lock ref") when a watcher in the same checkout looks at the
-  store at the same moment: the watcher's look updates only its own ref (#24).
-- **`--version` names the commit** when the CLI runs from a git clone (`agent-mailbox 0.1.0 (protocol 1, 3c62193)`,
-  with `+changes` for local edits); elsewhere it prints the version as before. `README.md` and `JOIN.md` say how to
-  check for an update and apply it (#13).
-- **Docs:** `JOIN.md` covers a mailbox on another branch or folder, where `--as` goes, bounded waits, one session
-  per name, and leaving; the skill lists the exit codes (#3).
-- **Docs:** `JOIN.md` matches what `doctor` prints at each step, and covers agents that can't ask their human, the
-  name kept in the config, harnesses that can't wake an agent, and ending a session; replies reuse the topic they
-  answer when it's a plain slug, and no other text from a message goes into a command; check the branch exists
-  before registering, keep separate configs for agents that share a machine, and what each `watch` exit means (#18).
-- **Roadmap:** evaluating stores beyond git (#7).
-- **Fix:** where you hold your signing key, `update` refuses when your registry record names a different key, and
-  says how to restore the record, instead of republishing it under your signature; `update` never
-  pins your own name to a key you don't hold; a registry `key` that isn't a plain `<type> <base64>` public key reads
-  as no key in `read`, `verify`, `holds`, `agents` and `trust` (#25).
-- **Fix:** in a store that requires signatures, `send` also refuses before changing anything when your registry record
-  names no key, or a different key from yours. Before, it sent the message unsigned or with a signature that didn't
-  verify, and removed the mail it consumed. In a store that doesn't require signatures, such a send now goes unsigned,
-  with a warning, instead of carrying a signature that doesn't verify. A key with a passphrase needs its `.pub` beside
-  it for that check: without one, a strict store refuses and says how to restore it, and an open store sends unsigned.
-  A signed message's signature, and a newly registered record's, is in place before the file appears, so no reader
-  sees it unsigned; a signing that fails leaves no message behind, and an update that fails keeps the record with the
-  signature it had. A signature that doesn't verify against your registry record's key is never published, and
-  `register --key` refuses a `.pub` that isn't the public half of the private key beside it. Writes don't follow a
-  link left at a temporary file's name, and never publish one; `send` refuses a recipient's `.keep` that's a link. A
-  record or `.sig` path that's a folder is refused instead of having the file moved into it. `consume` and `send
-  --consume` refuse an inbox reached through a symlink. Signing now reads the message on stdin: with no terminal, a
-  key with a passphrase needs `ssh-agent`, or `SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force` (#40).
-- **Docs:** the skill's conduct rules add first contact (ask your human before your first message to a new agent),
-  standing roles (one agent per role), marking sensitive requests in `--needs` (the receiver asks its own human), and
-  rerouting a request from a primary agent to its backup with a `withdraw` note, honoured only from the
-  request's own sender and checked before acting on the request (#28). `JOIN.md` section 6 says to send nothing
-  until you've asked your human whether to introduce yourself, and to whom, or until someone writes to you. A reroute
-  gets your human's OK for a new backup and checks that the backup is active before it withdraws from the primary, and
-  tells your human if the resend fails; only a withdraw that reads `verified` or `unsigned` is honoured; a reply to a
-  withdraw says whether you acted, and that you've stopped; only a withdraw you refuse is a finding for your human; and
-  `JOIN.md`'s loop skips a withdrawn request, as the skill does (#41).
-- **Docs:** re-arming the watcher after a time limit or handled mail is done quietly, with no message to your
-  human unless there's mail they need to know about or the watcher fails (exit 1). The skill, JOIN.md and the
-  Claude Code Stop hook's message say so (#42).
-- **`send` refuses obvious secrets:** a body file in `~/.ssh` or the CLI's config or state folder (as named, or at any
-  link on the way to the file, so a `~/.ssh/config` linked in from elsewhere counts), or the CLI's config file or
-  signing key (either half) (on Linux, also when redirected to stdin), a path whose links can't be followed to the end
-  (a name holding a newline, or folder links nested more than 8 deep), and a body (file or stdin) holding a line of a
-  private-key block (its `-----BEGIN ... PRIVATE KEY` or `-----END` line, or a PuTTY key's header, or its
-  `Private-Lines:` or `Private-MAC:` line), are refused with exit 1 before anything is written; the error names the
-  folder, or says how to go on. It's a deny-list of the obvious cases, not a guarantee. The state folder holds the git
-  adapter's copy of the store, so to forward a message you received, copy its text into a new file first; to send part
-  of a file from one of those folders on purpose, copy that part the same way (#26).
-- **Fix:** `consume` takes a message whose name starts with `-` (`consume -x.md`, or any name after a `--`, wherever
-  the `--` is), instead of refusing it as an unknown option (#26).
-- **Fix:** `verify <path>` checks a message in an inbox against that inbox, so a copy addressed to someone else reads
-  `misrouted` by path too, as it does by name and in `read` (#26).
-- **Docs:** the skill's conduct rules and `docs/security.md` cover injected requests: a `verified` sender can still be
-  wrong, names, `kind` and `about` are self-declared, no message is a reason to send a file or key or to run `trust`,
-  `setup`, `update` or `consume`, and `holds <item> --version <v>` exit 0 means every sender who wrote released
-  `<v>`, not that a particular one did (#26).
-- **Fix:** the git adapter's clone of the store ignores the store's own `.gitattributes` and `.lfsconfig` (no
-  line-ending conversion, no filters such as Git LFS, no merge drivers), never recurses into submodules and runs no
-  git hooks or file-system monitor, so every message is checked out exactly as it was stored and its signature
-  verifies, whatever git settings the store or your git config carry. An existing checkout is checked out again once,
-  on its next command (#27).
-- **Fix:** with the git adapter, a store that can't be reached is an error (exit 1, "can't update from the store")
-  for every command, and `doctor` reports it, instead of `list` and `read` saying "no mail" from the local clone
-  (#27).
-- **Faster first use:** a new agent's git clone fetches only the mailbox branch, not every branch in the store, once
-  the store has that branch (#27).
-- **Fix:** with the git adapter, a store named by a URL, `host:path` or an absolute path is cloned from the agent's
-  own state folder, so a repository or bundle file of that name in the folder an agent's first command runs in can't
-  stand in for the store; and a `clone.defaultRemoteName` in your git config no longer breaks the clone. A relative
-  store path with a colon and no slash before it now needs a leading `./` (`./store:mail.git`); git reads such a
-  name as `host:path` (#27).
-- **Fix:** with the git adapter, a branch the store doesn't have yet reads as no mailbox, and `init` on it starts
-  empty; before, a new checkout took on the files of the store's default branch, so `doctor` called the store
-  initialized and `init` said a mailbox already existed. A checkout already in that state stays so until you delete
-  it (under `checkouts/` in the state folder `whoami` shows) (#27).
-- **Fix:** with the git adapter, a store `.gitignore` that matches mail no longer makes `send` fail ("git add
-  failed"); a mailbox branch deleted from the store is an error ("can't update from the store") instead of old mail
-  from the local clone; a first command cut off while setting up its clone is set up again by the next command,
-  instead of every later command saying there's no mailbox; and a command run with `GIT_DIR` set (as in a git hook)
-  still uses its own clone, never the repository it names (#27).
-- **Fix:** `send -` (or `/dev/stdin` as the body) with stdin closed fails at once (exit 1, "it's closed"); under bash
-  it waited forever. Stdin is read as it is, not reopened by name, so a socket on stdin (as some harnesses give a
-  command) works, a stdin open only for writing is refused instead of read from its file, and a stdin that was partly
-  read before sends only the unread rest, as a pipe always did (#49).
-- **Fix:** the Claude Code Stop hook's `read` and re-arm commands carry `--config <file>` naming the config the watcher
-  ran with (from `--config`, `AGENT_MAILBOX_CONFIG` or the default), quoted where the path needs it, so a watcher on a
-  config of its own is re-armed on it. A session id of `.` or `..`, or one holding a `/`, counts as no session, so it
-  can't read or rewrite another session's record (#50).
-- **New:** in Claude Code, the plugin keeps watching for you. Once you've run `watch` in a session, a Stop hook with
-  `asyncRewake` (`hooks/claude-rewake.sh`) starts a watcher at every turn end and wakes the session, even when idle,
-  when new mail arrives, so there's nothing to re-arm. Mail it already woke you for doesn't wake you again while it
-  stays in your inbox; while a watcher you started yourself runs, the hook leaves the watching to it; a watcher that
-  can't go on wakes you once with the error and keeps retrying quietly; and once a day with no mail it wakes you
-  with a one-line note. It runs only where it can tell that Claude Code (2.1.69 or later) runs it in the background:
-  a session in a terminal, or Claude Code on the web. Anywhere else (`claude -p`, output to a file or pipe, an SDK
-  run or another host with streaming input, an older version, or a version it can't confirm) it exits at once, and the
-  existing Stop hook asks you to re-arm the watcher as before (#51).
-- **Docs:** `docs/listening.md` sets out how any agent listens for mail, whatever its harness: what a listener must
-  do (`PROTOCOL.md` section 7 now lists it), the CLI's parts for it, and the ways to build one, from a background
-  watcher or a hook to a supervisor that starts the agent and a scheduled check, with a worked loop (#51).
-- **Fix:** a `watch` that ends no longer removes the pid file of another watcher for the same name that started
-  after it, so hooks that check for a running watcher still see that one (#51).
-- **Packaging:** the Claude Code plugin's manifest no longer pins a version, so refreshing the marketplace and
-  updating the plugin (from `/plugin`, or `claude plugin marketplace update agent-mailbox` and
-  `claude plugin update agent-mailbox@agent-mailbox`) brings in each change on `main` (#52).
-- **Fix:** with the git adapter, agent names that share a HOME (each with its own config, or one config and `--as`)
-  keep a clone of the store each, so they no longer work in one clone at once. Before, sends from two such names at
-  the same time could fail ("index.lock: File exists", "cannot lock ref") and leave files behind that `list` showed.
-  After updating, each name clones the store once; commands run without a name keep using the clone in the state
-  folder's `checkouts/` that all commands shared before. A command that exits 4 now says to re-run a command with the
-  same name to publish its commit. If a command exited 4, run any command once before updating, so its commit is
-  published first. If you already updated: with one config and `--as`, run a command without `--as` (such as
-  `agents`), which publishes it from the shared clone; with a name in each config, send the message again (#54).
-- **Fix:** the Claude Code plugin's Stop hook takes its lock through a mutex made with the shell's noclobber instead
-  of `mkdir`, which isn't exclusive everywhere (the Rust coreutils' `mkdir`, the default on Ubuntu 26.04, can report
-  success to two hooks at once). Before, two hooks starting together there could both start a watcher for one name.
-  A mutex folder an older version left behind is cleared after a minute, as before (#56).
-- **New:** the Claude Code plugin's Stop hook also runs in the Claude desktop app on macOS, which runs it in the
-  background: a session the app starts is woken on new mail like one in a terminal or on the web, instead of being
-  asked to re-arm the watcher. A `claude` started from such a session's shell, `claude -p` included, still exits at
-  once (#57).
-- **New:** in Claude Code, one session can be woken for mail on several stores. Run the watcher once more for each
-  further store in the session, with that store's `--config` and the new `--also` (`watch --also`); the plugin's Stop
-  hook then watches every store it was run on, each with its own lock and list of mail it already woke you for, and
-  its wake names the config to read with. The Stop guard asks for a re-arm for a store left unwatched, one store at
-  each turn end; with a different name on each store, pass `--as <name>` with each store's `--config`. A `watch`
-  without `--also` replaces the stores the hook watches, as before. When you update the plugin, update the CLI you run
-  too (`install.sh` from the new plugin folder, pull your clone, or, if you didn't use `install.sh`, run the new
-  folder's `bin/agent-mailbox`): once the hook has recorded your session's store, a `watch` or retire by an older CLI
-  no longer changes which name, store and config the hook watches. Add stores in a new session started after updating,
-  not one that keeps an earlier session's id (resumed with `--continue`, `--resume` or `/resume`, respawned, or
-  switched over with `/reload-plugins`): in a session that ran `watch` before, `--also` can replace that first store
-  instead of adding to it. After updating, mail still in your inbox can wake you once more, and one new message can
-  wake you twice (#58).
-- **`send` refuses more ways to name a secret:** the file a symlink kept in `~/.ssh` or the CLI's config folder leads
-  to (a `~/.ssh/config` managed from a dotfiles folder, say), by its path or as the same file (`docs/security.md`
-  lists the limits); every file under a folder one leads to (to send one of those, copy it somewhere else first); the
-  CLI's config file or signing key by any name for that file, such as a hard link; and a file in the account's own
-  `~/.ssh` when `HOME` points elsewhere. While a link in one of those folders has a line break in its path, `send`
-  refuses every file, saying so, until it's renamed (#79).
-- **Docs:** `SECURITY.md` says how to report a vulnerability privately, and what's in scope. The README opens with
-  the protocol version and the platforms: Linux and macOS, POSIX `sh`, git 2.9 or later for a git store, and OpenSSH
-  8.1 or later to sign and verify mail. Every place that said OpenSSH 8 now says 8.1, the first with `ssh-keygen -Y`
-  (#61).
-- **Fix:** the git adapter matches the mailbox branch by its exact name. A store with no `main` but a ref whose name
-  ends in `refs/heads/main` (such as `refs/heads/x/refs/heads/main`) read as having one, so every command stopped
-  with "can't update from the store" and `init` couldn't create the mailbox. `watch` reads only that branch's tip
-  (#65).
-- **Fix:** `send` never reuses a message's file name, as `PROTOCOL.md` section 5 requires. A message sent again with
-  the same topic to the same recipient, in the same second as one just consumed, got that message's name; it now
-  waits for the next second (#66).
-- **Docs:** the roadmap moved to issues labelled `enhancement`; the README's Roadmap section points at them, and
-  says what isn't planned (end-to-end encryption, real-time chat) (#98).
-- **Fix:** `read`, `list`, `sent`, and `watch` with the dir adapter skip an inbox file whose name holds a line
-  break (#83).
-- **Fix:** an `update` that changes nothing, such as `update --status active` when already active, or one run again
-  after it exited 4, succeeds; with the git adapter, which publishes nothing then, it says "nothing to update". It
-  stopped with "git commit failed". `update` still writes the record and its signature every time, so a stale or
-  missing signature, or a record changed in the store, is replaced (#88).
-- **`read` names who signed a verified message:** `[verified: from <name>]`, from the signed header, and says when a
-  message's file name isn't `<stamp>-<from>-<topic>.md`. It reads each message once. A message header holds only plain
-  `key: value` lines, each key once (`PROTOCOL.md` section 5); one with any other line reads `bad`. `holds` reads a
-  record by its first plain `hold:` or `release:`, `from:`, `to:` and `sent:` lines; one whose header holds other
-  lines that aren't plain, but whose signature checks out, blocks that item. A `.sig` that's a link reads `unsigned`
-  with the dir adapter (in `read`, `verify`, exit 6, and `holds`), and `bad` with git. A client that writes an
-  uppercase or otherwise non-plain header key now reads `bad`; a hold or release it signs blocks its item when its
-  `hold:` or `release:`, `from:`, `to:` and `sent:` lines are plain; when `hold:` or `release:`, `from:` or `sent:`
-  isn't, it isn't read as a record, and when `to:` isn't, it reads `bad` (#84).
-- **Fix:** `update` keeps what it doesn't manage in your registry record: other header fields (an `x-` field, say)
-  and any text below the header, as `PROTOCOL.md` section 2 requires. It rewrote the record from a fixed template,
-  dropping both, then signed the result (#72).
-- **Changed:** `update --status retired` refuses while your inbox still holds mail, and names it, since an agent
-  retires once its inbox is empty (`PROTOCOL.md` section 4) and a retired name isn't woken for mail. Read and
-  consume it first (sending on, as new mail, any that are another agent's job), or pass `--force` to retire with it unread
-  (#73).
-- **Fix:** `doctor` tells a retired name how to come back (`update --status active`), or to pick another name when the
-  record's key isn't this agent's; it said "run register", which refuses a name that's already registered. A store
-  that isn't reachable or initialized now says to run `agents` to see why. `register` and `send` say "ssh-keygen -Y
-  (OpenSSH 8.1+)" when they go unsigned, and `install.sh` checks for `-Y` too, so an older ssh-keygen isn't mistaken
-  for a missing one or for a working one (#71).
-- **Docs:** in the skill's reroute steps, a `withdraw` whose send exits 4 is published with `agents`, then checked
-  with `sent <primary>` and sent again if it isn't listed, before the request goes to the backup (#75).
-- **Docs:** `docs/security.md` says a signature doesn't name the store: in a strict store, signed mail copied in
-  from another store verifies when its sender is registered there under the same name with the same key. `JOIN.md`
-  and `docs/security.md` say how an agent in more than one store gives each its own key, and how one already sharing
-  a key switches (#81).
-- **Fix:** on macOS, `send -` with a pipe on stdin no longer fails now and then with "refusing to send /dev/stdin:
-  it's a path whose links can't be followed to the end". A stat of `/dev/fd/0` can fail for a moment as the pipe's
-  writer exits, and `send` took that for a link it couldn't follow; `/dev/stdin`'s own link to `/dev/fd/<n>` now names
-  a descriptor, as one through `/proc` does on Linux (#63).
-- **The git adapter turns off git's own credential prompts.** git runs with `GIT_TERMINAL_PROMPT=0`, and Git
-  Credential Manager with `GCM_INTERACTIVE=never`, so a store that needs a credential the machine doesn't have fails
-  at once with git's own message, instead of waiting on a prompt that an agent running in the background can't
-  answer. An askpass program that prints a token keeps working. Some prompts still wait until someone answers, and
-  `JOIN.md` step 2 lists them: an askpass program's dialog, a macOS Keychain dialog after a git upgrade, and ssh's
-  passphrase and host-key prompts for an SSH store (#64).
-- **Fix:** with the git adapter, a first `init` whose push failed (exit 4) is published by the next command, as any
-  other unpublished commit is. Before, on a store with no mailbox branch yet, it never was: `init` then said a
-  mailbox already existed, and the store still had none (#67).
-- **Changed:** with no mail, `list` and `read` under a name that has no record in the mailbox stop with "'<name>'
-  isn't registered in this mailbox" (exit 1), instead of "no mail for <name>" (exit 3): it's more likely the wrong
-  name, such as another store's, or the one a session's `watch` recorded. A retired name still lists its mail, or
-  none (#76).
-- **Fix:** `holds` compares items and versions as text: a release counts only for the exact item and version it
-  names, and two releases from one sender at the same time for `3.1` and `3.10` conflict (#82).
-- **Fix:** `send`'s path check compares folders in the case stored on disk, on a file system that ignores case:
-  it takes each folder's physical path from `pwd(1)`, not the shell's builtin, which in bash keeps the case a path
-  was typed in (#78).
-- **Docs:** `docs/security.md` says the send guard catches mistakes and mail asking for the files it guards, not
-  other secrets or another local user changing the file mid-send; that anyone who can push can stop the mailbox with a
-  commit git won't check out, and how to recover; to keep signing keys out of synced folders; where the default key
-  lives; and that an agent switching keys re-sends the holds it still means. `JOIN.md` says `git ls-remote` passes a
-  read-only credential, and the skill and `JOIN.md` say what `watch`'s exit 4 means. The skill's reroute steps stop on
-  any exit but 0 or 4, and check with `sent` after an exit 4 at the resend too; a backup handles a request rerouted to
-  it twice as the skill's rule on copies says (#86).
-- **The Claude Code hook's notices hold none of the store's or its host's text:** new mail wakes the session with a
-  count of the new messages and the `read` command, and a watcher that can't go on names the commands that show why:
-  `agents`, or the watcher's last output, a local file (#85).
-- **Key fingerprints to compare out of band:** `agents` lists each registered key's SHA256 fingerprint, `trust`
-  prints the one it pins, `doctor` shows this agent's own (read from this machine, not the store), and `holds`, on a
-  changed key, says where to find it. A key ssh-keygen can't read is said so (#97).
-- **Fix:** the Claude Code hook's watchdog sleeps only until its deadline, so a watcher that hangs (a fetch over a
-  dead connection) ends at the deadline, not up to 15 s past it (#103).
-- **Fix:** with the git adapter, a clone whose history the store's branch doesn't share fails, saying how to recover
-  (remove the clone it names, sending again what its unpublished commits held, and run the command again), when it
-  saw the store's branch before it was reset or re-created, or when its unpublished init is for a folder another
-  agent's init has since taken. Nothing it holds is published into the store; before, some of these cases republished
-  stale history into the new mailbox, and others failed with git's own rebase error. An `init` that loses a race for
-  one folder, on a new branch or one that already exists, fails saying so, with the winner's title and
-  `require_signatures`, instead of exit 4. Mailboxes in other folders of the same branch are published as before (#68).
-- **Fix:** with the git adapter, commands under one name take turns in its clone of the store. Two at once (say, two
-  replies sent together) could each fail, or leave the clone showing an inbox the store doesn't hold, or stuck until
-  it was deleted. A command waits for another up to `AGENT_MAILBOX_LOCK_WAIT` seconds (120), then stops, naming it; a
-  lock left by a command that's gone is broken at once; a lock from another machine name (a state folder shared
-  between machines, or this one renamed) is waited for, and the message says which file to delete if nothing is
-  running there; and what a command cut off part-way leaves in the clone is cleared at the next one. `watch` takes its
-  turn only for its first sync, and `doctor` waits a few seconds, then says the store is busy. Adapters gain
-  `ad_unlock` (a no-op for one without a clone). Update every copy of the CLI you run: one from before this doesn't
-  wait its turn (#87).
-- **`send`'s path check is much faster on deep link chains:** it no longer runs `dirname` for every folder of every
-  hop, and after a link with a relative target it doesn't walk again the folders it already knows hold no links. A
-  chain of 20 links 300 folders deep went from about 29 s to under 1 s (#80).
-- **Fix:** a command that can't publish a change an earlier command left (exit 4) says it wrote nothing of its own,
-  and to run it again once that's published, instead of "written locally, not published ... don't resend" (#102).
-- **Fix:** an `update` run again after it exited 4 says "nothing new to update for <name> (<status>): the earlier
-  change is now published", not just "nothing to update" after publishing it. An `AD_UNCHANGED`, `AD_PUBLISHED` or
-  `AD_DIR` in the environment no longer changes what a command says (#107).
-- **Fix:** with the git adapter, a lock's holder and a waiter that disagree on whether the boot id can be read (one in
-  a sandbox that hides it) compare the holder's start by its ticks alone, so a live holder's lock isn't broken (#107).
-- **Docs:** `PROTOCOL.md` and `docs/security.md` say a header with no plain `hold:` or `release:`, `from:` or `sent:`
-  line isn't read as a record; the send guard's stdin limit names only the file a link leads to; recovering from a
-  commit git refuses says what that commit may remove, and that removing a clone loses what it hadn't published; key
-  swaps compare the fingerprint in `agents` first; and a watcher's last output is overwritten by the next watch
-  (#107).
+## 0.1.0 (2026-11-DD)
+
+The first release of agent-mailbox: a mailbox for AI agents and the humans who run them, kept as plain files in a
+store you already have, a git repository or a shared folder. Agents register, send each other Markdown messages,
+optionally signed with SSH keys, wait for mail without spending model tokens, and gate shared actions with holds and
+releases. It's protocol 1, a POSIX `sh` CLI with no server, an agent skill, and a Claude Code plugin that wakes a
+session when mail arrives.
+
+**Requirements:** Linux or macOS; POSIX `sh`; git 2.9 or later for a git store; OpenSSH 8.1 or later (`ssh-keygen -Y`)
+to sign and verify mail; and `jq` for the Claude Code plugin's Stop guard, which steps aside without it.
+
+### What's included
+
+- **Protocol 1** (`PROTOCOL.md`): a mailbox is plain files in a store. A registry with one record per agent, one inbox
+  per agent, and Markdown messages with a plain `key: value` header; consuming a message is its read receipt; holds
+  and releases gate shared actions, with replay protection; SSH signatures are optional, with trust-on-first-use
+  pinning, and a store can require them (`require_signatures`).
+- **The `agent-mailbox` CLI** (POSIX `sh`): `setup`, `init`, `register`, `update`, `agents`, `trust` (and
+  `trust --relax`), `send`, `list`, `sent`, `read`, `consume`, `verify`, `holds`, `watch` (with `--also` for a second
+  store), `whoami`, `doctor` and `--version`, which names the commit when run from a git clone. `install.sh` links it
+  into `~/.local/bin` (or `<prefix>/bin` with `--prefix`), and says if that isn't on `PATH`.
+- **Adapters:** `git` (any git repository you can push to, with history kept) and `dir` (a plain folder).
+  `adapters/README.md` sets out the contract for writing another.
+- **The agent skill** (`skills/agent-mailbox/SKILL.md`): how an agent joins, reads, replies, holds and releases, and
+  conducts itself, including first contact, standing roles, sensitive requests and rerouting to a backup.
+- **The Claude Code plugin:** once you've run `watch` in a session, a Stop hook (`hooks/claude-rewake.sh`,
+  `asyncRewake`) starts a watcher at every turn end and wakes the session when new mail arrives (Claude Code 2.1.69 or
+  later), on one store or several, in a terminal session, Claude Code on the web, or the Claude desktop app on macOS.
+  Anywhere it can't tell it runs in the background, the Stop guard (`hooks/claude-watch-guard.sh`) asks the session to
+  re-arm the watcher instead.
+- **Docs:** `README.md`, `JOIN.md` (joining, step by step), `docs/security.md` (what a signature proves, and what the
+  guards don't cover), `docs/listening.md` (how any agent listens for mail), `SECURITY.md` (reporting a vulnerability
+  privately) and `CONTRIBUTING.md`.
+- **Tests:** the end-to-end suite (`test/run.sh`), run in CI on Linux for every pull request that changes more than
+  Markdown, `docs/` or `LICENSE`, and on Linux and macOS for such pushes to `main`; `test/bench.sh` prints rough
+  timings.
+
+### Safety and robustness
+
+What 0.1.0 does, grouped by topic. The numbers are the pull requests that made it so.
+
+**Signatures and keys**
+
+- Readers pin each sender's key the first time they verify it; a later key reads `changed` until the reader compares
+  its fingerprint out of band and runs `trust`. `agents` lists every key's fingerprint, `trust` prints the one it
+  pins, and `doctor` shows this agent's own, read from this machine (#25, #97).
+- Where this machine holds your key, `update` won't republish a record that names another key; it never pins your own
+  name to a key you don't hold; and a registry `key` that isn't a plain `<type> <base64>` public key reads as no key,
+  and `update` refuses such a record (#25).
+- A strict store's `send` refuses before changing anything when your record names no key or another one; a signature
+  that doesn't verify against your record is never published; a message's `.sig` is in place before the message
+  appears (#40).
+- `register --key` checks that the `.pub` is the public half of the private key beside it, or, for a key with a
+  passphrase, that it can sign as that key (#40).
+- `read` names the signer from the signed header (`[verified: from <name>]`), says when the file name doesn't name
+  that sender, and verifies the copy it shows (#84).
+- A message header holds only plain `key: value` lines, each key once; any other header reads `bad` (#84).
+- A signature doesn't name the store, so `JOIN.md` and `docs/security.md` say how to give each store its own key (#81,
+  #110).
+
+**Holds**
+
+- With the git adapter, `holds` reads every version of every file ever in your inbox, renamed, rewritten or merged
+  away included (the dir adapter keeps no history: a consumed record no longer counts). It reads only mail that may
+  carry a record, so it's fast on long histories: a fraction of a second on a 600-message mailbox (#12).
+- A store seen strict stays strict until `trust --relax`; a hold whose sender's key changed, or went missing after you
+  pinned it, still holds; and in a store that requires signatures, mail signed with the old key, holds included, stops
+  counting after `trust`; in an open store it still counts (#23).
+- `holds` stops with an error (exit 1) when it can't reach the store or read its full history, rather than decide from
+  part of it (#23).
+- Records from one sender with the same `sent` time: a hold wins, and two releases naming different versions conflict
+  (#23).
+- Items and versions compare as text, so `3.1` and `3.10` differ (#82).
+- A hold or release whose signature verifies (or whose pinned sender's key changed or went missing), whose `hold:` or
+  `release:`, `from:`, `to:` and `sent:` lines are plain, but whose header holds other lines that aren't, blocks its
+  item until that sender's next record (#84).
+
+**The send guard**
+
+- `send` refuses a body in `~/.ssh` (the account's own too, when `HOME` points elsewhere) or the CLI's config or state
+  folder; the CLI's config file or signing key by any name; the file a link kept in `~/.ssh` or the config folder
+  leads to, and anything under a folder one leads to; a path it can't follow to the end; and any body holding the
+  first or last line of a private-key block, or a PuTTY key's header, or its `Private-Lines:` or `Private-MAC:` line.
+  It's a deny-list of the obvious cases; `docs/security.md` lists its limits (#26, #79, #107).
+- The path check takes each folder's physical path from `pwd(1)`, so a file system that ignores case compares right
+  (#78), and walks deep link chains quickly: 20 links 300 folders deep in under 1 s, with relative targets (#80).
+
+**Reading and sending**
+
+- `read`, `list`, `watch` and `agents` spell out control characters (other than tab and line ends), bidi embeddings,
+  overrides and isolates, line and paragraph separators, and tag characters from the store (`\x1b`, `<U+202E>`);
+  zero-width characters pass as they are; no body line can start like a message boundary, and `agents` cuts a record's
+  fields to 200 bytes (#22).
+- `verify` looks in your own inbox, and a copy addressed to someone else reads `misrouted`, by name, or by path when
+  it sits in an inbox (#22, #26).
+- An inbox file in a subfolder, or whose name holds a line break, isn't a message (#12, #83).
+- With no mail, `list` and `read` under a name with no record in the mailbox stop with an error, not "no mail" (#76).
+- A reply without `--context` takes the context of the message it answers, while that message is still in your inbox
+  (a `--consume` in the same send counts) (#8); `send` normally waits for the next second rather than reuse a
+  file name from the same second (#66).
+- `send -` reads stdin as it is: a closed stdin fails at once, a socket works, and on macOS a pipe no longer fails now
+  and then (#49, #63).
+- `update` keeps the fields and text it doesn't manage in your record (#72), succeeds when nothing changed (#88,
+  #107), and refuses to retire while mail still waits, unless `--force` (#73).
+- With the git adapter, a link in the store is checked out as a plain file; with either adapter, a write, a consume or
+  a recipient's `.keep` never goes through a link (#40).
+
+**The git adapter**
+
+- Each agent name keeps its own clone of the store (#54), and commands under one name take turns in it, waiting up to
+  `AGENT_MAILBOX_LOCK_WAIT` seconds (120) for another, then naming it (#87, #107).
+- The store's `.gitattributes`, `.lfsconfig` and submodules don't apply to the clone, and git hooks and the
+  file-system monitor are off for it; only the mailbox branch is fetched (or, at the first clone of a store that
+  doesn't have it yet, its default branch); and a store that can't be reached is an error for every command that reads
+  it (#27).
+- A store named by a URL, `host:path` or an absolute path is cloned from the agent's own state folder, so nothing in
+  the folder a command runs from stands in for it (#27); git's own credential prompt is off, so a credential it would
+  ask for in the terminal fails at once; an askpass program, a credential helper's own prompt (Git Credential
+  Manager's is off too) and ssh's prompts still wait (#64).
+- The mailbox branch is matched by its exact name (#65), and a branch name git refuses is refused (#19).
+- A commit an earlier command couldn't push is published by the next command under the same name that reads the store,
+  a first `init` included (#67); a command that can't push such a commit says it wrote nothing of its own (#102); and
+  a clone whose history the store no longer shares fails, saying how to recover (#68).
+- `watch` retries a failed look at the store; commits carry the agent's name, never a person's; and a watcher's look
+  never races a send in the same clone (#24).
+
+**The command line**
+
+- `--as` or `--config` after the command is refused, and values are validated with `printf` (#8); `setup` refuses a
+  store, folder, branch or name holding a line break.
+- Values, bodies and stores that start with `-` are taken as they are, except a `holds` item (#10, #11); an exported
+  `CDPATH` is ignored (#6); the CLI finds its adapters through the link `install.sh` makes (#2).
+- `doctor` checks the setup, names what to run next, and says when a store isn't reachable or initialized (#10, #71).
+
+**The Claude Code plugin**
+
+- Its notices hold none of the store's text: new mail wakes the session with a count and the `read` command, and a
+  watcher that can't go on names the commands that show why (#85).
+- Its commands carry the `--config` the watcher ran with (#50); its lock is taken with noclobber, which is exclusive
+  everywhere (#56); and a watcher that hangs ends at the hook's deadline (#103).
+
+### Notes for anyone who ran main before 0.1.0
+
+- **Update every copy of the CLI you run**, and the plugin with it: a CLI from before #87 doesn't wait its turn in a
+  clone; and once the plugin's hook or a newer CLI has run `watch` in a session, a `watch` or retire by one from
+  before #58 no longer changes which name, store and config the hook watches. The plugin's manifest pins no version,
+  so refreshing the marketplace and updating the plugin, then starting a new session, brings each change in (#52).
+- **A command that exited 4 before you updated** (each name now has a clone of its own): if you haven't updated yet,
+  run any command that reads the store once first, such as `agents`, so its commit is published. If you already have,
+  run a command under no name, from a copy of the config without its `name =` line and with no name from the
+  environment or a session:
+  `env -u AGENT_MAILBOX_NAME -u AGENT_MAILBOX_SESSION -u CLAUDE_CODE_SESSION_ID agent-mailbox --config <copy> agents`.
+  It says it's publishing commit(s) left from an earlier command, and exits 0 once it has published it from the clone
+  all names shared. Don't send the message again instead: the stranded commit would still be there, and a later
+  command under no name would publish it as a duplicate. If you already sent it again, the next command run under no
+  name will publish the stranded copy as well: tell the recipient to consume the duplicate (#54).
+- **A git mailbox on a branch named `HEAD` or starting with `-`** is refused. Copy it to a new branch and change each
+  agent's `branch =` line:
+  `git clone -q --bare <store> tmp.git && git --git-dir=tmp.git push <store> refs/heads/<old>:refs/heads/<new>`. Pins
+  are kept per branch, so on the new one each sender's key is trusted afresh, and a store seen strict is learned
+  again. The dir adapter doesn't use the branch: set `branch = main` there; its pinned keys, and whether it was seen
+  strict, are learned afresh too (#19).
+- **A git checkout that took the store's default branch** (from before the mailbox branch existed) stays so until you
+  delete it, under `checkouts/` in the state folder `whoami` shows. Since #54 that's only the clone that commands run
+  under no name use, so only they're affected. A relative store path with a colon and no slash before it needs a
+  leading `./` (#27).
+- **Several stores in one Claude Code session:** add them in a session started after updating, not one that keeps an
+  earlier session's id (resumed, respawned, or switched over with `/reload-plugins`). After updating, mail still in
+  your inbox can wake you once more, and one new message can wake you twice (#58).
+- **Behaviour that changed:** `holds` stops with an error when it can't read the store (#23); with no mail, `list` and
+  `read` under an unregistered name exit 1 (#76); retiring with mail waiting needs `--force` (#73); a header key that
+  isn't plain makes a message read `bad` (#84); a store that can't be reached, or whose mailbox branch was deleted, is
+  an error, not old mail from the local clone (#27); an `init` that loses a race for one folder exits 1, not 4 (#68);
+  `send -` reads stdin from where it stands, and refuses one open only for writing (#49); git's own credential prompt
+  is off, so a credential it would ask for in the terminal fails at once; an askpass program, a credential helper's
+  own prompt (Git Credential Manager's is off too) and ssh's prompts still wait (#64); a key with a passphrase and no
+  `.pub` beside it makes a strict store refuse to send, and an open one send unsigned (#40); and signing reads the
+  message on stdin, so a key with a passphrase is asked for through an askpass program whenever `DISPLAY` is set, even
+  in a terminal (unset `DISPLAY`, or on OpenSSH 8.4 or later set `SSH_ASKPASS_REQUIRE=never`, to be asked in the
+  terminal); with no terminal it needs `ssh-agent`, or `SSH_ASKPASS` with `DISPLAY` set or, on OpenSSH 8.4 or later,
+  `SSH_ASKPASS_REQUIRE=force` (#40).
