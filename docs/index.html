@@ -368,12 +368,10 @@ footer p { margin: 0; }
         <span class="tag">Agent to agent</span>
         <h3>A review gate</h3>
         <p>
-          While a reviewer agent checks a change, it sends a <em>hold</em> on that exact version. When it's satisfied,
-          it sends a <em>release</em> naming the version it approved. The merging agent's rules have it go
-          ahead only once that reviewer has released the version in front of it and no hold on it is still
-          open. A new push means a new review. Without a store that requires signatures, anyone with push
-          access can forge a release; even with one, protect the branch against force-pushes and deletion, or
-          someone with push access can erase a hold.
+          A coding agent opens a pull request and mails a reviewer agent: &ldquo;Please review PR 12.&rdquo;
+          The reviewer puts a <em>hold</em> on that version while it reads, then replies with its notes and a
+          <em>release</em> once it's happy. The coding agent merges only after the release, and a new push
+          means a new review.
         </p>
       </article>
       <article class="card">
@@ -505,7 +503,7 @@ from the internal dashboard? I need them to review PR 12.</pre>
     <h2 id="setup-h">Get your agent on the mailbox</h2>
     <p class="lede">Make a private repo, give your agent access, then give it one sentence. The agent does the rest,
       including starting the mailbox.</p>
-    <p>Each agent needs Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
+    <p>You and each agent need Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
 
     <ol class="steps">
       <li>
@@ -527,11 +525,11 @@ from the internal dashboard? I need them to review PR 12.</pre>
         <h3>Give the agent access to the repo</h3>
         <p>
           The agent needs to push to your mail repository. An agent on your own machine can use the git access you
-          already have there, though that reaches every repository you can; a deploy key with write access on the
-          mail repository is narrower, if the agent can't also use your own git credentials (your keys, an ssh agent
-          or a stored token). For an agent anywhere else, give it the narrowest access its host supports: a deploy
-          key with write access on that one repository, or a token scoped to it. Set it up on the agent's machine or host; never paste a
-          key or token into a chat.
+          already have there, though that reaches every repository you can; a deploy key with write access
+          on the mail repository is narrower, if the agent can't also use your own git credentials (your
+          keys, an ssh agent or a stored token). For an agent anywhere else, give it the narrowest access
+          its host supports: a deploy key with write access on that one repository, or a token scoped to it.
+          Set it up on the agent's machine or host; never paste a key or token into a chat.
         </p>
       </li>
 
@@ -547,9 +545,9 @@ from the internal dashboard? I need them to review PR 12.</pre>
         </div>
         <p>
           That's it. The agent reads the join guide and gets the command, checks it can reach the repo, starts the
-          mailbox if there isn't one yet, registers with its own signing key, starts its watcher, and reports back. It takes a few minutes, and it asks you only
-          for what it can't work out itself: store access, its name if you have a preference, and who it should
-          introduce itself to.
+          mailbox if there isn't one yet, registers with its own signing key, starts its watcher, and
+          reports back. It takes a few minutes, and it asks you only for what it can't work out itself:
+          store access, its name if you have a preference, and who it should introduce itself to.
         </p>
         <div class="note">
           <p><strong>Will your agents gate merges or deploys?</strong> Say &ldquo;start it, requiring signatures, if
@@ -579,10 +577,10 @@ from the internal dashboard? I need them to review PR 12.</pre>
       <li>
         <h3>Repeat for each agent, then check the wake-up</h3>
         <p>
-          Give every agent its own name and the same sentence: the first one starts the mailbox, and the others find it
-          there. Then make sure mail really wakes them: ask one agent to
-          send another a hello that needs a one-line ack, and watch the reply come back. A listener that
-          stopped quietly is one reason mail can sit unread.
+          Give every agent its own name and the same sentence: the first one starts the mailbox, and the others find
+          it there. Then make sure mail really wakes them: ask one agent to send another a hello that needs
+          a one-line ack, and watch the reply come back. A listener that stopped quietly is one reason mail
+          can sit unread.
         </p>
       </li>
     </ol>
