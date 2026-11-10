@@ -11,7 +11,7 @@ SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
-  AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT
+  AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
@@ -82,6 +82,10 @@ for AD in $ADAPTERS; do
     expect "an AD_UNCHANGED in the environment doesn't make a real change read as nothing ($ab)" 0 "^update: alice \(active\)" \
       env AD_UNCHANGED=1 AD_PUBLISHED=1 HOME="$W/home-alice" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
         CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about "$ab"; done
+  # nor does an AD_PUBLISHED make an update that changes nothing claim an earlier change was just published (git)
+  [ "$AD" != git ] || expect "an AD_PUBLISHED in the environment doesn't change what a no-op update says" 0 \
+    "^update: nothing to update for alice \(active\)$" env AD_PUBLISHED=1 HOME="$W/home-alice" XDG_CONFIG_HOME= XDG_STATE_HOME= \
+      AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --status active
   if [ -n "$SSH" ]; then
     sf() { if [ "$AD" = git ]; then git --git-dir="$STORE" show "main:$1"; else cat "$STORE/$1"; fi; }
     printf 'alice %s\n' "$(cut -d' ' -f1,2 "$W/home-alice/.config/agent-mailbox/keys/alice.pub")" > "$T/al.allowed"
@@ -335,6 +339,18 @@ notes.md"'
       expect "and agents lists each key's fingerprint" 0 "^alice +$afp$" as bob agents
       bfp=$(ssh-keygen -lf "$W/home-bob/.config/agent-mailbox/keys/bob.pub" | cut -d' ' -f2 | sed 's/[+]/[+]/g')
       expect "doctor shows this agent's own key's fingerprint, read from this machine" 0 "^ok   signing key at .* \($bfp\)$" as bob doctor
+      # and so it does after bob's record in the store is given another key: the fingerprint is the local key's
+      # (only a swap that landed is tested, then reverted, and a revert that fails says so)
+      if (cd "$T/swap" && git pull -q --rebase origin main && ssh-keygen -q -t ed25519 -N '' -f "$T/k3" &&
+        sed -i.bak "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/k3.pub")|" mailbox/agents/bob.md && rm -f mailbox/agents/bob.md.bak &&
+        git commit -qam "swap bob" && git push -q origin HEAD:main); then
+        printf '%s\n' "$(as bob doctor 2>&1)" | grep -Eq "signing key at .* \($bfp\)" &&
+          ok "with bob's record swapped in the store, doctor still shows the local key's fingerprint" ||
+          no "with bob's record swapped in the store, doctor still shows the local key's fingerprint" "$(as bob doctor 2>&1)"
+        (cd "$T/swap" && [ "$(git log -1 --format=%s)" = "swap bob" ] && git revert --no-edit HEAD >/dev/null &&
+          git push -q origin HEAD:main) ||
+          no "bob's swapped record was restored" "$(git --git-dir="$STORE" log -3 --format=%s main)"
+      else no "bob's record could be swapped in the store" "$(git --git-dir="$STORE" log -3 --format=%s main)"; fi
       # a key that looks like one but that ssh-keygen can't read is said so, not left blank
       T2="$W/fpbad-$AD"; mkdir -p "$T2"; for a in fq1 fq2; do as $a setup --store "$T2/s" --adapter dir --name $a >/dev/null; done
       as fq1 init >/dev/null; as fq1 register --kind t --about t >/dev/null 2>&1; as fq2 register --kind t --about t --no-key >/dev/null 2>&1
@@ -830,6 +846,19 @@ case " $ADAPTERS " in *" git "*)
   rm -f "$T/store.git/hooks/pre-receive"
   expect "run again, it says the earlier change is now published" 0 \
     "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
+  # a command whose sync publishes what an earlier one left, then can't publish its own change, says its own change
+  # isn't published (don't resend), not that it wrote nothing: the leftover mark ends with the leftover's push
+  T="$W/left4"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as xq5 init >/dev/null; for a in xq5 xq6; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"; echo hi > "$T/m"
+  expect "(a first send the store won't take)" 4 "written locally, not published" fast xq5 send xq6 first "$T/m"
+  # (now the store takes everything but a commit whose subject names the second send)
+  printf '%s\n' '#!/bin/sh' 'while read o n r; do git log -1 --format=%s "$n" | grep -q second && exit 1; done; exit 0' > "$T/store.git/hooks/pre-receive"
+  expect "a send after a leftover is published still says its own change is unpublished" 4 \
+    "^agent-mailbox: written locally, not published" fast xq5 send xq6 second "$T/m"
+  [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
+    ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
 
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -1178,8 +1207,10 @@ as rw init >/dev/null; for a in rw rx; do as $a register --kind t --about t --no
 RS="$W/home-rw/.local/state/agent-mailbox"
 # woken <file>: the hook recorded <file> as mail it woke a session for (its notice names no file)
 woken() { find "$RS/rewake" \( -name woke -o -name pending \) -type f -exec cat {} + 2>/dev/null | grep -qF -- "$1"; }
-# wakes <description> <file> <command...>: the command wakes the session for new mail (exit 2), and <file> is recorded
-wakes() { d=$1 f=$2; shift 2; out=$("$@" 2>&1); rc=$?
+# wakes <description> <file> <command...>: the command wakes the session for new mail (exit 2), and <file> is recorded.
+# The mail is there before the hook starts, so its run's limit is a minute, not the usual 2 s: on a loaded machine the
+# watcher's first check can take longer than 2 s, and the run ends as soon as it finds the mail anyway
+wakes() { d=$1 f=$2; shift 2; out=$(RWMAX=60 "$@" 2>&1); rc=$?
   if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^agent-mailbox: new mail for ' && woken "$f"; then ok "$d"
   else no "$d (exit $rc, or $f not recorded)" "$out"; fi; }
 # cc.sh <session JSON> [args...]: a stand-in Claude Code, started with <args> (what its command line shows), that runs
@@ -1193,7 +1224,7 @@ STREAM="--input-format stream-json"
 # ccenv: the environment Claude Code 2.1.318 gives the hook (AI_AGENT names the version), in rw's home
 ccenv() { env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_STATE= \
   AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID= \
-  CLAUDE_CODE_ENTRYPOINT= AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=2 RSH="$SH" \
+  CLAUDE_CODE_ENTRYPOINT= AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX="${RWMAX:-2}" RSH="$SH" \
   RHOOK="$P/hooks/claude-rewake.sh" FAKEPID= "$@"; }
 PROCOK=""; [ -r "/proc/$$/cmdline" ] && PROCOK=1
 PTY=""; command -v python3 >/dev/null 2>&1 && python3 -c 'import os, pty; os.waitstatus_to_exitcode' 2>/dev/null && PTY=1
@@ -1215,8 +1246,9 @@ rewake() { s=$1; shift; rewakej "{\"session_id\":\"$s\"}" "$@"; }
 fakecc() { ccenv CLAUDE_CODE_ENTRYPOINT=remote "$SH" "$T/cc.sh" '{"session_id":"r1"}' "$@" 2>&1 >/dev/null; }
 ptycc() { ccenv CLAUDE_CODE_ENTRYPOINT=remote python3 -c 'import os, pty, sys
 sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$SH" "$T/cc.sh" '{"session_id":"r1"}' "$@" < /dev/null; }
-# up <pid file>: wait up to 5 s for <pid file> to name a live process
-up() { n=0; while [ $n -lt 5 ]; do p=$(cut -d' ' -f1 "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && return 0
+# up <pid file>: wait up to 30 s for <pid file> to name a live process
+# (it returns as soon as the process is up: the 30 s are for a loaded machine)
+up() { n=0; while [ $n -lt 30 ]; do p=$(cut -d' ' -f1 "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && return 0
   sleep 1; n=$((n+1)); done; return 1; }
 expect "it does nothing in a session that never ran watch" 0 '^$' rewake r1
 HOME="$W/home-rw" AGENT_MAILBOX_SESSION=r1 "$SH" "$CLI" watch 1 1 >/dev/null 2>&1
@@ -1508,9 +1540,24 @@ printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
 fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
 expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
-rm -f "$R1/error"; out=$(fk 2>&1)
+# (with a minute's limit, so the error is recorded however slow the machine: the run ends at the notice anyway)
+rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
   (*) ok "and none of the error's own text is in the notice" ;; esac
+# still failing with the same error at the day's limit, it wakes the session once more, naming the same commands. The
+# watcher fails slowly (FAKEHANG: 4 s against a 2 s limit, as a fetch to a slow store might), so its failure comes in
+# after the limit and well before the watchdog's deadline; an instant failure would be followed by the hook's pause,
+# and the limit would pass during that instead. FAKEHANG's failure prints nothing, so that's the error recorded first,
+# and the usual one is recorded again after. (Once more with 15 s and 17 s only if the hook's own start, on a loaded
+# machine, used up the 2 s, when it says only "reached its daily limit")
+rm -f "$R1/error"; (RWMAX=60 fk FAKEHANG=0) >/dev/null 2>&1
+for m in 2:4 15:17; do r=$(RWMAX=${m%:*} fk FAKEHANG=${m#*:} 2>&1); rc=$?
+  case "$r" in (*"daily limit; it starts again"*) ;; (*) break ;; esac; done
+[ "$rc" = 2 ] && printf '%s\n' "$r" | grep -Eq "reached its daily limit, still failing \(exit 1; see why: .* --as rw agents, or the watcher's last output in .*/out'?\); it starts again at this turn's end\.$" &&
+  ok "a watcher still failing at the day's limit says so, naming the command that shows why" ||
+  no "a watcher still failing at the day's limit says so, naming the command that shows why" "exit $rc: $r"
+# (in a subshell: an assignment before a function call can outlive the call)
+rm -f "$R1/error"; (RWMAX=60 fk) >/dev/null 2>&1
 fk AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error with another count or time doesn't wake it again" ||
   no "the same error with another count or time doesn't wake it again" "$(cat "$T/bg.out")"
@@ -2188,7 +2235,8 @@ as k1 holds "b#1" --version v1 >/dev/null 2>&1
 # someone with write access swaps k2's key in the registry: its hold reads changed, and must still hold
 ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap
 wr sh -c "sed 's|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|' mailbox/agents/k2.md > mailbox/agents/k2.t && mv mailbox/agents/k2.t mailbox/agents/k2.md"
-expect "a hold whose sender's key was swapped still holds" 5 "a#1 is held by k2 .*changed" as k1 holds "a#1" --version v1
+expect "a hold whose sender's key was swapped still holds, pointing at agents for the fingerprint" 5 \
+  "a#1 is held by k2 .*changed: .*out of band \(.agents. shows its fingerprint\) and ask" as k1 holds "a#1" --version v1
 # a signed record whose header isn't plain, hold or release, its key changed or not, blocks the gate, saying so
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
@@ -2215,6 +2263,8 @@ expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a recor
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1
+case "$(as k1 holds "b#1" --version v1 2>&1)" in (*"shows its fingerprint"*) no "a nokey hold points at a fingerprint agents can't show" ;;
+  (*) ok "and, with no key to show, doesn't point at agents for a fingerprint" ;; esac
 # ... or drops the closing --- from k4's record, so its header (and key) reads empty: its hold reads nokey, and must still hold
 wr sh -c "awk 'NR > 1 && \$0 == \"---\" && !d { d = 1; next } { print }' mailbox/agents/k4.md > mailbox/agents/k4.t && mv mailbox/agents/k4.t mailbox/agents/k4.md"
 expect "a hold whose sender's record no longer closes still holds" 5 "d#1 is held by k4 .*nokey" as k1 holds "d#1" --version v1
@@ -2238,7 +2288,7 @@ expect "after which the store's own setting applies" 0 "c#1 released by k3" as k
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" --is-shallow-repository "*) [ -z "${GIT_SHALLOW:-}" ] || { echo true; exit 0; } ;; esac' \
   'set -f; for p in ${GIT_FAIL:-}; do case " $* " in ($p) exit 128 ;; esac; done' "exec '$(command -v git)' \"\$@\"" > "$T/shim/git"; chmod +x "$T/shim/git"
 gf() { env PATH="$T/shim:$PATH" HOME="$W/home-k1" GIT_FAIL="$1" GIT_SHALLOW="${2:-}" "$SH" "$CLI" holds "a#1" --version v1; }
-expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*-G*'
+expect "holds stops when the search for holds and releases fails" 1 "can't read this store's full, latest history" gf '*--no-textconv[[:space:]]-G*'
 expect "or the walk over every version fails" 1 "can't read this store's full, latest history" gf '*--reverse*'
 expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
@@ -2681,6 +2731,17 @@ refused "or one reached through a linked folder" "$T/dotssh/id_ed25519"
 refused "or a link in ~/.ssh to a file outside it" "$H/.ssh/config"
 refused "or a link through ~/.ssh to a file outside it" "$T/via-ssh.md"
 refused "or a file under a folder that ~/.ssh links in from outside" "$H/.ssh/config.d/work"
+# the walk climbs every folder of a hop, not just its own: a file two folders below a folder link kept in the state
+# folder (whose links the link-target pass doesn't follow) is refused for the link on the way
+mkdir -p "$T/outside/sub"; echo x > "$T/outside/sub/file"; ln -s "$T/outside" "$S/lk"
+refused "or a file two folders below a folder link in the state folder" "$S/lk/sub/file"
+rm -f "$S/lk"
+# after a hop by a relative target, the walk climbs to the link's own folder, not one short of it: here the second hop
+# runs through t/q, a link to a link in ~/.ssh (to /, which the link-target pass skips), just below that folder
+R="$T/hk"; mkdir -p "$R/t"; echo x > "$R/body.md"; ln -s / "$H/.ssh/hl"; ln -s "$H/.ssh/hl" "$R/t/q"
+ln -s "q/${R#/}/body.md" "$R/t/s"
+refused "or a file reached through a link to ~/.ssh just below the folder of a relative link" "$R/t/s"
+rm -f "$H/.ssh/hl"
 # on a file system that ignores case, a protected folder named in another case is the same folder
 if [ -d "$H/.SSH" ]; then refused "or a file in ~/.ssh named in another case" "$H/.SSH/config"
 else sk "a file in ~/.ssh named in another case is refused (this file system minds case)"; fi
