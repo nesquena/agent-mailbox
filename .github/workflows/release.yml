@@ -5,8 +5,8 @@ name: release
 # release environment requires a reviewer; the tests then run on that commit on Linux and macOS. The publish job waits
 # for a required reviewer of the release environment, then tags vX.Y.Z on that commit and publishes the GitHub release
 # with that version's CHANGELOG.md section as its notes. Nothing is tagged or published until the reviewer approves.
-# A private repository on a plan that can't require environment reviewers runs without one, and the dispatch itself is
-# the approval; a public one always needs the reviewer.
+# A private repository whose release environment requires no reviewer (most plans can't require one there) runs
+# without one, and the dispatch itself is the approval; a public one always needs the reviewer.
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +17,7 @@ on:
 permissions:
   contents: read
 
-# one release at a time, and a second one waits rather than cancelling the first
+# one release at a time: a second one waits rather than cancelling the first (a third, while one waits, replaces it)
 concurrency:
   group: release
   cancel-in-progress: false
@@ -47,7 +47,7 @@ jobs:
           [ "$REF" = refs/heads/main ] || fail "run this on main, not $REF"
           v=$(sed -n 's/^VERSION=//p' bin/agent-mailbox)
           [ "$v" = "$VERSION" ] || fail "bin/agent-mailbox says VERSION=$v"
-          h=$(grep -m1 '^## ' CHANGELOG.md)
+          h=$(grep -m1 '^## ' CHANGELOG.md) || fail "CHANGELOG.md has no ## heading"
           re="## $(printf '%s' "$VERSION" | sed 's/\./\\./g') \([0-9]{4}-[0-9]{2}-[0-9]{2}\)"
           printf '%s\n' "$h" | grep -Eqx "$re" || fail "CHANGELOG.md's top heading is '$h', not '## $VERSION (date)'"
           if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
@@ -56,6 +56,7 @@ jobs:
           # an environment GitHub makes on first use has no reviewer, so check that this one requires one
           q='[.protection_rules[] | select(.type == "required_reviewers")] | length'
           n=$(gh api "repos/$REPO/environments/release" --jq "$q") || fail "can't read the release environment's rules"
+          case "$n" in (''|*[!0-9]*) fail "can't read the release environment's rules: '$n'" ;; esac
           if [ "$n" -lt 1 ]; then
             # environment reviewers on a private repository need a plan that offers them
             [ "$PRIVATE" = true ] ||
@@ -89,8 +90,12 @@ jobs:
           # the notes are the top CHANGELOG.md section, without its heading
           awk '/^## / { if (p) exit; p = 1; next } p' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "::error::no notes for $VERSION in CHANGELOG.md"; exit 1; }
-          # create the tag on the checked commit, failing if it exists (one made while this run waited may point
-          # elsewhere), then publish that tag
-          gh api "repos/$REPO/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$SHA" >/dev/null ||
-            { echo "::error::can't create v$VERSION on $SHA (does it exist already?)"; exit 1; }
+          # create the tag on the checked commit, then publish that tag. A tag that already exists must point there
+          # (a re-run after the tag was made); one made elsewhere while this run waited stops it
+          if ! gh api "repos/$REPO/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$SHA" >/dev/null; then
+            at=$(gh api "repos/$REPO/git/ref/tags/v$VERSION" --jq .object.sha) ||
+              { echo "::error::can't create v$VERSION on $SHA"; exit 1; }
+            [ "$at" = "$SHA" ] || { echo "::error::v$VERSION already exists on $at, not $SHA"; exit 1; }
+            echo "v$VERSION is already on $SHA (a re-run): publishing it"
+          fi
           gh release create "v$VERSION" --verify-tag --title "agent-mailbox $VERSION" --notes-file notes.md
