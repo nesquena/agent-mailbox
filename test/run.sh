@@ -2901,6 +2901,7 @@ expect "a store with no mailbox doesn't tell every agent to init" 1 "if that's w
   env HOME="$W/home-hp1" AGENT_MAILBOX_ROOT=elsewhere "$SH" "$CLI" list
 expect "update refuses --key, pointing at Replacing your key" 1 "update can't change a key; see JOIN.md's .Replacing your key." \
   as hp1 update --key "$T/any.pub"
+expect "and refuses --no-key the same way" 1 "update can't change a key" as hp1 update --no-key
 expect "setup refuses an adapter with a line break" 1 "adapter can't hold a line break" as hp2 setup --store "$T/store" \
   --adapter "dir
 x" --name hp2
@@ -2930,12 +2931,14 @@ if [ -n "$SSH" ]; then
     'unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID AGENT_MAILBOX_NAME SSH_ASKPASS_REQUIRE' \
     "${3:+export SSH_ASKPASS_REQUIRE='$3'}" "exec '$SH' '$CLI' send hp1 '$2' '$T/body'" > "$T/r.sh"; chmod +x "$T/r.sh"; }
   # in_tty: run $T/r.sh with a terminal as its stdin (BSD and util-linux script differ)
-  in_tty() { case "$(uname)" in (Linux) script -qec "'$T/r.sh'" /dev/null ;; (*) script -q /dev/null "$T/r.sh" ;; esac < /dev/null >/dev/null 2>&1; }
+  in_tty() { case "$(uname)" in (Linux) script -qc "'$T/r.sh'" /dev/null ;; (*) script -q /dev/null "$T/r.sh" ;; esac < /dev/null >/dev/null 2>&1; }
   asked() { tail -n 1 "$T/asklog" 2>/dev/null; }
   if command -v script >/dev/null 2>&1; then
     : > "$T/asklog"; runner 10.2 pp1; in_tty
     [ "$(asked)" = never ] && ok "in a terminal with OpenSSH 8.4+, signing asks for a passphrase in the terminal" ||
       no "in a terminal, signing didn't set SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"
+    for v in 9.6 8.4; do : > "$T/asklog"; runner $v "pp-$v"; in_tty
+      [ "$(asked)" = never ] && ok "and with OpenSSH $v" || no "OpenSSH $v didn't get SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"; done
     : > "$T/asklog"; runner 8.3 pp2; in_tty
     [ "$(asked)" = unset ] && ok "with OpenSSH before 8.4, it's left alone" || no "OpenSSH 8.3 got SSH_ASKPASS_REQUIRE" "$(cat "$T/asklog")"
     : > "$T/asklog"; runner 10.2 pp3 force; in_tty

@@ -489,7 +489,7 @@ register|update)
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
                  --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
   done
-  [ "$cmd" = register ] || [ -z "$keyfile" ] || die "update can't change a key; see JOIN.md's \"Replacing your key\""
+  [ "$cmd" = register ] || [ -z "$keyfile$nokey" ] || die "update can't change a key; see JOIN.md's \"Replacing your key\""
   if [ "$cmd" = register ]; then
     [ -f "$rec" ] && die "'$ME' is already registered (names are unique; use 'update' to change your record)"
     [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]"
@@ -565,9 +565,11 @@ register|update)
       { print }
       END { if (!closed) exit 2 }' "$rec"); then record_text=$kept; fi
   paths="$ROOT/agents/$ME.md"
+  [ -z "$newkey" ] || one_line key "$newkey"
   if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
-  [ -z "$newkey" ] || set_cfg key "$newkey"
+  [ -z "$newkey" ] || ( set_cfg key "$newkey" ) ||
+    die "your record names $KEY, but $CONFIG couldn't be updated: add the line 'key = $newkey' to it (or set AGENT_MAILBOX_KEY) before sending"
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   AD_UNCHANGED=; ad_commit "mailbox: $ME ${cmd}s" $paths
