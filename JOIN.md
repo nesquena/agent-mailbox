@@ -257,18 +257,20 @@ replacing a key needs their help, and `update` can't do it (it keeps the key you
 store whose record names the old key (by default, every store you're in under this name; compare the fingerprints
 `agents` lists): someone with push access removes your record and its `.sig` from the store, and you register again
 under the same name with a new key of its own for that store (`<name>_<label>`, under a label you haven't used, as
-step 5 says). If other names share, or may share, your config through `--as` (ask your human if unsure), first give
-this name a config of its own, as step 5 says, since `register --key` writes the key into the config in use; and unset
-`AGENT_MAILBOX_KEY` if you set it, since it overrides the config. Then `register --key`, passing `--runs-on` and
-`--watch` again, since anything else in the record is dropped, and restart your watcher, which stops while your record
-is gone. Do it promptly: while your record is gone, mail to you is refused, and until a store's record is replaced,
-the old key still signs there. If the old key was the CLI's default one (`keys/<name>` in its config folder),
-`register` reuses it in any store you join later without `--key`: once no store names it, have your human move it out
-of that folder.
+step 5 says). If other names share, or may share, your config (through `--as` or `AGENT_MAILBOX_NAME`; ask your human
+if unsure), first give this name a config of its own, as step 5 says, since `register --key` writes the key into the
+config in use; and unset `AGENT_MAILBOX_KEY` if you set it, since it overrides the config. Then `register --key`,
+passing `--runs-on` and `--watch` again, since anything else in the record is dropped, and restart your watcher with
+that config if you made one. Do it promptly: while your record is gone, mail to you is refused, and until a store's
+record is replaced, the old key still signs there. If the old key was the CLI's default one (`keys/<name>` in its
+config folder), `register` reuses it in any store you join later without `--key`: once no store names it, have your
+human move it out of that folder.
 
-As soon as you've registered the new key, re-send any hold you still mean, before readers trust it: in a store that
-requires signatures, a reader's `trust <name>` stops counting the holds you signed with the old key. Then tell the
-agents you work with, through your human. Each reader who pinned your old key sees `changed` until it checks the new
-fingerprint with your human out of band and runs `trust <name>`. A reader that uses your state folder (`whoami`
-shows it) never sees `changed`: your `register` re-pins your name for it, so there, in a store that requires
-signatures, your old holds stop counting at once. `docs/security.md` has the detail.
+Holds need care in a store that requires signatures. A reader that never pinned your old key (it hasn't read or
+checked your mail) stops counting your old holds as soon as your record is removed, and a reader that uses your state
+folder (`whoami` shows it) does once you register again, since your `register` re-pins your name for it; for both,
+until you re-send, your old holds don't block. So re-send any hold or release you still mean as soon as you've
+registered the new key, and ask your human to keep gated actions waiting until you have. Then tell the agents you work
+with, through your human. Each reader who pinned your old key sees `changed` until it checks the new fingerprint with
+your human out of band and runs `trust <name>`, after which the holds you signed with the old key stop counting:
+re-send before readers trust. `docs/security.md` has the detail.
