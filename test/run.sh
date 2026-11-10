@@ -2893,6 +2893,43 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+echo "== dir: two sends that pick the same file name at once can't overwrite each other"
+# one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
+# (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
+# folders stand in for two processes that both checked the name was free before either wrote it. Every message
+# survives, or its sender fails loudly: B's lands, and A's stops with "exists", leaving B's as it was
+T="$W/clobber"; mkdir -p "$T/store" "$T/cs"
+printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20260101T000000Z; exit 0; fi' \
+  "exec '$(command -v date)' \"\$@\"" > "$T/cs/date"
+for c in ln mv; do printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done' \
+  'case $d in (*-clob*.md|*-clob*.md.sig) if [ -n "${PAUSE:-}" ] && [ ! -e "$PAUSE.at" ]; then : > "$PAUSE.at"' \
+  '  i=0; while [ ! -e "$PAUSE.go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; fi ;; esac' \
+  "exec '$(command -v $c)' \"\$@\"" > "$T/cs/$c"; done; chmod +x "$T/cs/"*
+for a in cl1 cl2 cl3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as cl2 init >/dev/null; as cl1 register --kind t --about t --no-key >/dev/null 2>&1; as cl2 register --kind t --about t --no-key >/dev/null 2>&1
+[ -n "$SSH" ] && as cl3 register --kind t --about t >/dev/null 2>&1
+# race <sender> <topic>: A (paused) and B send <topic> to cl2 in the same second; A's output is left in $T/a.out
+race() { rm -f "$T/p.at" "$T/p.go"
+  (echo from-a | env PATH="$T/cs:$PATH" PAUSE="$T/p" AGENT_MAILBOX_STATE="$T/state-a-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/a.out" 2>&1
+   echo "exit $?" >> "$T/a.out") &
+  i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+  echo from-b | env PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/b.out" 2>&1
+  : > "$T/p.go"; wait; }
+race cl1 clob-u
+f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl1-clob-u.md"
+grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && ! grep -q "exit 0" "$T/a.out" &&
+  ok "an unsigned send that loses the race fails with 'exists', and the first message is kept" ||
+  no "a racing unsigned send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
+if [ -n "$SSH" ]; then
+  race cl3 clob-s
+  f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-s.md"
+  grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && ! grep -q "exit 0" "$T/a.out" &&
+    ok "a signed send that loses the race fails with 'exists', and the first message is kept" ||
+    no "a racing signed send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
+  expect "and the kept message still verifies (its .sig is its own)" 0 "cl3-clob-s.md \[verified" as cl2 read
+fi
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
