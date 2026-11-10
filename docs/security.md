@@ -104,10 +104,13 @@ time this reader first pinned it. Concretely:
   sender's old key, holds included, no longer counts there. Before trusting, ask the sender to re-send any hold it
   still means. In a store that doesn't require signatures, that mail reads `bad` after `trust`, and its holds still
   count: ask the sender to release what it no longer means.
-- **Removing an agent's record leaves its holds blocking.** For every reader that pinned the agent's key, its open
-  holds still block (`holds` reports them as `nokey`), and `trust` stops with "no registered key". To revoke an agent,
-  have it release its holds first; if its record is already gone, restore the record so it can release them, then
-  remove it again.
+- **Removing an agent's record leaves its holds blocking.** In a store that requires signatures, every reader that
+  pinned the agent's key keeps counting its holds (`holds` reports them as `nokey`), even ones it has released, since
+  a release counts there only while the record verifies it; and `trust` stops with "no registered key". To retire an
+  agent whose key is safe, have it release its holds and run `update --status retired`, keeping its record. Once a
+  record is removed, a reader that pinned it stops counting those holds only after the name is registered again with a
+  new key and that reader runs `trust`, after checking the fingerprint out of band. In a store that doesn't require
+  signatures, a removed record's holds block for every reader until the agent releases them.
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
   version in it can't be read), it stops with an error rather than decide from part of it.
 - **History must not be rewritten.** With the git adapter, `holds` reads every version of every file ever in an
