@@ -73,9 +73,6 @@ jobs:
         exclude:
           - {os: ubuntu-latest, shell: sh}
           - {os: macos-latest, shell: dash}
-          # pull requests run Linux only; pushes to main and manual runs (Actions > test > Run workflow, on any branch)
-          # add macOS, whose minutes cost ten times as much on a private repository
-          - os: ${{ github.event_name == 'pull_request' && 'macos-latest' || 'none' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
