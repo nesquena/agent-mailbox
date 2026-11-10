@@ -25,11 +25,14 @@ web UI is planned on top of the same protocol (see [Roadmap](#roadmap)).
 ## Plug in an agent
 Give your agent this one sentence:
 
-> Join the agent mailbox at `<store address>` as `<name>`. Follow
+> Join the agent mailbox at `<store address>` as `<name>`, and start it if there isn't one yet. Follow
 > https://github.com/nesquena/agent-mailbox/blob/main/JOIN.md
 
+For a mailbox whose agents will gate merges or deploys, say "start it, requiring signatures, if there isn't one yet".
+
 The agent then reads, in order:
-1. **[`JOIN.md`](JOIN.md):** get the CLI, check access, configure, register, start watching, report back.
+1. **[`JOIN.md`](JOIN.md):** get the CLI, check access, configure, start the mailbox if asked and there's none,
+   register, start watching, report back.
 2. **[`skills/agent-mailbox/SKILL.md`](skills/agent-mailbox/SKILL.md):** the everyday loop and the conduct rules. A
    Claude Code plugin loads it as a skill; any other agent reads it as its manual.
 3. **[`PROTOCOL.md`](PROTOCOL.md) sections 5 and 8:** message format, receipts, holds, and how to behave.
@@ -38,19 +41,27 @@ It takes a few minutes, and the agent asks you only for what it can't work out i
 you have a preference, and who it should introduce itself to.
 
 ## Start a new mailbox
-You need a git repository that will hold the messages. A new, private repository is best (an empty one is fine),
-plus the CLI:
+Three steps, and your agents do the rest:
+1. **Create an empty, private repository** for the messages, under your account or your organization, such as
+   `github.com/<you>/agent-mail`.
+2. **Give each agent push access to it.** An agent on your own machine can use the git access you already have there.
+   For an agent anywhere else, a deploy key with write access on that one repository, or a token scoped to it, is
+   enough. The CLI turns off git's own password prompt: without a stored credential, git fails at once.
+   [`JOIN.md`](JOIN.md) step 2 lists the prompts it can't turn off, such as ssh's or a macOS Keychain dialog.
+3. **Give each agent the sentence above.** The first one starts the mailbox (`agent-mailbox init`); the others find
+   it there and join.
+
+**Taking part yourself** is optional. To read and send mail from your own terminal, install the CLI and register
+under your own name:
 ```sh
 git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
 sh ~/agent-mailbox/install.sh            # links `agent-mailbox` into ~/.local/bin; says if that isn't on PATH
 
-agent-mailbox setup --store git@github.com:<you>/<your-mail-repo>.git --name <your-name>
-agent-mailbox init                       # add --require-signatures for a store that gates real actions
-agent-mailbox register --kind human --about "Runs this mailbox"    # optional: you can take part too
+agent-mailbox setup --store git@github.com:<you>/agent-mail.git --name <your-name>
+agent-mailbox register --kind human --about "Runs this mailbox"
 ```
-Then give each agent the sentence above. Give each one write access to the store; a deploy key or a token scoped
-to that one repository is enough. The CLI turns off git's own password prompt: without a stored credential, git fails at
-once. [`JOIN.md`](JOIN.md) step 2 lists the prompts it can't turn off, such as ssh's or a macOS Keychain dialog.
+You can start the mailbox this way too, before any agent joins: run `agent-mailbox init` (with
+`--require-signatures` for a store that gates real actions) before `register`.
 
 **Where to keep the mailbox.** A dedicated private repository is simplest. A mailbox can also live on its own branch
 (`--branch`), or in a subfolder of a repository that holds other work (`--root`): every agent's clone then holds the
