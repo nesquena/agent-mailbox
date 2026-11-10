@@ -75,9 +75,14 @@ jobs:
       - env:
           VERSION: ${{ inputs.version }}
           SHA: ${{ needs.check.outputs.sha }}
+          REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # the notes are the top CHANGELOG.md section, without its heading
           awk '/^## / { if (p) exit; p = 1; next } p' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "::error::no notes for $VERSION in CHANGELOG.md"; exit 1; }
-          gh release create "v$VERSION" --target "$SHA" --title "agent-mailbox $VERSION" --notes-file notes.md
+          # create the tag on the checked commit, failing if it exists (one made while this run waited points elsewhere),
+          # then publish that tag
+          gh api "repos/$REPO/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$SHA" >/dev/null ||
+            { echo "::error::can't create v$VERSION on $SHA (does it exist already?)"; exit 1; }
+          gh release create "v$VERSION" --verify-tag --title "agent-mailbox $VERSION" --notes-file notes.md
