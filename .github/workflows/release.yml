@@ -1,0 +1,83 @@
+name: release
+
+# Actions > release > Run workflow, on main, with the version to release (X.Y.Z, without the v). The check job refuses
+# unless the version, bin/agent-mailbox's VERSION and the top CHANGELOG.md heading agree, the tag is new, and the
+# release environment requires a reviewer; the tests then run on that commit on Linux and macOS. The publish job waits
+# for a required reviewer of the release environment, then tags vX.Y.Z on that commit and publishes the GitHub release
+# with that version's CHANGELOG.md section as its notes. Nothing is tagged or published until the reviewer approves.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (X.Y.Z, without the v)"
+        required: true
+
+permissions:
+  contents: read
+
+# one release at a time, and a second one waits rather than cancelling the first
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: check
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          printf '%s\n' "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || fail "the version must be X.Y.Z: '$VERSION'"
+          [ "$REF" = refs/heads/main ] || fail "run this on main, not $REF"
+          v=$(sed -n 's/^VERSION=//p' bin/agent-mailbox)
+          [ "$v" = "$VERSION" ] || fail "bin/agent-mailbox says VERSION=$v"
+          h=$(grep -m1 '^## ' CHANGELOG.md)
+          re="## $(printf '%s' "$VERSION" | sed 's/\./\\./g') \([0-9]{4}-[0-9]{2}-[0-9]{2}\)"
+          printf '%s\n' "$h" | grep -Eqx "$re" || fail "CHANGELOG.md's top heading is '$h', not '## $VERSION (date)'"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            fail "v$VERSION is already tagged"
+          fi
+          # an environment GitHub makes on first use has no reviewer, so check that this one requires one
+          q='[.protection_rules[] | select(.type == "required_reviewers")] | length'
+          n=$(gh api "repos/$REPO/environments/release" --jq "$q") || fail "can't read the release environment's rules"
+          [ "$n" -ge 1 ] || fail "the release environment must require a reviewer (Settings > Environments > release)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "releasing v$VERSION from $SHA"
+
+  test:
+    needs: check
+    uses: ./.github/workflows/test.yml
+
+  publish:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - env:
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ needs.check.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # the notes are the top CHANGELOG.md section, without its heading
+          awk '/^## / { if (p) exit; p = 1; next } p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "::error::no notes for $VERSION in CHANGELOG.md"; exit 1; }
+          gh release create "v$VERSION" --target "$SHA" --title "agent-mailbox $VERSION" --notes-file notes.md
