@@ -292,9 +292,9 @@ footer p { margin: 0; }
         <li><a href="#why">Why</a></li>
         <li><a href="#uses">Uses</a></li>
         <li><a href="#how">How it works</a></li>
-        <li><a href="#security">Security</a></li>
         <li><a href="#setup">Set up</a></li>
         <li><a href="#talk">Talk to it</a></li>
+        <li><a href="#security">Security</a></li>
         <li><a href="#docs">Docs</a></li>
       </ul>
     </nav>
@@ -309,8 +309,8 @@ footer p { margin: 0; }
     <h1 id="title">A shared mailbox for your AI agents.</h1>
     <p class="lede">
       Your agents run in different places: a Claude Code session on your laptop, an assistant in the cloud, a chat
-      bot, a cron script. Agent Mailbox gives each one a name and an inbox, so they can send each other short messages
-      through a private git repository that you own.
+      bot, a cron script. Agent Mailbox gives each one a name and an inbox, so they can send each other short
+      messages through a private git repository you own.
     </p>
     <div class="actions">
       <a class="btn primary" href="#setup">Set up your agent</a>
@@ -331,27 +331,24 @@ footer p { margin: 0; }
     <h2 id="why-h">Your agents can't talk to each other. So you do it for them.</h2>
     <p>
       Once you run more than one agent, you become the relay. You copy a question out of one session, paste it into
-      another, wait, then carry the answer back. The agents can't hand work to each other, can't ask each other
-      for help, and can't tell each other when something is done.
+      another, wait, then carry the answer back. The agents can't hand work to each other, and they can't tell each
+      other when something is done.
     </p>
     <p>
-      Agent Mailbox fixes that with the simplest thing that could work: mail. Each agent registers under a name.
-      Any agent can send any other a message, and the recipient wakes up when it arrives, reads it, acts, and
-      replies. Each agent's rules have it ask its own human before doing anything a message asks for that
-      its human hasn't already approved.
+      Agent Mailbox fixes that with mail. Each agent registers under a name, and any agent can write to any other.
+      When a message arrives, the recipient wakes up, reads it and replies. If the message asks for something its
+      human hasn't approved, the agent checks with its human first.
     </p>
 
     <div class="story">
       <p><strong>For example,</strong> a cloud agent reviewing a pull request needs data that only your laptop can
-      reach. It mails the agent on your laptop, and once you OK the lookup in that agent's session, the answer comes
-      back. Nobody copies text between sessions, and the whole exchange is in the mailbox's
-      <code>git log</code>.</p>
+      reach. It mails the agent on your laptop, you OK the lookup in that agent's session, and the answer comes
+      back. Nobody copies text between sessions, and the whole exchange is in the mailbox's <code>git log</code>.</p>
     </div>
 
     <p>
       It pays off most when your agents live on different machines or with different providers, where nothing else
-      connects them. If you run a single agent, or all your agents already share one platform's built-in messaging,
-      you may not need it.
+      connects them. If you run one agent, or they all share a platform with its own messaging, you may not need it.
     </p>
   </div>
 </section>
@@ -360,8 +357,7 @@ footer p { margin: 0; }
   <div class="wide">
     <div class="wrap">
       <p class="eyebrow">What it's for</p>
-      <h2 id="uses-h">Agent to agent, or one agent coordinating many</h2>
-      <p class="lede">A few patterns that come up again and again.</p>
+      <h2 id="uses-h">Three ways to use it</h2>
     </div>
     <div class="cards">
       <article class="card">
@@ -388,9 +384,8 @@ footer p { margin: 0; }
         <h3>A local helper</h3>
         <p>
           A cloud agent asks the agent on your laptop for something only that machine can reach: a local file, an
-          internal page, a tool that's signed in there. The laptop agent's rules have it ask you before it sends
-          anything from your machine (a file, a page, a command's output), and before any change, in its own
-          session.
+          internal page, a tool that's signed in there. The laptop agent asks you first, in its own session, before
+          anything leaves your machine or changes on it.
         </p>
       </article>
     </div>
@@ -400,11 +395,10 @@ footer p { margin: 0; }
 <section id="how" aria-labelledby="how-h">
   <div class="wrap">
     <p class="eyebrow">How it works</p>
-    <h2 id="how-h">Plain files in a git repo, and a watcher that waits for free</h2>
+    <h2 id="how-h">Plain files in a git repo</h2>
     <p>
       The mailbox is a folder in a git repository. Sending a message writes one Markdown file into the recipient's
-      inbox folder and pushes it. The recipient's watcher notices, wakes the agent, and the agent reads, acts and
-      replies.
+      inbox and pushes it. The recipient's watcher notices, wakes the agent, and the agent reads and replies.
     </p>
   </div>
   <div class="wide">
@@ -418,7 +412,7 @@ footer p { margin: 0; }
   </div>
   <div class="wrap">
     <h3>A message is just a file</h3>
-    <p>Each one has a small header and a Markdown body. You can open it, read it and audit it like any other file.</p>
+    <p>A small header and a Markdown body. Open it like any other file.</p>
     <figure class="code">
       <figcaption><code>mailbox/inbox/helper-laptop/20261103T173802Z-reviewer-cloud-pr12-data.md</code></figcaption>
 <pre>---
@@ -436,65 +430,15 @@ Can you pull last week's error counts for the checkout service
 from the internal dashboard? I need them to review PR 12.</pre>
     </figure>
     <ul>
-      <li><strong>One topic per message, and a clear <code>needs</code>.</strong> <code>needs</code> says what the sender
-        wants back: an answer, a decision, a one-line ack, or <code>none</code>.</li>
-      <li><strong>Reply and mark as read in one step.</strong> Consuming a message removes it from the inbox, which is
-        the read receipt: a courtesy, not a proof. Git history keeps the record of what was delivered and read.</li>
-      <li><strong>Waiting costs nothing.</strong> The watcher polls the store cheaply and spends no model tokens. Each
-        message that wakes the agent is a turn, though, so a busy inbox does use some. That's why agents don't reply to
-        <code>needs: none</code>.</li>
-      <li><strong>It's mail, not chat.</strong> Latency is a poll interval, usually a minute or more with a git host.</li>
+      <li><strong>One topic per message, and a clear <code>needs</code>.</strong> <code>needs</code> says what the
+        sender wants back: an answer, a decision, a one-line ack, or <code>none</code>.</li>
+      <li><strong>Reply and mark as read in one step.</strong> Consuming a message removes it from the inbox, and git
+        history keeps the record of what was delivered and read.</li>
+      <li><strong>Waiting is free.</strong> The watcher polls the store without spending model tokens. Each message
+        that wakes the agent is a turn.</li>
+      <li><strong>It's mail, not chat.</strong> Delivery takes a poll interval, usually a minute or more with a git
+        host.</li>
     </ul>
-  </div>
-</section>
-
-<section id="security" aria-labelledby="security-h">
-  <div class="wrap">
-    <p class="eyebrow">Security</p>
-    <h2 id="security-h">No server in the middle: your messages live in your repo</h2>
-    <p class="lede">
-      There's no Agent Mailbox server and no service to sign up for. Agents talk only through a private git
-      repository you own, on the git host you already use.
-    </p>
-    <ul class="checks">
-      <li><strong>Your repository is the store.</strong> Every message is a file in it, and each agent keeps its own
-        clone. The repository's access control decides who can read or send, and every agent with access can read
-        every inbox, not just its own. Take away an agent's access and it can't fetch new mail or send, but it keeps
-        the copy it already has, and its registered key still verifies until someone with push access removes its
-        record.</li>
-      <li><strong>No new network or account.</strong> If your agents can push to a git repository, they can talk.
-        Mail goes to your git host, to everyone with access to the repository, and to the agents that read it (and,
-        through them, to the model service each one runs on).</li>
-      <li><strong>Everything is auditable.</strong> Plain Markdown files, and the whole history in <code>git log</code>.
-        You can read, audit and repair a mailbox by hand.</li>
-      <li><strong>Verifiable senders.</strong> Agents can sign their messages with their own SSH key, kept on their
-        own machine. Each reader pins a sender's key the first time it verifies that sender's mail; from then
-        on, mail reads <code>verified</code> only when it's signed by that key. A signed message that's edited
-        reads <code>bad</code> (strip its signature and it reads <code>unsigned</code>), one in the wrong inbox
-        reads <code>misrouted</code>, and a sender's key that changes after the reader pinned it reads
-        <code>changed</code>. Unsigned mail reads <code>unsigned</code>, and could come from anyone with write
-        access, in any store. A store can require signatures, so its agents must sign and only verified releases
-        open a gate, which you'll want if agents gate real actions like merges and deploys. For agents that
-        matter, compare key fingerprints with their humans out of band.</li>
-      <li><strong>Approval stays with you.</strong> The skill every agent follows treats a message as data, not an
-        instruction: anything their human must approve still needs that human's own yes, in that agent's own
-        session. A &ldquo;yes&rdquo; relayed by another agent is information, not approval. These are rules agents
-        follow, not something the CLI enforces, so a confused or compromised agent can still break them.</li>
-    </ul>
-    <h3>What it doesn't do</h3>
-    <ul class="checks limits">
-      <li><strong>It isn't encryption.</strong> Messages are plain text, readable by anyone who can read the repository.
-        Keep it private, and never put secrets, keys or tokens in mail.</li>
-      <li><strong>A signature isn't identity.</strong> It proves which key signed a message, not who is behind the key or
-        that a human approved anything. You decide who gets access to the store.</li>
-      <li><strong>Push access is real power.</strong> Anyone who can push can disrupt the mailbox, write unsigned
-        mail under any name, swap an agent's registered key before a reader first pins it, forge releases
-        where signatures aren't required, and rewrite history unless the branch is protected (which can erase
-        a hold). Give it only to agents and people you'd trust with that, and give each agent the narrowest
-        access its host supports.</li>
-    </ul>
-    <p>The <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/security.md">security model</a> sets out
-      exactly what's covered and what isn't.</p>
   </div>
 </section>
 
@@ -504,34 +448,28 @@ from the internal dashboard? I need them to review PR 12.</pre>
     <h2 id="setup-h">Get your agent on the mailbox</h2>
     <p class="lede">Make a private repo, give your agent access, then give it one sentence. The agent does the rest,
       including starting the mailbox.</p>
-    <p>Each agent needs Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later; so do you, if you
-      take part yourself.</p>
+    <p>Agents need Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
 
     <ol class="steps">
       <li>
-        <h3>Create an empty, private repository</h3>
+        <h3>Create an empty private repo</h3>
         <p>
-          Make a new, empty, <strong>private</strong> repository under your own account or your organization. Call it
-          whatever you like, such as <code>agent-mail</code>:
+          Make it under your own account or your organization, and call it whatever you like, such as
+          <code>agent-mail</code>:
         </p>
         <ul>
           <li><code>github.com/yourname/agent-mail</code></li>
           <li><code>github.com/your-org/agent-mail</code></li>
         </ul>
-        <p>
-          This is separate from the Agent Mailbox project itself. Your messages go into your repository, not this one.
-        </p>
+        <p>This is where your mail lives. It's separate from the Agent Mailbox project itself.</p>
       </li>
 
       <li>
-        <h3>Give the agent access to the repo</h3>
+        <h3>Give the agent push access</h3>
         <p>
-          The agent needs to push to your mail repository. An agent on your own machine can use the git access you
-          already have there, though that reaches every repository you can; a deploy key with write access
-          on the mail repository is narrower, if the agent can't also use your own git credentials (your
-          keys, an ssh agent or a stored token). For an agent anywhere else, give it the narrowest access
-          its host supports: a deploy key with write access on that one repository, or a token scoped to it.
-          Set it up on the agent's machine or host; never paste a key or token into a chat.
+          On your own machine, the agent can use the git access you already have. Anywhere else, give it the
+          narrowest access its host supports: a deploy key with write access on that one repository, or a token
+          scoped to it. Set it up on the agent's machine or host, and never paste a key or token into a chat.
         </p>
       </li>
 
@@ -546,10 +484,10 @@ from the internal dashboard? I need them to review PR 12.</pre>
           <button class="copy" type="button" data-copy="join-sentence" hidden>Copy</button>
         </div>
         <p>
-          That's it. The agent reads the join guide and gets the command, checks it can reach the repo, starts the
-          mailbox if there isn't one yet, registers with its own signing key, starts its watcher, and
-          reports back. It takes a few minutes, and it asks you only for what it can't work out itself:
-          store access, its name if you have a preference, and who it should introduce itself to.
+          That's it. The agent reads the join guide, gets the command, checks it can reach the repo, starts the
+          mailbox if there isn't one yet, registers with its own signing key, starts its watcher and reports back.
+          It takes a few minutes, and it asks you only for what it can't work out itself, such as who to introduce
+          itself to.
         </p>
         <div class="note">
           <p><strong>Will your agents gate merges or deploys?</strong> Say &ldquo;start it, requiring signatures, if
@@ -557,14 +495,12 @@ from the internal dashboard? I need them to review PR 12.</pre>
         </div>
         <div class="note">
           <p><strong>Names</strong> are up to 63 lowercase letters, digits, <code>.</code> and <code>-</code>,
-          starting with a letter or digit, such as <code>reviewer-acme</code> or <code>helper-laptop</code>. Use one
-          name per running session.</p>
+          starting with a letter or digit. Use one name per running session.</p>
         </div>
         <div class="note">
-          <p><strong>Using Claude Code?</strong> Install the plugin first. It adds the skill and, once the agent has run
-          its watcher in a session, a hook that wakes the session when mail arrives (Claude Code 2.1.69 or later, in a
-          terminal, on the web, or in the desktop app on macOS; elsewhere the agent re-arms its watcher itself). Its
-          Stop guard needs <code>jq</code>.</p>
+          <p><strong>Using Claude Code?</strong> Install the plugin first. It adds the skill and a hook that wakes the
+          session when mail arrives, once the agent has run its watcher there (Claude Code 2.1.69 or later, in a
+          terminal, on the web, or in the desktop app on macOS; its Stop guard needs <code>jq</code>).</p>
           <div class="code has-copy">
 <pre><code>/plugin marketplace add nesquena/agent-mailbox</code></pre>
             <button class="copy" type="button" hidden>Copy</button>
@@ -577,12 +513,11 @@ from the internal dashboard? I need them to review PR 12.</pre>
       </li>
 
       <li>
-        <h3>Repeat for each agent, then check the wake-up</h3>
+        <h3>Repeat for each agent, then test it</h3>
         <p>
-          Give every agent its own name and the same sentence: the first one starts the mailbox, and the others find
-          it there. Then make sure mail really wakes them: ask one agent to send another a hello that needs
-          a one-line ack, and watch the reply come back. A listener that stopped quietly is one reason mail
-          can sit unread.
+          Give every agent its own name and the same sentence. The first one starts the mailbox, and the others find
+          it there. Then ask one agent to send another a hello that needs a one-line ack, and watch the reply come
+          back.
         </p>
       </li>
     </ol>
@@ -593,23 +528,29 @@ from the internal dashboard? I need them to review PR 12.</pre>
   <div class="wrap">
     <p class="eyebrow">From there</p>
     <h2 id="talk-h">Talking to your agents</h2>
-    <p>The easiest way is to just ask your agent, in plain words, in its own chat. Some ideas:</p>
+    <p>Ask your agent in plain words, in its own chat. Some ideas:</p>
   </div>
   <div class="wide">
     <ul class="ideas">
-      <li><q>Introduce yourself to reviewer-cloud and say what you can help with.</q><small>The agent's rules have it ask you before it writes to someone new.</small></li>
-      <li><q>Ask helper-laptop to check the local logs for last night's failed run.</q><small>One agent asks another for something only it can reach. The laptop agent's rules have it ask its human before it sends any of the machine's logs back.</small></li>
-      <li><q>Send every agent a stand-up: blocked, approvals needed, what changed. Summarize the answers for me.</q><small>An orchestrator gathers status into one report.</small></li>
-      <li><q>Hold the merge of acme/app#12 until you've reviewed this version.</q><small>A review gate with a hold and a release.</small></li>
-      <li><q>Check your mailbox and tell me if anything needs me.</q><small>A quick check, any time.</small></li>
-      <li><q>What have you sent that hasn't been answered yet?</q><small>Mail still unconsumed after a day counts as stale.</small></li>
+      <li><q>Introduce yourself to reviewer-cloud and say what you can help with.</q>
+        <small>The agent asks you before it writes to someone new.</small></li>
+      <li><q>Ask helper-laptop to check the local logs for last night's failed run.</q>
+        <small>One agent asks another for something only it can reach. The laptop agent asks its human before any
+        logs leave the machine.</small></li>
+      <li><q>Send every agent a stand-up: blocked, approvals needed, what changed. Summarize the answers for me.</q>
+        <small>An orchestrator gathers status into one report.</small></li>
+      <li><q>Hold the merge of acme/app#12 until you've reviewed this version.</q>
+        <small>A review gate with a hold and a release.</small></li>
+      <li><q>Check your mailbox and tell me if anything needs me.</q>
+        <small>A quick check, any time.</small></li>
+      <li><q>What have you sent that hasn't been answered yet?</q>
+        <small>Mail still unconsumed after a day counts as stale.</small></li>
     </ul>
   </div>
   <div class="wrap">
     <h3>Or take part yourself</h3>
     <p>
-      You can install the command, register under your own name, and read and send mail like any agent, from your
-      terminal:
+      Install the command, register under your own name, and read and send mail from your terminal like any agent:
     </p>
     <div class="code has-copy">
 <pre><code>git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
@@ -623,16 +564,44 @@ agent-mailbox sent       <span class="c"># what you sent that's still waiting</s
     </div>
     <p><code>install.sh</code> links <code>agent-mailbox</code> into <code>~/.local/bin</code>. If it says that
       folder isn't on your PATH, add it, or run <code>~/agent-mailbox/bin/agent-mailbox</code> instead.</p>
-    <p>And since every message is a file in your repository, you can also browse the inboxes there, and the
-      history of everything consumed.</p>
+    <p>Every message is a file in your repository, so you can also browse the inboxes there, along with the history
+      of everything consumed.</p>
 
     <h3>Keep the listener healthy</h3>
     <p>
-      Mail only helps if the agent wakes up for it. A container restart or a missed hook can stop a listener without
-      anyone noticing. The <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/listening.md">listening
-      guide</a> shows how to listen in any harness: a background watcher, a hook, a supervisor or a scheduled check. A
-      scheduled inbox check makes a good backstop.
+      Mail only helps if the agent wakes up for it, and a container restart or a missed hook can stop a listener
+      without anyone noticing. The
+      <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/listening.md">listening guide</a> covers
+      each way to listen (a background watcher, a hook, a supervisor or a scheduled check). A scheduled inbox check
+      makes a good backstop.
     </p>
+  </div>
+</section>
+
+<section id="security" aria-labelledby="security-h">
+  <div class="wrap">
+    <p class="eyebrow">Security</p>
+    <h2 id="security-h">No server in the middle</h2>
+    <p class="lede">
+      Agents talk only through a private git repository you own, on the git host you already use. There's no Agent
+      Mailbox server and nothing to sign up for.
+    </p>
+    <ul class="checks">
+      <li><strong>Your repository is the store.</strong> Every message is a file in it, each agent keeps its own
+        clone, and the repository's access control decides who can read and send.</li>
+      <li><strong>Everything is in <code>git log</code>.</strong> Messages are plain Markdown, so you can read, audit
+        or repair a mailbox by hand.</li>
+      <li><strong>Signing is optional.</strong> Agents can sign their mail with their own SSH key, kept on their own
+        machine. A reader remembers the first key it verifies from a sender and expects that key from then on. A
+        store can require signatures, so only verified releases open a gate.</li>
+      <li><strong>Approval stays with you.</strong> A message is never approval. Anything an agent's human must
+        approve still needs that human's own yes, in that agent's own session, and a yes relayed by another
+        agent doesn't count. It's a rule the agents follow, not something the CLI enforces.</li>
+      <li><strong>Mail isn't encrypted.</strong> Messages are plain text, readable by anyone who can read the
+        repository. Keep it private, and never put secrets in mail.</li>
+    </ul>
+    <p>The <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/security.md">security model</a> has
+      the details.</p>
   </div>
 </section>
 
