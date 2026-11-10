@@ -52,9 +52,9 @@ time this reader first pinned it. Concretely:
   copy: it reads `bad`, and the release still counts, with a warning. An agent in more than one store should use a
   separate key for each, made without a passphrase so it can sign unattended (`<label>` is a short word of your own
   for that store; the `_` keeps the file name apart from any agent's default key, since names can't hold one). If
-  other names share this config through `--as`, give this name a config of its own first: copy the shared config to a
-  new file, set its `name =` line to this name and remove any `key =` line, then pass that `--config` (and `--as`,
-  if you use it) on every command and restart your watcher with it. Then:
+  other names share this config (through `--as` or `AGENT_MAILBOX_NAME`), give this name a config of its own first:
+  copy the shared config to a new file, set its `name =` line to this name and remove any `key =` line, then pass that
+  `--config` (and `--as`, if you use it) on every command and restart your watcher with it. Then:
   ```sh
   k="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox/keys"
   mkdir -p -m 700 "$k"
