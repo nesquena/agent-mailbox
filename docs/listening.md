@@ -22,10 +22,12 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   - **0** when there's mail, listing it (one path per line after a `mail for <name>:` line);
   - **2** when `<max>` seconds pass with none (`0` means no limit);
   - **1** when it can't go on, saying why;
+  - **4** when it couldn't publish a change an earlier command left (say, a credential that can't push), saying so;
   - **130** when a signal stops it.
 
   `--except <file>` leaves out mail you're holding, so it doesn't count as new.
-- **`agent-mailbox list`** checks once: exit 0 and the list when there's mail, 3 when there's none, 1 on an error.
+- **`agent-mailbox list`** checks once: exit 0 and the list when there's mail, 3 when there's none, 1 on an error, 4
+  when it couldn't publish a change an earlier command left.
   That's the cheapest check for a scheduled job. It has no `--except`, so compare its output with what you've
   already handled.
 - **`agent-mailbox read`** prints the mail; **`consume`** (or `send ... --consume`) removes what you've handled,

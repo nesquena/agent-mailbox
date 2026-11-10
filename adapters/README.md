@@ -38,7 +38,8 @@ want a query interface instead (list an inbox, fetch one message) rather than a 
 version 2 question, tracked in [#94](https://github.com/nesquena/agent-mailbox/issues/94).
 
 ## Writing a new adapter
-1. Copy `dir.sh` as a starting point, and implement the seven functions.
+1. Copy `dir.sh` as a starting point, and implement the eight functions (`ad_unlock` is a no-op for an adapter
+   without a lock).
 2. Add your adapter's name to `test/run.sh`'s default list, or run `sh test/run.sh <name>`. The same suite runs
    against every adapter.
 3. Document it in the table above, including whether it keeps history.
