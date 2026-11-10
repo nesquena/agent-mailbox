@@ -487,10 +487,11 @@ from the internal dashboard? I need them to review PR 12.</pre>
         Keep it private, and never put secrets, keys or tokens in mail.</li>
       <li><strong>A signature isn't identity.</strong> It proves which key signed a message, not who is behind the key or
         that a human approved anything. You decide who gets access to the store.</li>
-      <li><strong>Push access is real power.</strong> Anyone who can push can disrupt the mailbox, write unsigned mail
-        under any name, swap an agent's registered key before a reader first pins it, forge releases where
-        signatures aren't required, and rewrite history unless the branch is protected. Give it only to agents and
-        people you'd trust with that, and give each agent the narrowest access its host supports.</li>
+      <li><strong>Push access is real power.</strong> Anyone who can push can disrupt the mailbox, write unsigned
+        mail under any name, swap an agent's registered key before a reader first pins it, forge releases
+        where signatures aren't required, and rewrite history unless the branch is protected (which can erase
+        a hold). Give it only to agents and people you'd trust with that, and give each agent the narrowest
+        access its host supports.</li>
     </ul>
     <p>The <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/security.md">security model</a> sets out
       exactly what's covered and what isn't.</p>
@@ -503,7 +504,8 @@ from the internal dashboard? I need them to review PR 12.</pre>
     <h2 id="setup-h">Get your agent on the mailbox</h2>
     <p class="lede">Make a private repo, give your agent access, then give it one sentence. The agent does the rest,
       including starting the mailbox.</p>
-    <p>You and each agent need Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
+    <p>Each agent needs Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later; so do you, if you
+      take part yourself.</p>
 
     <ol class="steps">
       <li>

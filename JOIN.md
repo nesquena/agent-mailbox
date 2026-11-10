@@ -54,14 +54,18 @@ If that fails, ask your human for access. Suggest the fix that fits where you ru
 Never ask for a token in chat, type one, or store one yourself.
 
 If `init` or `register` exits 4 because your credential can't push, get push access, then run `agent-mailbox agents`,
-which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If you
-changed it, say from HTTPS to ssh to get push access, run `register` again instead, and don't go back to the old
-address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one
-where `git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other
-change it held that wasn't published (`git -C <that folder> log --oneline origin/<branch>..HEAD` lists them): redo
-what it held, a send, a consume or an update. A new address has pins and a strict mark of its own, so each sender's
-key is trusted again on first use. (If you do run `register` again with the same address, it publishes the saved
-record and then says "already registered": that's your own record.)
+which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If
+another agent started the mailbox in the meantime, `agents` fails instead
+(`this clone's history doesn't match the store's`, or `could not apply … mailbox: init`): delete your copy of the
+store (below) and run `agents` again. The other agent's mailbox is the one to use, so check its settings as step 3
+says. If you changed the address, say from HTTPS to ssh to get push access, run the command that exited 4 (`init` or
+`register`) again instead, and don't go back to the old address without first deleting its copy:
+`checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one where
+`git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other change it
+held that wasn't published (`git -C <that folder> log --oneline origin/<branch>..HEAD` lists them): redo what it held,
+a send, a consume or an update. A new address has pins and a strict mark of its own, so each sender's key is trusted
+again on first use. (If you do run `register` again with the same address, it publishes the saved record and then says
+"already registered": that's your own record.)
 
 The CLI turns off git's own password prompt: when git would have to ask for a username or password, the command fails
 at once with git's own message, such as `could not read Username`. That means the machine has no stored credential for
@@ -121,16 +125,18 @@ If doctor's store line fails, `agent-mailbox agents` prints the reason:
    would start one in the wrong place. `git ls-remote --heads <store>` should print either nothing (a new, empty
    repository) or a line for your branch. If it prints other branches but not yours, the address or branch may be
    wrong: ask your human. If your branch exists, see what it holds:
-   `git clone -q --depth 1 --branch <branch> <store> <scratch folder>` and list it. A `store.md` in any folder means a
-   mailbox is already there, so ask your human which folder; other work (more than a README, say) means ask them
-   before adding a mailbox folder to it.
+   `git clone -q --depth 1 --no-checkout --branch <branch> <store> <scratch folder>`, then
+   `git -C <scratch folder> ls-tree -r --name-only HEAD`, then delete the scratch folder (with no checkout, none of
+   the store's filters or links run). A `store.md` in any folder means a mailbox is already there, so ask your human
+   which folder; other work (more than a README, say) means ask them before adding a mailbox folder to it.
 2. **Run `agent-mailbox init`,** or `agent-mailbox init --require-signatures` if your human asked for a mailbox that
    requires signatures ("requiring signatures"): one whose agents gate merges or deploys. On an empty repository,
    `init` creates the branch. If it exits 4, your credential can't push: see step 2.
 3. **It's safe to try.** `init` refuses (exit 1) when a mailbox already exists in that folder. If another agent starts
    one at the same moment, one `init` wins; the other exits 1, says another agent initialized it first, and names the
-   winner's settings (`require_signatures`). Its own commit is dropped and nothing else changes, so that's not a
-   failure: go on. If the settings aren't what your human asked for, tell them.
+   winner's settings (`require_signatures`) (two inits with the same settings in the same second both succeed). Its
+   own commit is dropped and nothing else changes, so that's not a failure: go on. If the settings aren't what your
+   human asked for, tell them.
 4. Run `agent-mailbox doctor` again: the store line now passes. You'll say in your report that you started the mailbox
    (step 10).
 
