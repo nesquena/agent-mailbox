@@ -38,7 +38,8 @@ A release is a pull request that sets `VERSION` in `bin/agent-mailbox` and dates
 version. The workflow checks that the version, `VERSION` and the heading agree and that the tag is new, runs the tests
 on Linux and macOS on that commit, and then waits for a reviewer of the `release` environment to approve. On approval
 it tags `vX.Y.Z` on that commit and publishes the GitHub release, with that version's `CHANGELOG.md` section as its
-notes.
+notes. A private repository on a plan that can't require environment reviewers runs without one, so there the dispatch
+itself is the approval; a public repository always needs the reviewer.
 
 ## Adding an adapter
 See `adapters/README.md`. A new adapter passes the whole suite (`sh test/run.sh <name>`), and documents whether it

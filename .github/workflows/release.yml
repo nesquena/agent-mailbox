@@ -5,6 +5,8 @@ name: release
 # release environment requires a reviewer; the tests then run on that commit on Linux and macOS. The publish job waits
 # for a required reviewer of the release environment, then tags vX.Y.Z on that commit and publishes the GitHub release
 # with that version's CHANGELOG.md section as its notes. Nothing is tagged or published until the reviewer approves.
+# A private repository on a plan that can't require environment reviewers runs without one, and the dispatch itself is
+# the approval; a public one always needs the reviewer.
 on:
   workflow_dispatch:
     inputs:
@@ -37,6 +39,7 @@ jobs:
           REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
+          PRIVATE: ${{ github.event.repository.private }}
           GH_TOKEN: ${{ github.token }}
         run: |
           fail() { echo "::error::$*"; exit 1; }
@@ -53,7 +56,12 @@ jobs:
           # an environment GitHub makes on first use has no reviewer, so check that this one requires one
           q='[.protection_rules[] | select(.type == "required_reviewers")] | length'
           n=$(gh api "repos/$REPO/environments/release" --jq "$q") || fail "can't read the release environment's rules"
-          [ "$n" -ge 1 ] || fail "the release environment must require a reviewer (Settings > Environments > release)"
+          if [ "$n" -lt 1 ]; then
+            # environment reviewers on a private repository need a plan that offers them
+            [ "$PRIVATE" = true ] ||
+              fail "the release environment must require a reviewer (Settings > Environments > release)"
+            echo "::warning::no reviewer is required (a private repository): the dispatch is the approval"
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "releasing v$VERSION from $SHA"
 
