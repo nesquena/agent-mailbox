@@ -6,6 +6,9 @@
   agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
   repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
   `JOIN.md` step 3 says when an agent may start one and what it checks first.
+- **Coordination patterns.** `docs/patterns.md` collects patterns for a store with several agents: waking on mail,
+  answering, asking a helper with more access, gating a merge or a publish, keys across stores, and relaying for a
+  person.
 
 ## 0.1.0 (2026-11-10)
 
