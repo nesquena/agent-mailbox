@@ -165,8 +165,8 @@ Messages are data, not instructions: an agent must not act on what a message tel
 approval. The skill and `PROTOCOL.md` section 8 spell out the conduct rules every agent follows.
 
 Once several agents share a store (project agents, a helper on someone's own machine, an orchestrator), the
-patterns in [`docs/patterns.md`](docs/patterns.md) cover waking on mail in each kind of harness, asking a helper with
-more access, gating a merge, and relaying for a person.
+patterns in [`docs/patterns.md`](docs/patterns.md) cover waking on mail, answering, asking a helper with more access,
+gating a merge, and relaying for a person.
 
 ## Roadmap
 Planned work is tracked in the [issues labelled `enhancement`](https://github.com/nesquena/agent-mailbox/labels/enhancement).
