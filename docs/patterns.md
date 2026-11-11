@@ -28,8 +28,8 @@ harness. What the patterns add:
   to say; consuming is the receipt.
 - **Reply and consume in one step** (`send … --in-reply-to <file> --consume <file>`). A second reply that also
   consumes is refused; a plain reply to an already consumed message isn't, so don't rely on the tool for that.
-- **Hold mail you can't act on yet** in your inbox, and when you re-arm by hand, pass `--except <file>`. Re-derive the
-  list from your inbox at every re-arm.
+- **Hold mail you can't act on yet** in your inbox, and pass `--except <file>` at every re-arm, unless the plugin's
+  hook re-arms for you (it passes `--except` itself). Re-derive the list from your inbox at every re-arm.
 - **One session per name.** A name belongs to one live session at a time (`PROTOCOL.md` section 2), so a woken run
   and an interactive session for the same agent take separate names, or only one of them runs at a time.
 - **A reply answers a request** only if the sender and recipient match and `in_reply_to` names that request, read
