@@ -828,6 +828,53 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   for a in il1 il2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as il1 init --title old >/dev/null; git --git-dir="$T/store.git" update-ref -d refs/heads/main; as il2 init --title fresh >/dev/null 2>&1
   expect "a clone whose lone init the store once had still fails, naming the clone to remove" 1 "history doesn't match the store's" as il1 agents
+  # ... even when the store is re-created while holds reads its history: holds fetches into a ref of its own, so the
+  # clone still knows where it last synced, and its published init isn't taken for a lost one. The shim re-creates
+  # the store at the second fetch (holds' own, after its sync)
+  T="$W/historyrace"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hh1 hh2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hh1 init --title old >/dev/null
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) n=$(($(cat "$FCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$FCOUNT"' \
+    '  [ $n != 2 ] || sh -c "$RACE_CMD" >/dev/null 2>&1 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  # hrace <agent> <winner>: run holds as <agent> while the shim has <winner> re-create the store at holds' own fetch
+  # (holds itself succeeds: a re-creation during its sync would make it fail instead)
+  hrace() { rm -f "$T/n"; expect "$1: holds succeeds while the store is re-created at its own fetch" 0 "no holds or releases recorded" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
+    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-$2' '$SH' '$CLI' init --title fresh" \
+    HOME="$W/home-$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" holds; }
+  hrace hh1 hh2
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/store.md 2>/dev/null | sed -n 's/^title: //p')" = fresh ] &&
+    ok "(the store was re-created while holds ran)" || no "the shim didn't re-create the store during holds"
+  expect "a store re-created while holds read it doesn't make a published init look lost" 1 "history doesn't match the store's" as hh1 agents
+  # the shipped symptom: a clone holding published work (an init, two registrations and a send) was told its commits
+  # were unpublished, and to send again what they held
+  T="$W/historyrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hk1 hk2 hk3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hk1 init >/dev/null
+  for a in hk1 hk2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hk1 send hk2 hello - >/dev/null 2>&1; as hk1 agents >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hk1/.local/state/agent-mailbox/checkouts/"*-hk1 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hk1's copy holds its 4 published commits)" ||
+    no "hk1's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hk1 hk3
+  out=$(as hk1 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
+  # the same for an agent that joined (its clone, made by its first command after init, here register, is a
+  # single-branch clone that maps the store's branch onto origin/<branch>, which holds' own fetch mustn't touch; the
+  # init-er's clone, made from the empty store, has no such mapping), after a holds of its own already made holds' ref,
+  # which the race must move
+  T="$W/historyrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hj1 hj2 hj3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hj1 init >/dev/null
+  for a in hj1 hj2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hj1 send hj2 hello - >/dev/null 2>&1; as hj2 holds >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hj2/.local/state/agent-mailbox/checkouts/"*-hj2 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hj2's copy holds the 4 published commits)" ||
+    no "hj2's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hj2 hj3
+  out=$(as hj2 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a joiner's clone, after a holds before the race, isn't told its published work is unpublished" ||
+    no "a joiner's published commits were called unpublished" "$out"
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -2314,6 +2361,49 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$N/n2" | grep 'answer6\.md$')" ] && [ -f "$N/n1/$q" ] && ok "and publishes nothing, keeping the mail it answers" ||
     no "a linked temp was published" "$(ls -lA "$N/n2")"
   rm -f "$N"/n2/*.tmp.*
+fi
+
+if [ -n "$SSH" ]; then
+echo "== after a key change: holds' advice and trust's message, open or strict (git)"
+# a sender holds an item, then its registered key is swapped. What its old key signed stops counting after trust only
+# in a store that requires signatures; elsewhere the old hold reads bad and still counts, and both messages say which.
+# Mode f is a store seen strict whose store.md is then edited to stop requiring signatures: a reader that saw it strict
+# keeps treating it so, and trust says so too
+for mode in o s f; do
+  T="$W/rekey-$mode"; mkdir -p "$T"; git init -q --bare "$T/store.git"
+  for a in k${mode}1 k${mode}2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  if [ $mode = o ]; then as k${mode}1 init >/dev/null; else as k${mode}1 init --require-signatures >/dev/null; fi
+  for a in k${mode}1 k${mode}2; do as $a register --kind t --about t >/dev/null; done
+  echo h | as k${mode}2 send k${mode}1 hz - --hold "z#1 v1" >/dev/null
+  as k${mode}1 holds "z#1" --version v1 >/dev/null 2>&1
+  rm -rf "$T/w"; git clone -q -b main "$T/store.git" "$T/w" && ssh-keygen -q -t ed25519 -N '' -f "$T/swap" -C swap &&
+    (cd "$T/w" && git config user.email e@e && git config user.name e &&
+     sed "s|^key: .*|key: $(cut -d' ' -f1,2 "$T/swap.pub")|" mailbox/agents/k${mode}2.md > "$T/rec" &&
+     cat "$T/rec" > mailbox/agents/k${mode}2.md &&
+     { [ $mode != f ] || { sed 's/^require_signatures: true/require_signatures: false/' mailbox/store.md > "$T/st" &&
+       cat "$T/st" > mailbox/store.md; }; } && git commit -qam swap && git push -q origin HEAD:main)
+  if [ $mode = f ]; then
+    expect "a store seen strict, then edited: trust still says the old key's mail no longer counts" 0 \
+      "earlier key \(holds included\) no longer counts" as kf1 trust kf2
+  elif [ $mode = s ]; then
+    expect "strict: the changed-key advice says trusting drops the old key's holds" 5 \
+      "z#1 is held by ks2 .*then trust ks2 \(mail signed with its old key, holds included, then stops counting\)" as ks1 holds "z#1" --version v1
+    expect "strict: trust says what the old key signed no longer counts" 0 "earlier key \(holds included\) no longer counts" as ks1 trust ks2
+    expect "strict: and after trust, the old hold no longer counts" 5 "nothing recorded for z#1" as ks1 holds "z#1" --version v1
+  else
+    expect "open: the changed-key advice says the old key's holds still count after trust" 5 \
+      "z#1 is held by ko2 .*then trust ko2 \(its old key's holds still count after that, since this store doesn't require signatures: ask it to release them\)" as ko1 holds "z#1" --version v1
+    expect "open: trust says the old key's mail reads bad and its holds still count" 0 \
+      "earlier key now reads bad, and its holds still count, since this store doesn't require signatures" as ko1 trust ko2
+    expect "open: and after trust, the old hold reads bad" 0 "ko2-hz.md \[bad" as ko1 read
+    expect "open: and still holds" 5 "z#1 is held by ko2" as ko1 holds "z#1" --version v1
+    # its record removed: the hold reads nokey, and the advice still says its holds count after trust
+    (cd "$T/w" && git pull -q --rebase origin main && git rm -q mailbox/agents/ko2.md mailbox/agents/ko2.md.sig 2>/dev/null &&
+      git commit -qm rm && git push -q origin HEAD:main)
+    expect "open: with its record removed, the hold reads nokey, and the advice says its holds still count" 5 \
+      "z#1 is held by ko2 .*nokey: .*its old key's holds still count after that" as ko1 holds "z#1" --version v1
+  fi
+done
 fi
 
 if [ -n "$SSH" ]; then
