@@ -792,6 +792,20 @@ case " $ADAPTERS " in *" git "*)
   out=$(as hk1 agents 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
     ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
+  # the same for an agent that joined (its clone, made by setup, maps the store's branch onto origin/<branch>, which
+  # holds' own fetch mustn't touch), after a holds of its own already made holds' ref, which the race must move
+  T="$W/historyrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hj1 hj2 hj3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hj1 init >/dev/null
+  for a in hj1 hj2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hj1 send hj2 hello - >/dev/null 2>&1; as hj2 holds >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hj2/.local/state/agent-mailbox/checkouts/"*-hj2 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hj2's copy holds the 4 published commits)" ||
+    no "hj2's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hj2 hj3
+  out=$(as hj2 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a joiner's clone, after a holds before the race, isn't told its published work is unpublished" ||
+    no "a joiner's published commits were called unpublished" "$out"
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
