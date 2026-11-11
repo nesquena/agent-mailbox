@@ -3162,6 +3162,7 @@ expect "watch on a healthy dir store reaches its limit" 2 "no mail for vw1 after
 rm -rf "$T/store/mailbox/inbox/vw2"
 # (past 10 intervals, so a missing inbox read as a failed peek would end the watch with "can't read the store")
 expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 12s" as vw2 watch 1 12
+expect "and holds there lists nothing, never an unreadable history" 0 "no holds or releases recorded" as vw2 holds
 # the store's folder is moved away while watch runs: watch stops loudly, well within the time limit
 (as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") &
 i=0; while [ ! -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ] && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
@@ -3180,8 +3181,8 @@ expect "and read too" 1 "no mailbox" as vw1 read
 # empty one: holds stops with an error in both forms, rather than list nothing or say nothing was recorded
 # (the commands above, on the gone store, left an empty folder in its place)
 rm -rf "$T/store"; mv "$T/gone" "$T/store"; mkdir -p "$T/shim"
-printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nPATH='%s' exec mkdir "$@"\n' \
-  "$T/store" "$T/gone" "$PATH" > "$T/shim/mkdir"; chmod +x "$T/shim/mkdir"
+printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nexec "%s" "$@"\n' \
+  "$T/store" "$T/gone" "$(command -v mkdir)" > "$T/shim/mkdir"; chmod +x "$T/shim/mkdir"
 expect "holds on a dir store that goes mid-command stops with an error" 1 "can't read this store's full, latest history" \
   env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
 rm -rf "$T/store"; mv "$T/gone" "$T/store"
