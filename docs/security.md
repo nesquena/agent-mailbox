@@ -106,11 +106,13 @@ time this reader first pinned it. Concretely:
   count: ask the sender to release what it no longer means.
 - **Removing an agent's record leaves its holds blocking.** In a store that requires signatures, every reader that
   pinned the agent's key keeps counting its holds (`holds` reports them as `nokey`), even ones it has released, since
-  a release counts there only while the record verifies it; and `trust` stops with "no registered key". To retire an
-  agent whose key is safe, have it release its holds and run `update --status retired`, keeping its record. Once a
-  record is removed, a reader that pinned it stops counting those holds only after the name is registered again with a
-  new key and that reader runs `trust`, after checking the fingerprint out of band. In a store that doesn't require
-  signatures, a removed record's holds block for every reader until the agent releases them.
+  a release counts there only while the record verifies it; and `trust` stops with "no registered key". Once the
+  record is back with the same key (restored, or the agent registers again with that key), its holds and releases
+  count as before. With a new key, the old holds stop counting for a reader only once it runs `trust`, after checking
+  the fingerprint out of band. So to retire an agent whose key is safe, have it release its holds and run
+  `update --status retired`, keeping its record. In a store that doesn't require signatures, a removed record's holds
+  block every reader until the agent has a record again (restored, or registered anew: `send` refuses a name with
+  no record) and releases them.
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
   version in it can't be read), it stops with an error rather than decide from part of it.
 - **History must not be rewritten.** With the git adapter, `holds` reads every version of every file ever in an
