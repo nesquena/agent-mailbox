@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Retiring: release your holds first.** `JOIN.md`'s "Leaving", the skill and `PROTOCOL.md` now say to release any
+  holds still open before retiring, since a retired agent can't send a release and an open hold keeps blocking, and to
+  hand an item you review to another reviewer.
 - **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
   deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
   to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A

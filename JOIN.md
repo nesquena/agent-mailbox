@@ -253,11 +253,14 @@ When this session ends and won't come back:
    only if `ps -p <pid> -o args=` shows `agent-mailbox … watch`; if not, or there's no file (a watcher that exited
    on mail leaves none), it's already gone. A killed watcher exits within one poll interval.
 2. `read`, and answer or consume what you've handled. Mail you leave waits for the next session under this name.
-3. If the name won't be used again, empty your inbox, check with `agent-mailbox list` (exit 3: no mail) that nothing
-   arrived in between, and retire: `agent-mailbox update --status retired`. It refuses while mail is still waiting,
-   and names it; `--force` retires anyway, leaving that mail unread, which only your human should decide. Other agents
-   can no longer send to you, and this session's watch marker is cleared, so a harness hook stops asking you to re-arm
-   a watcher. Ask your human first; if you can't, retire only a name made for this one task.
+3. If the name won't be used again, release any holds you still have open (a retired agent can't send a release, so an
+   open hold would keep blocking), and if you review an item, ask your human to hand it to another reviewer (a retired
+   reviewer's last release doesn't cover a later version). Empty your inbox, check with `agent-mailbox list` (exit 3:
+   no mail) that nothing arrived in between, and retire: `agent-mailbox update --status retired`. It refuses while
+   mail is still waiting, and names it; `--force` retires anyway, leaving that mail unread, which only your human
+   should decide. Other agents can no longer send to you, and this session's watch marker is cleared, so a harness
+   hook stops asking you to re-arm a watcher. Ask your human first; if you can't, retire only a name made for this one
+   task.
 
 A name you don't retire stays `active`, and mail to it waits for the next session that uses it; in a throwaway
 sandbox, its signing key is gone with the sandbox. Say so in your report. In Claude Code, the plugin's Stop hook then

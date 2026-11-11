@@ -13,12 +13,12 @@ For the general version of these patterns, independent of any channel, see the s
 harness. What the patterns add:
 - **Watch every channel and store you answer on.** An agent that brought back one of two channels after a restart
   looked healthy while its mailbox sat unread for two hours.
-- **Judge liveness by a heartbeat your loop writes** (a line with the time each time `watch` returns, given a `max`
-  so it returns on a schedule, such as `watch 120 3600`), not by searching the process table. `watch` prints nothing
-  per cycle, and with a `max` of `0` it returns only on mail. Its `run/<name>.pid` file, even with the pid checked as
-  the plugin's hooks do, can't show a watcher that's paused; one killed outright leaves the file behind, naming a
-  pid that's gone. A gap in the heartbeat shows the loop stopped (your host paused, or the loop died), not that a
-  sender was late.
+- **Judge liveness by a heartbeat your loop writes** (a line with the time and `watch`'s exit code each time it
+  returns, given a `max` so it returns on a schedule, such as `watch 120 3600`), not by searching the process table.
+  `watch` prints nothing per cycle, and with a `max` of `0` it returns only on mail (or when it can't go on). Its
+  `run/<name>.pid` file, even with the pid checked as the plugin's hooks do, can't show a watcher that's paused; one
+  killed outright leaves the file behind, naming a pid that's gone. A gap in the heartbeat shows the loop stopped
+  (your host paused, or the loop died), not that a sender was late.
 - **Know what your backstop can do.** A scheduled check that can read the inbox but can't check or restart the
   session's listener is an inbox-only backstop: say so, and report that limit. Test delivery, the wake and restart
   recovery separately.
@@ -28,8 +28,8 @@ harness. What the patterns add:
   to say; consuming is the receipt.
 - **Reply and consume in one step** (`send … --in-reply-to <file> --consume <file>`). A second reply that also
   consumes is refused; a plain reply to an already consumed message isn't, so don't rely on the tool for that.
-- **Hold mail you can't act on yet** in your inbox, and re-arm with `--except <file>`. Re-derive the list from your
-  inbox at every re-arm.
+- **Hold mail you can't act on yet** in your inbox, and when you re-arm by hand, pass `--except <file>`. Re-derive the
+  list from your inbox at every re-arm.
 - **One session per name.** A name belongs to one live session at a time (`PROTOCOL.md` section 2), so a woken run
   and an interactive session for the same agent take separate names, or only one of them runs at a time.
 - **A reply answers a request** only if the sender and recipient match and `in_reply_to` names that request, read
@@ -51,8 +51,9 @@ A cloud agent often needs something only a person's own machine can reach. Patte
 - **Hold the exact version** you're reviewing, and **release the exact version** you approve:
   `send <actor> … --hold "org/repo#77 4e1a2b7"`, then `--release "org/repo#77 8c0f3d9"`.
 - **The actor checks right before acting:** `agent-mailbox holds org/repo#77 --version <the sha it will merge>`, and
-  acts only on exit 0. Exit 0 means every sender who wrote about the item released that version, not that the one
-  whose approval it needs did: check that its release is listed (`holds org/repo#77`). A new push needs a new release.
+  acts only on exit 0. Exit 0 means every sender who wrote to it about the item released that version, not that the
+  one whose approval it needs did: check that its release is listed (`holds org/repo#77`). A new push needs a new
+  release.
 - **Only gate real actions in a store with `require_signatures: true` and an adapter that keeps history** (git).
   In a store that isn't strict, anyone with write access can forge a release. A dir store keeps no history, so a
   hold that's been consumed (or deleted by anyone with write access) no longer counts. With git, protect the mailbox
@@ -60,8 +61,10 @@ A cloud agent often needs something only a person's own machine can reach. Patte
 
 ## Keys and stores
 - **A signature covers the bytes, including `to:`,** so a message moved to another inbox fails. It doesn't name the
-  store. If you're registered in more than one signed store, use a separate key in each, or a release copied from one
-  store into another will verify there.
+  store. If you're registered in more than one signed store, use a separate key in each (`register --key`), or a
+  release copied from one store into another will verify there. In a store that isn't strict, a separate key doesn't
+  stop `holds` counting a copied release: see "Which store a message belongs to" in
+  [`docs/security.md`](security.md#what-it-doesnt-prove).
 - **Re-pin a changed key with `trust` only once the change is confirmed** somewhere other than the message announcing
   it.
 - **A signature isn't approval.** It proves which key sent the message, not who holds the key and not what their
