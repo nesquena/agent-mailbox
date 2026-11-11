@@ -144,7 +144,7 @@ ad_pull() {
     [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root HEAD |
       grep -vxF -e "${rr:+$rr/}store.md" -e "${rr:+$rr/}agents/.keep" -e "${rr:+$rr/}inbox/.keep")" ]; then
     ad_git reset -q --hard "origin/$BRANCH"
-    warn "dropped an init this clone made earlier but never published: another agent has since started the mailbox at '$ROOT/' (its settings are in $ROOT/store.md)"
+    warn "dropped an init this clone made earlier but never published: another agent has since started the mailbox at '$ROOT/' (require_signatures: $(field require_signatures "$M/store.md" | clean "$CAP"); its settings are in $ROOT/store.md)"
     return 0
   fi
   # the commit `init` made in this same command (AD_INIT), when the branch now has a mailbox in its folder, is a race

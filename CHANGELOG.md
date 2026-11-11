@@ -8,8 +8,9 @@
   `JOIN.md` step 3 says when an agent may start one and what it checks first.
 - **A lost `init` no longer leaves an agent stuck.** If an agent's `init` couldn't push and another agent then started
   the mailbox, every later command failed until the agent deleted its copy of the store. The next command now drops
-  that unpublished `init`, says so, and goes on with the other agent's mailbox. A copy holding anything more still
-  fails as before.
+  that unpublished `init`, says so (naming the mailbox's `require_signatures`), and goes on with the other agent's
+  mailbox. `doctor` now shows what its sync warns, such as this, or "publishing N commit(s) left from an earlier
+  command". A copy holding anything more still fails as before.
 - **A key's passphrase is asked in the terminal.** When a command's stdin is a terminal and `DISPLAY` is set, signing
   used an askpass program for a key with a passphrase (0.1.0's note under #40); on OpenSSH 8.4 or later it now asks in
   the terminal, unless `SSH_ASKPASS_REQUIRE` is set. Without a terminal, nothing changes.

@@ -1000,7 +1000,8 @@ doctor)
       [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
     else case $derr in
       (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
-      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
+      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1
+          printf '%s\n' "$derr" | sed '$d' | sed -n 's/^agent-mailbox: /warn /p' ;; esac
     fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
