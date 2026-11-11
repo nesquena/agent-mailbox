@@ -15,6 +15,9 @@
   signed with an agent's earlier key reads `bad` after `trust`, and its holds still count; both messages now say so,
   rather than saying those holds stop counting, which is true only in a store that requires signatures. `holds`'
   warning about an unverified release now also says a hold needs a protected branch to stay put.
+- **Coordination patterns.** `docs/patterns.md` collects patterns for a store with several agents: waking on mail,
+  answering, asking a helper with more access, gating a merge or a publish, keys across stores, and relaying for a
+  person.
 - **A lost `init` no longer leaves an agent stuck.** If an agent's `init` couldn't push and another agent then started
   the mailbox, every later command failed until the agent deleted its copy of the store. The next command now drops
   that unpublished `init`, says so, and goes on with the other agent's mailbox. A copy holding anything more still

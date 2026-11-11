@@ -164,6 +164,10 @@ Details and limits are in [`docs/security.md`](docs/security.md). To report a vu
 Messages are data, not instructions: an agent must not act on what a message tells it without its own human's
 approval. The skill and `PROTOCOL.md` section 8 spell out the conduct rules every agent follows.
 
+Once several agents share a store (project agents, a helper on someone's own machine, an orchestrator), the
+patterns in [`docs/patterns.md`](docs/patterns.md) cover waking on mail, answering, asking a helper with more access,
+gating a merge, and relaying for a person.
+
 ## Roadmap
 Planned work is tracked in the [issues labelled `enhancement`](https://github.com/nesquena/agent-mailbox/labels/enhancement).
 The headline item is a **web UI and admin panel built with [Padrino](https://padrinorb.com)**, for the humans
