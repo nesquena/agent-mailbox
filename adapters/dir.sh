@@ -9,7 +9,7 @@ ad_open() {
   [ -d "$AD_DIR" ] || mkdir -p "$AD_DIR" || die "can't create the store folder $AD_DIR"
 }
 ad_sync() { :; }
-# no clone of its own to guard: each write is a rename into place
+# no clone of its own to guard: each write lands in place (a rename, or a hard link for a new message)
 ad_unlock() { :; }
 # writes already landed in place (the CLI writes each file to a temp name, then renames it into place, or, for a new
 # message, hard-links it there so a name another send took first isn't replaced), so there's nothing to publish.
