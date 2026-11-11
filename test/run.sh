@@ -761,6 +761,53 @@ case " $ADAPTERS " in *" git "*)
   for a in il1 il2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as il1 init --title old >/dev/null; git --git-dir="$T/store.git" update-ref -d refs/heads/main; as il2 init --title fresh >/dev/null 2>&1
   expect "a clone whose lone init the store once had still fails, naming the clone to remove" 1 "history doesn't match the store's" as il1 agents
+  # ... even when the store is re-created while holds reads its history: holds fetches into a ref of its own, so the
+  # clone still knows where it last synced, and its published init isn't taken for a lost one. The shim re-creates
+  # the store at the second fetch (holds' own, after its sync)
+  T="$W/historyrace"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hh1 hh2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hh1 init --title old >/dev/null
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) n=$(($(cat "$FCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$FCOUNT"' \
+    '  [ $n != 2 ] || sh -c "$RACE_CMD" >/dev/null 2>&1 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  # hrace <agent> <winner>: run holds as <agent> while the shim has <winner> re-create the store at holds' own fetch
+  # (holds itself succeeds: a re-creation during its sync would make it fail instead)
+  hrace() { rm -f "$T/n"; expect "$1: holds succeeds while the store is re-created at its own fetch" 0 "no holds or releases recorded" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
+    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-$2' '$SH' '$CLI' init --title fresh" \
+    HOME="$W/home-$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" holds; }
+  hrace hh1 hh2
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/store.md 2>/dev/null | sed -n 's/^title: //p')" = fresh ] &&
+    ok "(the store was re-created while holds ran)" || no "the shim didn't re-create the store during holds"
+  expect "a store re-created while holds read it doesn't make a published init look lost" 1 "history doesn't match the store's" as hh1 agents
+  # the shipped symptom: a clone holding published work (an init, two registrations and a send) was told its commits
+  # were unpublished, and to send again what they held
+  T="$W/historyrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hk1 hk2 hk3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hk1 init >/dev/null
+  for a in hk1 hk2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hk1 send hk2 hello - >/dev/null 2>&1; as hk1 agents >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hk1/.local/state/agent-mailbox/checkouts/"*-hk1 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hk1's copy holds its 4 published commits)" ||
+    no "hk1's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hk1 hk3
+  out=$(as hk1 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
+  # the same for an agent that joined (its clone, made by its first command after init, here register, is a
+  # single-branch clone that maps the store's branch onto origin/<branch>, which holds' own fetch mustn't touch; the
+  # init-er's clone, made from the empty store, has no such mapping), after a holds of its own already made holds' ref,
+  # which the race must move
+  T="$W/historyrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hj1 hj2 hj3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hj1 init >/dev/null
+  for a in hj1 hj2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hj1 send hj2 hello - >/dev/null 2>&1; as hj2 holds >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hj2/.local/state/agent-mailbox/checkouts/"*-hj2 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hj2's copy holds the 4 published commits)" ||
+    no "hj2's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hj2 hj3
+  out=$(as hj2 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a joiner's clone, after a holds before the race, isn't told its published work is unpublished" ||
+    no "a joiner's published commits were called unpublished" "$out"
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done

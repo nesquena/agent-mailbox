@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
+  deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
+  to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A
+  copy this already happened to may keep saying so after the upgrade, though what it counts may have reached the
+  store: before sending anything again, check with the recipient that it didn't arrive.
 - **An agent can start the mailbox.** The join sentence now ends "and start it if there isn't one yet", and the first
   agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
   repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
