@@ -71,6 +71,8 @@ for AD in $ADAPTERS; do
   expect "--as after the command is refused, not ignored" 1 "goes before the command" as alice list --as bob
   expect "--as= after the command is refused too" 1 "goes before the command" as alice list --as=bob
   expect "--config after the command is refused" 1 "goes before the command" as alice read --config /nowhere
+  expect "--as given twice is refused, not replaced by the second" 1 "^agent-mailbox: --as was given twice" as alice --as alice --as bob whoami
+  expect "and so is --config" 1 "^agent-mailbox: --config was given twice" as alice --config /nowhere --config /elsewhere whoami
   expect "help takes anything" 0 "Usage" as alice help --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
   # an update that changes nothing succeeds (the git adapter, which can tell, says so); the record and its signature are
@@ -302,6 +304,32 @@ notes.md"'
   expect "holds passes on the released version" 0 "released by bob" as alice holds "proj#12" --version abc1234
   expect "a different version isn't released" 5 "not def5678" as alice holds "proj#12" --version def5678
   expect "a malformed hold is refused" 1 "<item> <version>" sh -c "echo x | HOME='$W/home-bob' '$SH' '$CLI' send alice gate-3 - --hold 'no-version'"
+  # an option that keeps one value is refused when it's given again, never replaced by the later one
+  expect "a second --release is refused, saying to send one message per item" 1 \
+    "^agent-mailbox: --release was given twice: a message carries one hold or release; send one message per item$" \
+    as bob send alice gate-4 "$T/body" --release "proj#12 abc1234" --release "proj#13 abc1234"
+  expect "and so is a second --hold" 1 "^agent-mailbox: --hold was given twice: a message carries one hold or release" \
+    as bob send alice gate-4 "$T/body" --hold "proj#12 abc1234" --hold "proj#13 abc1234"
+  expect "and a hold with a release" 1 "a hold or a release, not both" \
+    as bob send alice gate-4 "$T/body" --hold "proj#12 abc1234" --release "proj#13 abc1234"
+  for o in --context --in-reply-to --needs; do
+    expect "send refuses $o given twice" 1 "^agent-mailbox: $o was given twice" as bob send alice gate-4 "$T/body" $o x $o y
+  done
+  out=$(as alice list 2>&1); rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 3 ] && ! printf '%s\n' "$out" | grep -q -- '-bob-gate-4\.md$'; then ok "a refused send writes no message"
+  else no "a refused send writes no message (exit $rc)" "$out"; fi
+  expect "holds refuses a second item" 1 "^agent-mailbox: holds takes one item, not 'proj#12' and 'proj#13'$" as alice holds "proj#12" "proj#13"
+  expect "and a second --version" 1 "^agent-mailbox: --version was given twice" as alice holds "proj#12" --version abc1234 --version def5678
+  expect "setup refuses an option given twice" 1 "^agent-mailbox: --name was given twice" as carol setup --store "$STORE" --adapter "$AD" --name carol --name dave
+  expect "and leaves the config as it was" 0 "^name = carol$" cat "$W/home-carol/.config/agent-mailbox/config"
+  expect "init refuses a second --title" 1 "^agent-mailbox: --title was given twice" as alice init --title a --title b
+  expect "update refuses an option given twice" 1 "^agent-mailbox: --about was given twice" as alice update --about x --about y
+  expect "and leaves the record as it was" 0 "^alice +active .* test agent A$" as carol agents
+  as dupk setup --store "$STORE" --adapter "$AD" --name dupk >/dev/null
+  expect "register refuses --key with --no-key" 1 "^agent-mailbox: register takes --key <pub> or --no-key, not both$" \
+    as dupk register --kind t --about t --key "$T/none.pub" --no-key
+  if out=$(as carol agents 2>&1) && ! printf '%s\n' "$out" | grep -q '^dupk '; then ok "and registers nothing"
+  else no "and registers nothing" "$out"; fi
   if [ "$AD" = git ]; then
     for m in $(as alice list 2>/dev/null | grep '\.md$'); do as alice consume "$(basename "$m")" >/dev/null; done
     expect "holds still sees consumed mail (git keeps history)" 0 "released by bob" as alice holds "proj#12" --version abc1234

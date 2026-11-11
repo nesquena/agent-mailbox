@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An option given twice is refused, not replaced by the second.** `send` with two `--release` (or `--hold`) options
+  delivered only the last one, without saying so, so a reader whose merge waited on the other kept waiting. It now
+  fails, sending nothing, with "--release was given twice: a message carries one hold or release; send one message per
+  item": send one message per item. The same goes for every other option that takes one value: `send`'s `--context`,
+  `--in-reply-to` and `--needs`, `setup`'s options, `init --title`, `register` and `update`'s options, `holds
+  --version` (and a second item for `holds`), and `--as` and `--config`. `register --key` with `--no-key` is refused
+  too; it used to register without a key. `--consume` and `--except` still take several.
 - **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
   deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
   to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A
