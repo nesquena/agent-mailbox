@@ -9,15 +9,21 @@ ad_open() {
   [ -d "$AD_DIR" ] || mkdir -p "$AD_DIR" || die "can't create the store folder $AD_DIR"
 }
 ad_sync() { :; }
-# no clone of its own to guard: each write is a rename into place
+# no clone of its own to guard: each write lands in place (a rename, or a hard link for a new message)
 ad_unlock() { :; }
 # writes already landed in place (the CLI writes each file to a temp name, then renames it into place, or, for a new
 # message, hard-links it there so a name another send took first isn't replaced), so there's nothing to publish.
 # ceiling: no lock, so two writers replacing the same file (a registry record) race, and a file system without hard
 # links falls back to the rename for messages too; use git for many writers.
 ad_commit() { :; }
-ad_poll() { find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
-ad_peek() { [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ] || return 0; ( CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*" | LC_ALL=C sort ); }
-ad_history() { ad_peek "$1" | while IFS= read -r p; do printf '%s %s\n' - "$p"; done; }
+# a mailbox folder (or its store.md) that's gone, say the store folder was moved away, fails the poll and the peek:
+# cksum of no files still prints a value, and a missing folder would otherwise read as "no mail". An inbox folder that
+# doesn't exist yet, in a mailbox that does, is no mail
+ad_poll() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
+  find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
+ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ] || return 0; ( CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*" | LC_ALL=C sort ); }
+# (a failed peek is the `! !` row, never fewer rows: holds then stops rather than read a gone store as an empty one)
+ad_history() { p=$(ad_peek "$1") || { echo '! !'; return 0; }
+  [ -z "$p" ] || printf '%s\n' "$p" | while IFS= read -r l; do printf '%s %s\n' - "$l"; done; }
 # (a plain file only: a link is no file of the store's, as read and verify also hold)
 ad_show() { [ -f "$AD_DIR/$2" ] && [ ! -L "$AD_DIR/$2" ] && cat "$AD_DIR/$2" 2>/dev/null; }

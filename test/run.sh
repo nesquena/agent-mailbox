@@ -71,6 +71,8 @@ for AD in $ADAPTERS; do
   expect "--as after the command is refused, not ignored" 1 "goes before the command" as alice list --as bob
   expect "--as= after the command is refused too" 1 "goes before the command" as alice list --as=bob
   expect "--config after the command is refused" 1 "goes before the command" as alice read --config /nowhere
+  expect "--as given twice is refused, not replaced by the second" 1 "^agent-mailbox: --as was given twice" as alice --as alice --as bob whoami
+  expect "and so is --config" 1 "^agent-mailbox: --config was given twice" as alice --config /nowhere --config /elsewhere whoami
   expect "help takes anything" 0 "Usage" as alice help --as bob
   expect "agents lists both" 0 "bob +active" as carol agents
   # an update that changes nothing succeeds (the git adapter, which can tell, says so); the record and its signature are
@@ -302,6 +304,39 @@ notes.md"'
   expect "holds passes on the released version" 0 "released by bob" as alice holds "proj#12" --version abc1234
   expect "a different version isn't released" 5 "not def5678" as alice holds "proj#12" --version def5678
   expect "a malformed hold is refused" 1 "<item> <version>" sh -c "echo x | HOME='$W/home-bob' '$SH' '$CLI' send alice gate-3 - --hold 'no-version'"
+  # an option that keeps one value is refused when it's given again, never replaced by the later one
+  expect "a second --release is refused, saying to send one message per item" 1 \
+    "^agent-mailbox: --release was given twice: a message carries one hold or release; send one message per item$" \
+    as bob send alice gate-4 "$T/body" --release "proj#12 abc1234" --release "proj#13 abc1234"
+  expect "and so is a second --hold" 1 "^agent-mailbox: --hold was given twice: a message carries one hold or release" \
+    as bob send alice gate-4 "$T/body" --hold "proj#12 abc1234" --hold "proj#13 abc1234"
+  expect "and a hold with a release" 1 "a hold or a release, not both" \
+    as bob send alice gate-4 "$T/body" --hold "proj#12 abc1234" --release "proj#13 abc1234"
+  for o in --context --in-reply-to --needs; do
+    expect "send refuses $o given twice" 1 "^agent-mailbox: $o was given twice" as bob send alice gate-4 "$T/body" $o x $o y
+  done
+  out=$(as alice list 2>&1); rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 3 ] && ! printf '%s\n' "$out" | grep -q -- '-bob-gate-4\.md$'; then ok "a refused send writes no message"
+  else no "a refused send writes no message (exit $rc)" "$out"; fi
+  expect "holds refuses a second item" 1 "^agent-mailbox: holds takes one item, not 'proj#12' and 'proj#13'$" as alice holds "proj#12" "proj#13"
+  expect "and a second --version" 1 "^agent-mailbox: --version was given twice" as alice holds "proj#12" --version abc1234 --version def5678
+  expect "setup refuses an option given twice" 1 "^agent-mailbox: --name was given twice" as dups setup --store "$STORE" --adapter "$AD" --name dups --name dupz
+  [ ! -e "$W/home-dups/.config/agent-mailbox/config" ] && ok "and writes no config" || no "and writes no config" "$(cat "$W/home-dups/.config/agent-mailbox/config")"
+  expect "init refuses a second --title" 1 "^agent-mailbox: --title was given twice" as alice init --title a --title b
+  expect "update refuses an option given twice" 1 "^agent-mailbox: --about was given twice" as alice update --about x --about y
+  expect "and leaves the record as it was" 0 "^alice +active .* test agent A$" as carol agents
+  as dupk setup --store "$STORE" --adapter "$AD" --name dupk >/dev/null
+  expect "register refuses --key with --no-key" 1 "^agent-mailbox: register takes --key <pub> or --no-key, not both$" \
+    as dupk register --kind t --about t --key "$T/none.pub" --no-key
+  if out=$(as carol agents 2>&1) && ! printf '%s\n' "$out" | grep -q '^dupk '; then ok "and registers nothing"
+  else no "and registers nothing" "$out"; fi
+  # (--consume still takes several: one reply consumes two messages)
+  for t in cons-1 cons-2; do as bob send alice $t "$T/body" >/dev/null; done
+  c1=$(as alice list 2>/dev/null | grep -- '-bob-cons-1\.md$'); c2=$(as alice list 2>/dev/null | grep -- '-bob-cons-2\.md$')
+  expect "send still takes several --consume" 0 - as alice send bob cons-ack "$T/body" --consume "$(basename "$c1")" --consume "$(basename "$c2")"
+  out=$(as alice list 2>&1); printf '%s\n' "$out" | grep -q -- '-bob-cons-[12]\.md$' && no "and consumes each of them" "$out" ||
+    ok "and consumes each of them"
+  expect "watch refuses a third number, not ignoring it" 1 "^agent-mailbox: watch takes an interval and a max, not '99' too$" as alice watch 1 1 99
   if [ "$AD" = git ]; then
     for m in $(as alice list 2>/dev/null | grep '\.md$'); do as alice consume "$(basename "$m")" >/dev/null; done
     expect "holds still sees consumed mail (git keeps history)" 0 "released by bob" as alice holds "proj#12" --version abc1234
@@ -735,11 +770,78 @@ case " $ADAPTERS " in *" git "*)
   else
     as is1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
     as is2 init --title winner >/dev/null
-    expect "on a seeded branch, doctor drops the lost init too, and says so" 1 "^warn dropped an init this clone made earlier" as is1 doctor
+    expect "on a seeded branch, doctor drops the lost init too, and says so" 1 "^warn dropped an init this clone made earlier.*require_signatures: false" as is1 doctor
     expect "after which commands work" 0 "NAME" as is1 agents
     expect "and the branch keeps its first commit and the winner's mailbox" 0 "^readme mailbox: init $" \
       sh -c "git --git-dir='$T/store.git' log --reverse --format=%s main | tr '\n' ' '"
   fi
+  # a dropped init is shown even when doctor's store check then fails: here the winner's store.md names a protocol this
+  # CLI doesn't speak
+  T="$W/initrace-fail"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in iv1 iv2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "doctor shows a dropped init when its store check fails (read-only folders don't stop this user)"
+  else
+    as iv1 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    as iv2 init >/dev/null 2>&1
+    git clone -q "$T/store.git" "$T/w" 2>/dev/null && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+      sed -e 's/^protocol: .*/protocol: 99/' -e 's/^require_signatures: .*/require_signatures: false (another agent-mailbox command)/' \
+        mailbox/store.md > "$T/st" && cat "$T/st" > mailbox/store.md &&
+      git commit -qam p99 && git push -q origin HEAD:main)
+    out=$(as iv1 doctor 2>&1); rc=$?
+    [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && printf '%s\n' "$out" | grep -q '^warn dropped an init' &&
+      ok "doctor shows a dropped init even when its store check then fails" || no "doctor lost the drop warning on a failed store check" "$out"
+    printf '%s\n' "$out" | grep -q '^warn .*protocol 99' && no "doctor relayed its own failure as a warn line" "$out" ||
+      ok "and doesn't repeat the failure itself as a warning"
+    # (the store's text, quoted in that warning, can't make doctor take the failure for a busy copy)
+    printf '%s\n' "$out" | grep -q '^busy' && no "text from the store made doctor say busy" "$out" || ok "and store text doesn't make it say busy"
+  fi
+  # a failure that spans lines (a root with a line break) isn't relayed as a warning, in part or whole
+  out=$(env HOME="$W/home-iv1" AGENT_MAILBOX_ROOT="mailbox
+x" "$SH" "$CLI" doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn root must be')" ] &&
+    ok "doctor doesn't relay a failure that spans lines as a warning" ||
+    no "doctor relayed a failure that spans lines as a warning, or didn't reach the store check" "$out"
+  # a failure line that quotes the lock's words (here, from the store's address) isn't taken for a busy copy
+  # (the lock's words, prefix included, in the middle of the failure line, here quoted from the mailbox folder's name:
+  # the busy pattern is anchored at the line's start)
+  out=$(env HOME="$W/home-iv1" AGENT_MAILBOX_ROOT="x agent-mailbox: another agent-mailbox command (pid 1)" "$SH" "$CLI" doctor 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^busy')" ] &&
+    ok "a failure that quotes the lock's words isn't taken for a busy copy" || no "a quoted failure made doctor say busy" "$out"
+  # a store writer can't put lines in doctor's output: git prints a path it can't create as it is, line breaks
+  # included, so a file whose path holds "agent-mailbox: ..." lines (and a part too long to create) mustn't reach
+  # doctor's warn lines, when its store check passes or when it fails. Each check is a fresh clone
+  T="$W/hostile"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  # (ho4's clone is made before the store has its branch, so its next sync takes the reset path, not a rebase)
+  for a in ho1 ho2 ho3 ho4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as ho4 doctor >/dev/null 2>&1; as ho1 init >/dev/null
+  long=$(printf 'A%.0s' $(seq 1 300))
+  git clone -q "$T/store.git" "$T/w" 2>/dev/null && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+    blob=$(echo hi | git hash-object -w --stdin) && git update-index --add --cacheinfo 100644,"$blob","mailbox/inbox/x
+agent-mailbox: FORGED all good here
+agent-mailbox: q/$long" && git commit -qm evil && git push -q origin HEAD:main)
+  [ "$(git --git-dir="$T/store.git" log -1 --format=%s main)" = evil ] && ok "the hostile path is in the store" ||
+    no "the hostile path didn't reach the store"
+  out=$(as ho2 doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^ok   the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
+    ok "a path a store writer chose doesn't reach doctor's warn lines (store check passing)" ||
+    no "a store writer's path reached doctor's warn lines" "$out"
+  # (the store check fails here because ho3 looks for a mailbox in another folder; its first checkout still meets the path)
+  as ho3 setup --store "$T/store.git" --root elsewhere --name ho3 >/dev/null
+  out=$(as ho3 doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
+    ok "nor when the store check fails" || no "a store writer's path reached doctor's warn lines on a failed check" "$out"
+  out=$(as ho4 doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
+    ok "nor when an existing clone with nothing checked out updates onto it" ||
+    no "a store writer's path reached doctor's warn lines from an existing clone's update" "$out"
+  # a state folder whose path holds a line break (and the lock's words) is refused, never read as a busy copy (one that
+  # can't be created, under a plain file, whose failure would otherwise end in the lock's words)
+  : > "$T/afile"
+  expect "a state folder with a line break is refused, not taken for a busy copy" 1 "the state folder .* can't hold a line break" \
+    env HOME="$W/home-ho2" AGENT_MAILBOX_STATE="$T/afile/st
+agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
   T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -3085,7 +3187,8 @@ if [ -n "$SSH" ]; then
     expect "$ad: register --key with a config it can't write registers nothing" 1 "couldn't be updated with the key, so nothing was registered" \
       rk "$T/afile/config"
     if [ $ad = dir ]; then has=$(ls "$sp/mailbox/agents" | grep -c '^hp4\.md'); else has=$(git --git-dir="$sp" ls-tree -r --name-only main | grep -c 'hp4\.md'); fi
-    [ "$has" = 0 ] && ok "$ad: and leaves no record in the store" || no "$ad: a register that failed left a record" "$has"
+    [ $ad = dir ] || has=$((has + $(ls "$W/home-hp4/.local/state/agent-mailbox/checkouts/"*/mailbox/agents 2>/dev/null | grep -c '^hp4\.md')))
+    [ "$has" = 0 ] && ok "$ad: and leaves no record in the store (or, with git, in its clone)" || no "$ad: a register that failed left a record" "$has"
     expect "$ad: once the config can be written, register works" 0 "^register: hp4 " rk "$T/hp4-$ad.config"
   done
   # the passphrase prompt: a shim ssh reports a version and a shim ssh-keygen logs SSH_ASKPASS_REQUIRE for each signing.
@@ -3138,14 +3241,14 @@ chmod +x "$T/cs/"*
 for a in cl1 cl2 cl3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
 as cl2 init >/dev/null; as cl1 register --kind t --about t --no-key >/dev/null 2>&1; as cl2 register --kind t --about t --no-key >/dev/null 2>&1
 [ -n "$SSH" ] && as cl3 register --kind t --about t >/dev/null 2>&1
-# race <sender> <topic> [<pause at>]: A (paused) and B send <topic> to cl2 in the same second; their output, ending
+# race <sender> <topic> [<pause at> [<VAR=value for B>]]: A (paused) and B send <topic> to cl2 in the same second; their output, ending
 # with "exit <code>", is left in $T/a.out and $T/b.out
 race() { rm -f "$T/p.at" "$T/p.go"
   (echo from-a | env PATH="$T/cs:$PATH" PAUSE="$T/p" PAUSEAT="${3:-any}" AGENT_MAILBOX_STATE="$T/state-a-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/a.out" 2>&1
    echo "exit $?" >> "$T/a.out") &
   i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
-  echo from-b | env PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
+  echo from-b | env ${4:+"$4"} PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/b.out" 2>&1
   echo "exit $?" >> "$T/b.out"; : > "$T/p.go"; wait; }
 # lost <out file>: that sender stopped with "exists" and a non-zero exit
@@ -3176,6 +3279,13 @@ if [ -n "$SSH" ]; then
     ok "a send that was still signing when the other landed stops with 'exists'; the first is kept" ||
     no "a send that was still signing overwrote the other's message" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
   expect "and the kept message verifies" 0 "cl3-clob-g.md \[verified" as cl2 read
+  # mixed: A signs and pauses at its message after its .sig landed, while B (the same name, with no key) sends unsigned
+  # in full: B's message lands beside A's .sig, then A finds the name taken and removes only its own .sig
+  race cl3 clob-x md AGENT_MAILBOX_KEY="$T/no-such-key"
+  f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-x.md"
+  grep -q from-b "$f" 2>/dev/null && [ ! -e "$f.sig" ] && lost "$T/a.out" && [ "$(tail -n 1 "$T/b.out")" = "exit 0" ] &&
+    ok "an unsigned send that lands while a signed one waits is kept, with no .sig beside it; the signed one stops" ||
+    no "a mixed race left the wrong pair" "$(cat "$T/a.out"; echo ---; cat "$T/b.out"; echo ---; ls -A "$T/store/mailbox/inbox/cl2")"
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
@@ -3221,6 +3331,41 @@ expect "with the name's pid file now another store's, this store's own file stil
   "another watcher for wa1 is running \(pid $p3\)" as wa1 watch 1 2
 kill "$p4" 2>/dev/null; i=0; while kill -0 "$p4" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 kill "$p3" 2>/dev/null; i=0; while kill -0 "$p3" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+echo "== dir: watch notices a store that's gone"
+T="$W/vanish"; mkdir -p "$T/store"
+for a in vw1 vw2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as vw1 init >/dev/null; for a in vw1 vw2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+# a healthy store, and one whose inbox folder for the name doesn't exist (yet): no mail, as before
+expect "watch on a healthy dir store reaches its limit" 2 "no mail for vw1 after 2s" as vw1 watch 1 2
+rm -rf "$T/store/mailbox/inbox/vw2"
+# (past 10 intervals, so a missing inbox read as a failed peek would end the watch with "can't read the store")
+expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 12s" as vw2 watch 1 12
+expect "and holds there lists nothing, never an unreadable history" 0 "no holds or releases recorded" as vw2 holds
+# the store's folder is moved away while watch runs: watch stops loudly, well within the time limit
+(as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") &
+i=0; while [ ! -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ] && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
+mv "$T/store" "$T/gone"
+i=0; while ! grep -q '^exit ' "$T/w.out" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "exit 0" ] &&
+  ok "watch stops with \"can't reach the store\" once the dir store is gone (after ${i}s)" ||
+  no "watch kept running, or exited quietly, after its dir store was moved away" "$(cat "$T/w.out")"
+# (a watcher still running is stopped through its own pid file, so the suite never waits on it)
+[ -n "$(grep '^exit ' "$T/w.out")" ] || { kill "$(cut -d' ' -f1 "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid")" 2>/dev/null; wait; }
+# other commands on the gone store don't read it as an empty one: holds can't pass
+expect "holds on a gone dir store fails, never exit 0" 1 "no mailbox" as vw1 holds "z#1" --version v1
+expect "and list says there's no mailbox" 1 "no mailbox" as vw1 list
+expect "and read too" 1 "no mailbox" as vw1 read
+# a store that goes after holds has found it (here, as holds makes its temp folder) is an unreadable history, not an
+# empty one: holds stops with an error in both forms, rather than list nothing or say nothing was recorded
+# (the commands above, on the gone store, left an empty folder in its place)
+rm -rf "$T/store"; mv "$T/gone" "$T/store"; mkdir -p "$T/shim"
+printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nexec "%s" "$@"\n' \
+  "$T/store" "$T/gone" "$(command -v mkdir)" > "$T/shim/mkdir"; chmod +x "$T/shim/mkdir"
+expect "holds on a dir store that goes mid-command stops with an error" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+rm -rf "$T/store"; mv "$T/gone" "$T/store"
+expect "and so does a gate check" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds "z#1" --version v1
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"

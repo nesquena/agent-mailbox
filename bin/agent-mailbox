@@ -44,7 +44,7 @@
 # again once that's published); 5 not released; 6 signature not verified; 7 another watcher for the name is running
 # on this store.
 set -u
-VERSION=0.1.1-dev
+VERSION=0.1.1
 # (set only by init, around its own commit: never taken from the environment)
 AD_INIT=
 PROTOCOL=1
@@ -73,6 +73,9 @@ warn() { printf 'agent-mailbox: %s\n' "$*" >&2; }
 # a global option after the command is refused with a hint wherever an option may appear (never an option's value)
 misplaced() { case "$1" in (--as|--as=*|--config|--config=*) die "${1%%=*} goes before the command: agent-mailbox ${1%%=*} <value> $cmd ...";; esac; }
 unknown() { misplaced "$1"; die "unknown option $1"; }
+# once <option> [<why>]: an option that keeps one value is refused when it's given again, never replaced by the later
+# one. Each option loop empties $seen first
+once() { case " $seen " in (*" $1 "*) die "$1 was given twice: ${2:-it takes one value}" ;; esac; seen="$seen $1"; }
 # matches <ERE> <value>: the whole value, on one line, matches. printf, not echo: dash's echo reads backslash escapes
 # (a `\c` would cut the value short), and a line break or carriage return never passes
 NL='
@@ -166,11 +169,11 @@ self_rev() { (
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/agent-mailbox"
 STATE="${AGENT_MAILBOX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mailbox}"
 CONFIG="${AGENT_MAILBOX_CONFIG:-$CONFIG_HOME/config}"
-AS=""
+AS="" seen=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --as) [ $# -ge 2 ] || die "--as needs a name"; AS=$2; shift 2 ;;
-    --config) [ $# -ge 2 ] || die "--config needs a file"; CONFIG=$2; shift 2 ;;
+    --as) [ $# -ge 2 ] || die "--as needs a name"; once "$1"; AS=$2; shift 2 ;;
+    --config) [ $# -ge 2 ] || die "--config needs a file"; once "$1"; CONFIG=$2; shift 2 ;;
     --version) rev=$(self_rev) || rev=""; printf 'agent-mailbox %s (protocol %s%s)\n' "$VERSION" "$PROTOCOL" "${rev:+, $rev}"; exit 0 ;;
     *) break ;;
   esac
@@ -205,6 +208,7 @@ KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$C
 
 # --- helpers -------------------------------------------------------------------------------------------------------
 one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't hold a line break"; }
+one_line "the state folder (from AGENT_MAILBOX_STATE, XDG_STATE_HOME or HOME)" "$STATE"
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
 # other_watcher <pid file>: print the pid of a live watcher the file names for this store (not this process), as
@@ -482,9 +486,9 @@ own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); m
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
 setup)
-  store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}"
+  store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}" seen=""
   while [ $# -gt 0 ]; do
-    misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
+    misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"; once "$1"
     case "$1" in --store) store=$2 ;; --adapter) adapter=$2 ;; --root) root=$2 ;; --branch) branch=$2 ;;
                  --name) name=$2 ;; *) unknown "$1" ;; esac; shift 2
   done
@@ -498,9 +502,9 @@ setup)
 }")"
   printf 'wrote %s\n' "$CONFIG" ;;
 init)
-  req=false title="agent mailbox"
+  req=false title="agent mailbox" seen=""
   while [ $# -gt 0 ]; do
-    case "$1" in --require-signatures) req=true; shift ;; --title) [ $# -ge 2 ] || die "--title needs text"; title=$2; shift 2 ;;
+    case "$1" in --require-signatures) req=true; shift ;; --title) [ $# -ge 2 ] || die "--title needs text"; once "$1"; title=$2; shift 2 ;;
                  *) unknown "$1" ;; esac
   done
   one_line title "$title"
@@ -519,14 +523,15 @@ init)
   echo "initialized a mailbox at '$ROOT/' (require_signatures: $req)" ;;
 register|update)
   need_me; load_adapter; ad_sync; need_store
-  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey="" force=""
+  rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey="" force="" seen=""
   while [ $# -gt 0 ]; do
     case "$1" in --no-key) nokey=1; shift; continue ;; --force) [ "$cmd" = update ] || unknown "$1"; force=1; shift; continue ;; esac
-    misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
+    misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"; once "$1"
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
                  --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
   done
   [ "$cmd" = register ] || [ -z "$keyfile$nokey" ] || die "update can't change a key; see JOIN.md's \"Replacing your key\""
+  [ -z "$keyfile" ] || [ -z "$nokey" ] || die "register takes --key <pub> or --no-key, not both"
   if [ "$cmd" = register ]; then
     [ -f "$rec" ] && die "'$ME' is already registered (names are unique; use 'update' to change your record)"
     [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]"
@@ -657,9 +662,11 @@ trust)
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
-  context="" ctx_set="" reply="" needs=none consume="" hold="" release=""
+  context="" ctx_set="" reply="" needs=none consume="" hold="" release="" seen=""
   while [ $# -gt 0 ]; do
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
+    case "$1" in (--consume) ;; (--hold|--release) once "$1" "a message carries one hold or release; send one message per item" ;;
+      (*) once "$1" ;; esac
     case "$1" in
       --context) context=$2; ctx_set=1 ;; --in-reply-to) reply=$(basename -- "$2") ;; --needs) needs=$2 ;;
       --consume) consume="$consume $(basename -- "$2")" ;; --hold) hold=$2 ;; --release) release=$2 ;;
@@ -856,10 +863,10 @@ verify)
   if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
   v=$(verify_file "$f" "$inb"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)
-  item="" version=""
+  item="" version="" seen=""
   while [ $# -gt 0 ]; do
-    case "$1" in --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift 2 ;;
-                 -*) unknown "$1" ;; *) item=$1; shift ;; esac
+    case "$1" in --version) [ $# -ge 2 ] || die "--version needs a value"; once "$1"; version=$2; shift 2 ;;
+                 -*) unknown "$1" ;; *) [ -z "$item" ] || die "holds takes one item, not '$item' and '$1'"; item=$1; shift ;; esac
   done
   need_me; [ -z "$version" ] || [ -n "$item" ] || die "--version needs an item"
   load_adapter; ad_sync; need_store
@@ -940,7 +947,8 @@ watch)
       --also) also=1; shift ;;
       --force) force=1; shift ;;
       -*) unknown "$1" ;;
-      *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
+      *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"
+         [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
     esac
   done
   need_me
@@ -1026,10 +1034,15 @@ doctor)
     if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
     then echo "ok   the store is reachable and initialized"; sok=1
       # what the sync said on the way (a lost init dropped, earlier commits published) is shown, not swallowed
-      [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
-    else case $derr in
-      (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
-      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
+      [ -z "$derr" ] || printf '%s\n' "$derr" | LC_ALL=C sed -n 's/^agent-mailbox: /warn /p'
+    # (only the lock's own failure is busy: the last line, starting with the lock's words; earlier lines, and the
+    # rest of a failure line, can quote the store or its host)
+    else case $(printf '%s\n' "$derr" | tail -n 1) in
+      ("agent-mailbox: another agent-mailbox command (pid "*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
+      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1
+          # (the agent-mailbox: lines before the last one, which is the failure; a failure can span lines)
+          printf '%s\n' "$derr" | LC_ALL=C awk '{ l[NR] = $0; if (index($0, "agent-mailbox: ") == 1) last = NR }
+            END { for (i = 1; i < last; i++) if (index(l[i], "agent-mailbox: ") == 1) print "warn " substr(l[i], 16) }' ;; esac
     fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
