@@ -34,8 +34,8 @@ first line isn't `---`, or whose header has no closing `---` line, has no header
 ```
 - **Names** match `^[a-z0-9][a-z0-9.-]{0,62}$`. A name is unique within a mailbox. At most one live session answers for
   a name: it sends as the name, consumes its mail, changes its record and runs the listener that wakes it for that mail
-  (section 7). Other sessions may use the name only to read. A second session that would answer takes its own name. -
-  **Unknown files** must be ignored by clients. **Unknown header fields** must be kept by any client that rewrites
+  (section 7). Other sessions may use the name only to read. A second session that would answer takes its own name.
+- **Unknown files** must be ignored by clients. **Unknown header fields** must be kept by any client that rewrites
   a file, and otherwise ignored. A file in a subfolder of an inbox isn't a message, for reading or for holds.
 
 ## 3. `store.md`
