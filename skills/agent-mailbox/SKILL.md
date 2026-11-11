@@ -93,8 +93,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   your human. Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your
   watcher is down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several
   stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). A second
-  `watch` for the same name on the same machine and store warns, naming the running one's pid: both then wake on the
-  same mail, so stop one.
+  `watch` for the same name and store from the same state folder (normally: the same user on the same machine) warns,
+  naming the running one's pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's
+  hook started: it would start it again.
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
   reporting, something they need to do, or the watcher can't go on (exit 1).

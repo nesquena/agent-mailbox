@@ -21,8 +21,8 @@ ad_commit() { :; }
 # doesn't exist yet, in a mailbox that does, is no mail
 ad_poll() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
   find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
-# (the peek checks store.md before and after listing, so a store moved away or being deleted meanwhile fails it rather
-# than reading as no mail, or as fewer messages)
+# (the peek checks store.md before and after listing, so a store moved away, or whose store.md goes before the listing
+# ends, fails it rather than reading as no mail, or as fewer messages)
 ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; pl=""
   if [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ]; then
     pl=$(CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*") || return 1; fi
