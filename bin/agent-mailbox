@@ -636,7 +636,12 @@ trust)
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
   fp=$(fpnote "$pub")
-  echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key (holds included) no longer counts" ;;
+  # in a strict store, what the old key signed stops counting; elsewhere it reads bad, and its holds still count
+  if [ -f "$M/store.md" ] && require_sigs; then
+    echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key (holds included) no longer counts"
+  else
+    echo "pinned $1's current key${fp:+ ($fp)}; mail $1 signed with an earlier key now reads bad, and its holds still count, since this store doesn't require signatures"
+  fi ;;
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
@@ -904,15 +909,16 @@ holds)
     exit 0
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
-  echo "$latest" | HOLDS_WANT=$version awk 'BEGIN { want = ENVIRON["HOLDS_WANT"] }
-    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+  echo "$latest" | HOLDS_WANT=$version HOLDS_STRICT=$strict awk 'BEGIN { want = ENVIRON["HOLDS_WANT"]
+      oldkey = ENVIRON["HOLDS_STRICT"] != "" ? "mail signed with its old key, holds included, then stops counting" : "its old key'"'"'s holds still count after that, since this store doesn'"'"'t require signatures: ask it to release them" }
+    $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (" oldkey "), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
-    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (mail signed with its old key, holds included, then stops counting), or restore its record)"; bad = 1; next }
+    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (" oldkey "), or restore its record)"; bad = 1; next }
     $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
-    END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true makes holds tamper-proof" > "/dev/stderr"
+    END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased" > "/dev/stderr"
           exit bad ? 5 : 0 }' ;;
 watch)
   interval=120 max=7000 except="" pos=0 also=""
