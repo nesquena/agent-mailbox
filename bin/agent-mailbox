@@ -972,10 +972,10 @@ watch)
     echo "$ME" > "$STATE/sessions/$SESSION"
     session_store "$c" "$also"
   fi
-  # a second watcher for the name on this store and machine wakes on the same mail as the first: say so, once, and
-  # carry on, taking the pid files over as before (a refusal could leave a session that nothing wakes). A live watcher
-  # is one whose pid file names this store and a running process whose command line is an agent-mailbox watch, as
-  # hooks/claude-watch-guard.sh checks, so a stale file, a dead pid or one reused by another process doesn't count
+  # a second watcher for the name on this store, from this state folder, wakes on the same mail as the first: say so,
+  # once, and carry on, taking the pid files over as before (a refusal could leave a session that nothing wakes). A live
+  # watcher is one whose pid file names this store and a running process whose command line is an agent-mailbox watch
+  # (other_watcher), so a stale file, a dead pid or one reused by another process doesn't count
   for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
     wp=$(other_watcher "$pf") || continue
     warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop this one, or pid $wp if it isn't the Claude Code plugin's hook (which starts it again)"; break

@@ -7,7 +7,8 @@
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
   check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
-  and machine now prints a warning naming the running watcher's pid: both wake on the same mail, so stop one.
+  from the same state folder (normally: the same user on the same machine) now prints a warning naming the running
+  watcher's pid: both wake on the same mail, so stop one.
 - **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
   (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
   isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no longer
