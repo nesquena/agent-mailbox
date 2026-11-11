@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An option given twice is refused, not replaced by the second.** `send` with two `--release` (or `--hold`) options
+  delivered only the last one, without saying so, so a reader whose merge waited on the other kept waiting. It now
+  fails and sends nothing ("--release was given twice: a message carries one hold or release"): send one message per
+  item. The same goes for every other option that takes one value: `send`'s `--context`, `--in-reply-to` and
+  `--needs`, `setup`'s options, `init --title`, `register` and `update`'s options, `holds`' `--version` (and a second
+  item for `holds`), and `--as` and `--config`. `register --key` with `--no-key` is refused too (it used to register
+  without a key), and so is a third number for `watch`. `--consume` and `--except` still take several.
 - **`watch` on a dir store notices when the store is gone.** With the store's folder moved away or deleted, the
   watcher kept running silently; it now stops with "can't reach the store", as it does for a git store. And `holds`
   on a dir store that goes while it runs stops with an error, rather than report nothing recorded.
