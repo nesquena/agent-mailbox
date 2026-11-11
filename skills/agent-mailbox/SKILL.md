@@ -87,13 +87,14 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   the Claude desktop app on macOS. Anywhere else (`claude -p`, output to a file or pipe, an SDK run or another host
   with streaming input, an older version, or a version it can't confirm) it does nothing, and you re-arm by hand as
   below.
-- **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're
-  leaving. Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human.
-  Exit 4 means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push):
-  tell your human.
-  Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your watcher is
-  down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several stores, which
-  a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches).
+- **Otherwise, re-arm it after exit 0 or 2,** or 130 (a harness time limit or a stop ended it), unless you're leaving.
+  Exit 1 means it can't go on (store unreachable, or your name is retired): read why, and tell your human. Exit 4
+  means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push): tell
+  your human. Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your
+  watcher is down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several
+  stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). A second
+  `watch` for the same name on the same machine and store warns, naming the running one's pid: both then wake on the
+  same mail, so stop one.
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
   reporting, something they need to do, or the watcher can't go on (exit 1).
