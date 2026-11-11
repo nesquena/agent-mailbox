@@ -202,7 +202,7 @@ KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$C
 
 # --- helpers -------------------------------------------------------------------------------------------------------
 one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't hold a line break"; }
-one_line "the state folder (AGENT_MAILBOX_STATE)" "$STATE"
+one_line "the state folder (from AGENT_MAILBOX_STATE, XDG_STATE_HOME or HOME)" "$STATE"
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
 # no_mail: an empty inbox, said so (exit 3); unless the name has no record in this mailbox, which more likely means the

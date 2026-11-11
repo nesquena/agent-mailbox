@@ -90,9 +90,11 @@ ad_open() {
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
-    if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH" 2>/dev/null
+    # (git's output is kept for the one die line, never passed through: it prints a path it can't create as it is)
+    cerr=""
+    if ad_remote_has_branch; then cerr=$(ad_git checkout -q -B "$BRANCH" "origin/$BRANCH" 2>&1)
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty
-    fi || { rm -rf "$AD_DIR"; die "can't check out the store"; }
+    fi || { rm -rf "$AD_DIR"; die "can't check out the store${cerr:+: $(printf '%s\n' "$cerr" | ad_gist)}"; }
     # another command may set up the same clone meanwhile: whichever moves first is kept, and is never removed. A loser
     # that moved after it lands inside it, so that copy goes too
     [ -e "$d" ] || mv "$AD_DIR" "$d" 2>/dev/null || [ -d "$d/.git" ] || { rm -rf "$AD_DIR"; die "can't move a new clone to $d"; }

@@ -778,23 +778,34 @@ x" "$SH" "$CLI" doctor 2>&1)
   # included, so a file whose path holds "agent-mailbox: ..." lines (and a part too long to create) mustn't reach
   # doctor's warn lines, when its store check passes or when it fails. Each check is a fresh clone
   T="$W/hostile"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  for a in ho1 ho2 ho3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as ho1 init >/dev/null
+  # (ho4's clone is made before the store has its branch, so its next sync takes the reset path, not a rebase)
+  for a in ho1 ho2 ho3 ho4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as ho4 doctor >/dev/null 2>&1; as ho1 init >/dev/null
   long=$(printf 'A%.0s' $(seq 1 300))
   git clone -q "$T/store.git" "$T/w" 2>/dev/null && (cd "$T/w" && git config user.email e@e && git config user.name e &&
     blob=$(echo hi | git hash-object -w --stdin) && git update-index --add --cacheinfo 100644,"$blob","mailbox/inbox/x
 agent-mailbox: FORGED all good here
 agent-mailbox: q/$long" && git commit -qm evil && git push -q origin HEAD:main)
+  [ "$(git --git-dir="$T/store.git" log -1 --format=%s main)" = evil ] && ok "the hostile path is in the store" ||
+    no "the hostile path didn't reach the store"
   out=$(as ho2 doctor 2>&1)
-  [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] && ok "a path a store writer chose doesn't reach doctor's warn lines (store check passing)" ||
+  printf '%s\n' "$out" | grep -q '^ok   the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
+    ok "a path a store writer chose doesn't reach doctor's warn lines (store check passing)" ||
     no "a store writer's path reached doctor's warn lines" "$out"
   # (the store check fails here because ho3 looks for a mailbox in another folder; its first checkout still meets the path)
   as ho3 setup --store "$T/store.git" --root elsewhere --name ho3 >/dev/null
   out=$(as ho3 doctor 2>&1)
   printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
     ok "nor when the store check fails" || no "a store writer's path reached doctor's warn lines on a failed check" "$out"
-  # a state folder whose path holds a line break (and the lock's words) is refused, never read as a busy copy
+  out=$(as ho4 doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn .*FORGED')" ] &&
+    ok "nor when an existing clone with nothing checked out updates onto it" ||
+    no "a store writer's path reached doctor's warn lines from an existing clone's update" "$out"
+  # a state folder whose path holds a line break (and the lock's words) is refused, never read as a busy copy (one that
+  # can't be created, under a plain file, whose failure would otherwise end in the lock's words)
+  : > "$T/afile"
   expect "a state folder with a line break is refused, not taken for a busy copy" 1 "the state folder .* can't hold a line break" \
-    env HOME="$W/home-ho2" AGENT_MAILBOX_STATE="$T/st
+    env HOME="$W/home-ho2" AGENT_MAILBOX_STATE="$T/afile/st
 agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
