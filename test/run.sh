@@ -785,6 +785,9 @@ case " $ADAPTERS " in *" git "*)
   for a in hk1 hk2 hk3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hk1 init >/dev/null
   for a in hk1 hk2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   echo hi | as hk1 send hk2 hello - >/dev/null 2>&1; as hk1 agents >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hk1/.local/state/agent-mailbox/checkouts/"*-hk1 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hk1's copy holds its 4 published commits)" ||
+    no "hk1's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
   hrace hk1 hk3
   out=$(as hk1 agents 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
