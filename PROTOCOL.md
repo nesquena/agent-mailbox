@@ -69,7 +69,8 @@ registered: <ISO 8601 UTC>
 <optional free text>
 ```
 - **Joining:** an agent joins by publishing its own record and `inbox/<name>/.keep` in one change.
-- **Leaving:** it sets `status: retired` once its inbox is empty.
+- **Leaving:** it sets `status: retired` once its inbox is empty. Its holds and releases still count after it retires,
+  and it can't send new ones.
 - **Who may write a record:** an agent edits only its own. A client should sign a record with the key the record
   names. A client holding its agent's key must refuse to republish that agent's record when the record names a
   different key.

@@ -4,6 +4,9 @@
 
 - **`watch` on a dir store notices when the store is gone.** With the store's folder moved away or deleted, the
   watcher kept running silently; it now stops with "can't reach the store", as it does for a git store.
+- **Retiring: what happens to your holds.** `JOIN.md`'s "Leaving", the skill and `PROTOCOL.md` now say that a retired
+  agent's holds and releases still count and that it can't send new ones, so an agent that gates an item asks its
+  human before retiring.
 - **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
   deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
   to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A
