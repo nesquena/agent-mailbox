@@ -734,7 +734,7 @@ send)
     grep -qxF -- "$to/$stamp-$ME-$topic.md" "$used"; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
   # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
   # or release waits for the next second after this sender's previous one in this store, so the two never tie.
-  # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set
+  # ceiling: it knows only this machine's sends (one session sends as a name) and an equal second, not a clock set
   # back; reading the sender's latest record from the store's history would cover both
   if [ -n "$hold$release" ]; then
     last="$STATE/gates/$STORE_ID/$ME"
