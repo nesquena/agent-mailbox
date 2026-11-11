@@ -8,8 +8,9 @@
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
-# - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
-#   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
+# - The watcher's peek fetch and holds' history fetch write only their own refs (`--refmap=`): git updates a ref only
+#   from the value it read, so a peek that also moved origin/<branch> made a send's fetch or push in this clone fail;
+#   and origin/<branch> is the clone's record of where it last synced, which tells it what it has published.
 # - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
 #   environment, never in the clone's config, which commands sharing the clone would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular

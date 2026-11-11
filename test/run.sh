@@ -768,13 +768,27 @@ case " $ADAPTERS " in *" git "*)
   for a in hh1 hh2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hh1 init --title old >/dev/null
   printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) n=$(($(cat "$FCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$FCOUNT"' \
     '  [ $n != 2 ] || sh -c "$RACE_CMD" >/dev/null 2>&1 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
-  env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
-    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-hh2' '$SH' '$CLI' init --title fresh" \
-    HOME="$W/home-hh1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
-    "$SH" "$CLI" holds "x#1" >/dev/null 2>&1
+  # hrace <agent> <winner>: run holds as <agent> while the shim has <winner> re-create the store at holds' own fetch
+  # (holds itself succeeds: a re-creation during its sync would make it fail instead)
+  hrace() { rm -f "$T/n"; expect "$1: holds succeeds while the store is re-created at its own fetch" 0 "no holds or releases recorded" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
+    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-$2' '$SH' '$CLI' init --title fresh" \
+    HOME="$W/home-$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" holds; }
+  hrace hh1 hh2
   [ "$(git --git-dir="$T/store.git" show main:mailbox/store.md 2>/dev/null | sed -n 's/^title: //p')" = fresh ] &&
     ok "(the store was re-created while holds ran)" || no "the shim didn't re-create the store during holds"
   expect "a store re-created while holds read it doesn't make a published init look lost" 1 "history doesn't match the store's" as hh1 agents
+  # the shipped symptom: a clone holding published work (an init, two registrations and a send) was told its commits
+  # were unpublished, and to send again what they held
+  T="$W/historyrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hk1 hk2 hk3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hk1 init >/dev/null
+  for a in hk1 hk2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hk1 send hk2 hello - >/dev/null 2>&1; as hk1 agents >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  hrace hk1 hk3
+  out=$(as hk1 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
