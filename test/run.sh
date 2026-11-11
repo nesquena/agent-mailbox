@@ -792,8 +792,10 @@ case " $ADAPTERS " in *" git "*)
   out=$(as hk1 agents 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
     ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
-  # the same for an agent that joined (its clone, made by setup, maps the store's branch onto origin/<branch>, which
-  # holds' own fetch mustn't touch), after a holds of its own already made holds' ref, which the race must move
+  # the same for an agent that joined (its clone, made by its first command after init, here register, is a
+  # single-branch clone that maps the store's branch onto origin/<branch>, which holds' own fetch mustn't touch; the
+  # init-er's clone, made from the empty store, has no such mapping), after a holds of its own already made holds' ref,
+  # which the race must move
   T="$W/historyrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in hj1 hj2 hj3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hj1 init >/dev/null
   for a in hj1 hj2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
