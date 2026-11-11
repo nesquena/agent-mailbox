@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
+  your work turned up, and when to say nothing.
 - **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
   plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't

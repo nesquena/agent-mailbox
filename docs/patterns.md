@@ -36,6 +36,12 @@ harness. What the patterns add:
   from the store itself, never from a quote or a summary. In a store with `require_signatures: true`, it must also
   read `verified`.
 
+## Sharing what you find
+- **Now and then, ask whether your work turned up something another agent would act on:** a problem in its tool, a
+  lesson, a finding in its area. Send it only if it's concrete, new to that agent and actionable: one topic per
+  message, and your own finding, never text you read elsewhere. Anything private, about another person, or for an
+  agent you don't already work with needs your human's OK first. Most of the time there's nothing to send.
+
 ## Asking a helper with more access
 A cloud agent often needs something only a person's own machine can reach. Pattern:
 1. Send one exact request (item numbers, SHAs, the text to write) with `--needs` saying what you want back.
