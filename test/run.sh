@@ -715,14 +715,99 @@ case " $ADAPTERS " in *" git "*)
   else
     as ir1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
     as ir2 init --title winner >/dev/null; tip=$(git --git-dir="$T/store.git" rev-parse main)
-    ck=$(ls -d "$W/home-ir1/.local/state/agent-mailbox/checkouts/"*-ir1)
-    expect "the loser's next command fails, naming the clone to remove" 1 "history doesn't match the store's .*remove .*-ir1 \(its 1 unpublished commit\(s\) go with it: send again what they held\) and run this again" as ir1 agents
+    expect "the loser's next command drops its unpublished init, saying so, and works" 0 \
+      "dropped an init this clone made earlier but never published.*started the mailbox at 'mailbox/'" as ir1 agents
     [ "$(git --git-dir="$T/store.git" rev-parse main)" = "$tip" ] && ok "and leaves the store as it was" ||
-      no "a clone whose history the store doesn't share changed the store" "$(git --git-dir="$T/store.git" log --format=%s main)"
-    rm -rf "$ck"
-    expect "once the clone is removed, commands work" 0 "^register: ir1 " as ir1 register --kind t --about t --no-key
+      no "a dropped init changed the store" "$(git --git-dir="$T/store.git" log --format=%s main)"
+    expect "after which commands work" 0 "^register: ir1 " as ir1 register --kind t --about t --no-key
     expect "on the winner's mailbox" 0 "^title: winner$" git --git-dir="$T/store.git" show main:mailbox/store.md
   fi
+  # the same on a branch that already had a commit (a repository made with a README): the lost init would conflict
+  # with the winner's on a rebase; it's dropped instead
+  T="$W/initrace-seeded"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email e@e && git config user.name e &&
+    git checkout -q -b main && echo hi > README.md && git add README.md && git commit -qm readme && git push -q origin main)
+  for a in is1 is2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as is1 agents >/dev/null 2>&1
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "an unpublished init on a seeded branch is dropped once another agent's wins (read-only folders don't stop this user)"
+  else
+    as is1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    as is2 init --title winner >/dev/null
+    expect "on a seeded branch, doctor drops the lost init too, and says so" 1 "^warn dropped an init this clone made earlier" as is1 doctor
+    expect "after which commands work" 0 "NAME" as is1 agents
+    expect "and the branch keeps its first commit and the winner's mailbox" 0 "^readme mailbox: init $" \
+      sh -c "git --git-dir='$T/store.git' log --reverse --format=%s main | tr '\n' ' '"
+  fi
+  # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
+  # without it) isn't moved onto the new mailbox: it fails as before
+  T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email e@e && git config user.name e &&
+    git checkout -q -b main && echo hi > README.md && git add README.md && git commit -qm readme && git push -q origin main)
+  for a in im1 im2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as im1 agents >/dev/null 2>&1
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "a clone holding more than its lost init still fails (read-only folders don't stop this user)"
+  else
+    as im1 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    git --git-dir="$T/store.git" update-ref -d refs/heads/main; as im2 init >/dev/null 2>&1
+    expect "a clone holding more than its lost init still fails, naming the clone to remove" 1 "history doesn't match the store's" as im1 agents
+  fi
+  # an init the store once had isn't dropped: the store was reset and initialized again by another agent, and this
+  # clone, holding only its old (published) init, fails as before, rather than being moved onto the new mailbox
+  T="$W/initreset-lone"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in il1 il2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as il1 init --title old >/dev/null; git --git-dir="$T/store.git" update-ref -d refs/heads/main; as il2 init --title fresh >/dev/null 2>&1
+  expect "a clone whose lone init the store once had still fails, naming the clone to remove" 1 "history doesn't match the store's" as il1 agents
+  # ... even when the store is re-created while holds reads its history: holds fetches into a ref of its own, so the
+  # clone still knows where it last synced, and its published init isn't taken for a lost one. The shim re-creates
+  # the store at the second fetch (holds' own, after its sync)
+  T="$W/historyrace"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hh1 hh2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hh1 init --title old >/dev/null
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) n=$(($(cat "$FCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$FCOUNT"' \
+    '  [ $n != 2 ] || sh -c "$RACE_CMD" >/dev/null 2>&1 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  # hrace <agent> <winner>: run holds as <agent> while the shim has <winner> re-create the store at holds' own fetch
+  # (holds itself succeeds: a re-creation during its sync would make it fail instead)
+  hrace() { rm -f "$T/n"; expect "$1: holds succeeds while the store is re-created at its own fetch" 0 "no holds or releases recorded" \
+    env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
+    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-$2' '$SH' '$CLI' init --title fresh" \
+    HOME="$W/home-$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" holds; }
+  hrace hh1 hh2
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/store.md 2>/dev/null | sed -n 's/^title: //p')" = fresh ] &&
+    ok "(the store was re-created while holds ran)" || no "the shim didn't re-create the store during holds"
+  expect "a store re-created while holds read it doesn't make a published init look lost" 1 "history doesn't match the store's" as hh1 agents
+  # the shipped symptom: a clone holding published work (an init, two registrations and a send) was told its commits
+  # were unpublished, and to send again what they held
+  T="$W/historyrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hk1 hk2 hk3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hk1 init >/dev/null
+  for a in hk1 hk2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hk1 send hk2 hello - >/dev/null 2>&1; as hk1 agents >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hk1/.local/state/agent-mailbox/checkouts/"*-hk1 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hk1's copy holds its 4 published commits)" ||
+    no "hk1's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hk1 hk3
+  out=$(as hk1 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a clone whose work was all published isn't told it's unpublished" || no "published commits were called unpublished" "$out"
+  # the same for an agent that joined (its clone, made by its first command after init, here register, is a
+  # single-branch clone that maps the store's branch onto origin/<branch>, which holds' own fetch mustn't touch; the
+  # init-er's clone, made from the empty store, has no such mapping), after a holds of its own already made holds' ref,
+  # which the race must move
+  T="$W/historyrace3"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hj1 hj2 hj3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hj1 init >/dev/null
+  for a in hj1 hj2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo hi | as hj1 send hj2 hello - >/dev/null 2>&1; as hj2 holds >/dev/null 2>&1; cp "$W/historyrace/bin/git" "$T/bin/git"
+  ck=$(ls -d "$W/home-hj2/.local/state/agent-mailbox/checkouts/"*-hj2 2>/dev/null)
+  [ "$(git -C "$ck" rev-list --count HEAD 2>/dev/null)" = 4 ] && ok "(hj2's copy holds the 4 published commits)" ||
+    no "hj2's copy doesn't hold the 4 commits the case needs" "$(git -C "$ck" log --oneline 2>&1)"
+  hrace hj2 hj3
+  out=$(as hj2 agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "history doesn't match" && [ -z "$(printf '%s\n' "$out" | grep 'unpublished commit')" ] &&
+    ok "and a joiner's clone, after a holds before the race, isn't told its published work is unpublished" ||
+    no "a joiner's published commits were called unpublished" "$out"
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -2936,6 +3021,75 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+echo "== CLI hardening: update --key, register --key's config, line breaks, the passphrase prompt"
+T="$W/harden"; mkdir -p "$T/store"
+for a in hp1 hp2 hp3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as hp1 init >/dev/null; as hp1 register --kind t --about t --no-key >/dev/null 2>&1
+expect "a store with no mailbox doesn't tell every agent to init" 1 "if that's what you were asked to do" \
+  env HOME="$W/home-hp1" AGENT_MAILBOX_ROOT=elsewhere "$SH" "$CLI" list
+expect "update refuses --key, pointing at Replacing your key" 1 "update can't change a key; see JOIN.md's .Replacing your key." \
+  as hp1 update --key "$T/any.pub"
+expect "and refuses --no-key the same way" 1 "update can't change a key" as hp1 update --no-key
+expect "setup refuses an adapter with a line break" 1 "adapter can't hold a line break" as hp2 setup --store "$T/store" \
+  --adapter "dir
+x" --name hp2
+expect "a store from AGENT_MAILBOX_STORE with a line break is refused" 1 "store \(from AGENT_MAILBOX_STORE.*can't hold a line break" \
+  env HOME="$W/home-hp1" AGENT_MAILBOX_STORE="$T/store
+x" "$SH" "$CLI" list
+[ ! -e "$T/store
+x" ] && ok "and nothing is created at that path" || no "a store path with a line break was created"
+if [ -n "$SSH" ]; then
+  # register --key with a key whose passphrase isn't given (an askpass that fails): register fails, and the config
+  # doesn't name the key
+  ssh-keygen -q -t ed25519 -N pw -f "$T/pk"; printf '#!/bin/sh\nexit 1\n' > "$T/noask"; chmod +x "$T/noask"
+  expect "register --key fails when its key's passphrase isn't given" 1 "signing failed" env DISPLAY=:0 SSH_ASKPASS="$T/noask" \
+    SSH_ASKPASS_REQUIRE=force HOME="$W/home-hp2" XDG_CONFIG_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" register --kind t --about t --key "$T/pk.pub"
+  grep -q '^key' "$W/home-hp2/.config/agent-mailbox/config" && no "a failed register --key wrote the key to the config" \
+    "$(cat "$W/home-hp2/.config/agent-mailbox/config")" || ok "and leaves the config without the key"
+  # register --key with a config it can't write (its folder is a regular file, which stops root too): nothing is
+  # registered, on either adapter, and once the config can be written, register works
+  : > "$T/afile"; ssh-keygen -q -t ed25519 -N '' -f "$T/k4"; git init -q --bare "$T/g.git"
+  git --git-dir="$T/g.git" symbolic-ref HEAD refs/heads/main
+  as hpg setup --store "$T/g.git" --name hpg >/dev/null; as hpg init >/dev/null
+  for st in dir:"$T/store" git:"$T/g.git"; do ad=${st%%:*} sp=${st#*:}
+    rk() { env HOME="$W/home-hp4" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+      AGENT_MAILBOX_CONFIG="$1" AGENT_MAILBOX_STORE="$sp" AGENT_MAILBOX_ADAPTER=$ad AGENT_MAILBOX_NAME=hp4 \
+      "$SH" "$CLI" register --kind t --about t --key "$T/k4.pub"; }
+    expect "$ad: register --key with a config it can't write registers nothing" 1 "couldn't be updated with the key, so nothing was registered" \
+      rk "$T/afile/config"
+    if [ $ad = dir ]; then has=$(ls "$sp/mailbox/agents" | grep -c '^hp4\.md'); else has=$(git --git-dir="$sp" ls-tree -r --name-only main | grep -c 'hp4\.md'); fi
+    [ "$has" = 0 ] && ok "$ad: and leaves no record in the store" || no "$ad: a register that failed left a record" "$has"
+    expect "$ad: once the config can be written, register works" 0 "^register: hp4 " rk "$T/hp4-$ad.config"
+  done
+  # the passphrase prompt: a shim ssh reports a version and a shim ssh-keygen logs SSH_ASKPASS_REQUIRE for each signing.
+  # Signing asks in the terminal (never) only when the command's stdin is a terminal, the variable isn't set, and
+  # OpenSSH is 8.4 or later
+  as hp3 register --kind t --about t >/dev/null 2>&1; echo hi > "$T/body"; mkdir -p "$T/ps"
+  printf '%s\n' '#!/bin/sh' 'echo "OpenSSH_${FAKESSHV}p1, LibreSSL 3.3.6" >&2' > "$T/ps/ssh"
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y sign "*) echo "${SSH_ASKPASS_REQUIRE-unset}" >> "$ASKLOG" ;; esac' \
+    "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/ps/ssh-keygen"; chmod +x "$T/ps/ssh" "$T/ps/ssh-keygen"
+  # runner <version> <topic> [<SSH_ASKPASS_REQUIRE>]: a script that sends as hp3 with the shims
+  runner() { printf '%s\n' '#!/bin/sh' "export PATH='$T/ps:$PATH' FAKESSHV='$1' ASKLOG='$T/asklog' HOME='$W/home-hp3'" \
+    'unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID AGENT_MAILBOX_NAME SSH_ASKPASS_REQUIRE' \
+    "${3:+export SSH_ASKPASS_REQUIRE='$3'}" "exec '$SH' '$CLI' send hp1 '$2' '$T/body'" > "$T/r.sh"; chmod +x "$T/r.sh"; }
+  # in_tty: run $T/r.sh with a terminal as its stdin (BSD and util-linux script differ)
+  in_tty() { case "$(uname)" in (Linux) script -qc "'$T/r.sh'" /dev/null ;; (*) script -q /dev/null "$T/r.sh" ;; esac < /dev/null >/dev/null 2>&1; }
+  asked() { tail -n 1 "$T/asklog" 2>/dev/null; }
+  if command -v script >/dev/null 2>&1; then
+    : > "$T/asklog"; runner 10.2 pp1; in_tty
+    [ "$(asked)" = never ] && ok "in a terminal with OpenSSH 8.4+, signing asks for a passphrase in the terminal" ||
+      no "in a terminal, signing didn't set SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"
+    for v in 9.6 8.4; do : > "$T/asklog"; runner $v "pp-$v"; in_tty
+      [ "$(asked)" = never ] && ok "and with OpenSSH $v" || no "OpenSSH $v didn't get SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"; done
+    : > "$T/asklog"; runner 8.3 pp2; in_tty
+    [ "$(asked)" = unset ] && ok "with OpenSSH before 8.4, it's left alone" || no "OpenSSH 8.3 got SSH_ASKPASS_REQUIRE" "$(cat "$T/asklog")"
+    : > "$T/asklog"; runner 10.2 pp3 force; in_tty
+    [ "$(asked)" = force ] && ok "and a SSH_ASKPASS_REQUIRE that's set is kept" || no "a set SSH_ASKPASS_REQUIRE was changed" "$(cat "$T/asklog")"
+  else sk "no script command to give signing a terminal"; fi
+  : > "$T/asklog"; runner 10.2 pp4; "$T/r.sh" < /dev/null >/dev/null 2>&1
+  [ "$(asked)" = unset ] && ok "with no terminal, signing leaves SSH_ASKPASS_REQUIRE alone" || no "no terminal, yet SSH_ASKPASS_REQUIRE was set" "$(cat "$T/asklog")"
+fi
 echo "== dir: two sends that pick the same file name at once can't overwrite each other"
 # one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
 # (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
