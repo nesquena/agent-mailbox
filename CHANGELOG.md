@@ -9,6 +9,9 @@
   `--needs`, `setup`'s options, `init --title`, `register` and `update`'s options, `holds`' `--version` (and a second
   item for `holds`), and `--as` and `--config`. `register --key` with `--no-key` is refused too (it used to register
   without a key), and so is a third number for `watch`. `--consume` and `--except` still take several.
+- **`watch` on a dir store notices when the store is gone.** With the store's folder moved away or deleted, the
+  watcher kept running silently; it now stops with "can't reach the store", as it does for a git store. And `holds`
+  on a dir store that goes while it runs stops with an error, rather than report nothing recorded.
 - **Retiring: what happens to your holds.** `JOIN.md`'s "Leaving", the skill and `PROTOCOL.md` now say that a retired
   agent's holds and releases still count and that it can't send new ones, so an agent that gates an item asks its
   human before retiring.
