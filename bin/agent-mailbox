@@ -30,16 +30,19 @@
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
 #   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
 #                                       --version, exit 0 only if every sender's latest record releases it (else 5)
-#   watch [interval=120] [max=7000] [--except <file>]... [--also]
+#   watch [interval=120] [max=7000] [--except <file>]... [--also] [--force]
 #                                       wait for mail without spending model tokens; exits 0 with the mail listed,
 #                                       2 after max seconds (0 = no limit). Run it in the background. --also: in a
-#                                       Claude Code session, the plugin's hook watches this store too, not instead
+#                                       Claude Code session, the plugin's hook watches this store too, not instead.
+#                                       Exits 7 if another watcher for the name is running on this store; --force
+#                                       takes over its pid files (it doesn't stop it)
 #   whoami | doctor                     show the resolved config | check this machine's setup
 #   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
 # Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 a change saved locally isn't published
 # (re-run a command with the same name to publish; don't resend, unless it says this command wrote nothing: then run it
-# again once that's published); 5 not released; 6 signature not verified.
+# again once that's published); 5 not released; 6 signature not verified; 7 another watcher for the name is running
+# on this store.
 set -u
 VERSION=0.1.1-dev
 # (set only by init, around its own commit: never taken from the environment)
@@ -204,6 +207,14 @@ KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$C
 one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't hold a line break"; }
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
+# other_watcher <pid file>: print the pid of a live watcher the file names for this store (not this process), as
+# hooks/claude-watch-guard.sh's alive() checks one: the pid is running, and its command line (/proc, or ps where
+# there's none, as on macOS) is an agent-mailbox watch. Status 1 when there's none
+other_watcher() { set -- $(cat "$1" 2>/dev/null); [ "${3:-}" = "$STORE_ID" ] || return 1
+  case "${1:-}" in ''|*[!0-9]*|"$$") return 1 ;; esac
+  kill -0 "$1" 2>/dev/null || return 1
+  if [ -r "/proc/$1/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$1/cmdline"); else a=$(ps -p "$1" -o args= 2>/dev/null); fi
+  case "$a" in *agent-mailbox*watch*) echo "$1" ;; *) return 1 ;; esac; }
 # no_mail: an empty inbox, said so (exit 3); unless the name has no record in this mailbox, which more likely means the
 # wrong name (another store's, or the one a session's watch recorded) than no mail (exit 1). A retired name has its record
 no_mail() { [ -f "$(record "$ME")" ] ||
@@ -921,11 +932,12 @@ holds)
     END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased" > "/dev/stderr"
           exit bad ? 5 : 0 }' ;;
 watch)
-  interval=120 max=7000 except="" pos=0 also=""
+  interval=120 max=7000 except="" pos=0 also="" force=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
       --also) also=1; shift ;;
+      --force) force=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
     esac
@@ -953,6 +965,16 @@ watch)
     echo "$ME" > "$STATE/sessions/$SESSION"
     session_store "$c" "$also"
   fi
+  # one watcher per name and store on this machine: a second would wake on the same mail, and take over the pid files
+  # the harness hooks check. The session is recorded above first, so a session's watch still registers it. A live
+  # watcher is one whose pid file names this store and a running process whose command line is an agent-mailbox watch,
+  # as hooks/claude-watch-guard.sh checks, so a stale file, a dead pid or one reused by another process doesn't count.
+  # --force takes the pid files over, without stopping that watcher
+  [ -n "$force" ] || for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
+    wp=$(other_watcher "$pf") || continue
+    printf 'agent-mailbox: watch: another watcher for %s is running (pid %s); stop it, or run this with --force to take over\n' "$ME" "$wp" >&2
+    exit 7
+  done
   # (one for the name, and one for the name on this store, since one name can be in use on several stores)
   for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
   # (removed only while it still names this watcher: another watcher for the name may have started since)

@@ -231,7 +231,9 @@ command left unpublished, which the store refused (say, a credential that can't 
 read but not consumed makes `watch` return at once: consume it, or skip it with `--except <file>` (see the skill).
 
 Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
-interactive session), give the second its own name, or let only one of them read.
+interactive session), give the second its own name, or let only one of them read. On one machine, `watch` refuses to
+start (exit 7) while another watcher for the name is running on that store, and names its pid: that watcher already
+wakes you, so don't re-arm; `--force` takes over its pid files without stopping it.
 
 ## 8. Remember
 Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a

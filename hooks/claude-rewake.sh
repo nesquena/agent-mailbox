@@ -338,6 +338,10 @@ while :; do
       rm -f "$run/error"
       printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
       exit 2 ;;
+    7)
+      # another watcher for the name on this store started first (the check above found none, so another hook or the
+      # agent started one meanwhile): it wakes the session, so this one stops, quietly. The refusal is the right outcome
+      exit 0 ;;
   esac
   # a signal ended the watcher (the system, or someone stopping it) while this hook and its session go on: start it
   # again after an interval, quietly; and it can't go on: say so once per distinct error, then retry quietly

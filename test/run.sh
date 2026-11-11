@@ -1695,13 +1695,14 @@ if up "$R1/pid" && up "$T/wpid"; then hp=$(cut -d' ' -f1 "$R1/pid"); kill -TERM 
 else no "a hook whose shell is gone stops itself" "it didn't start"; fi
 kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
 # a watcher the agent started itself wakes the session on its own: the hook stands aside while it runs. And a watcher
-# that ends (here A, at its limit) leaves the pid file of one started after it (B) alone
-mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" $(sed 's/^/--except /' "$R1/woke"); }
+# that ends (here A, at its limit) leaves the pid file of one started after it (B, which takes the files over with
+# --force, since a second watcher for the name on the store is otherwise refused) alone
+mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" ${2:-} $(sed 's/^/--except /' "$R1/woke"); }
 n=0; while [ $n -lt 10 ] && p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do
   sleep 1; n=$((n+1)); done
 # isb: the pid file names watcher B (the one with the 30 s limit)
 isb() { p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && ps -o args= -p "$p" 2>/dev/null | grep -q 'watch 1 30'; }
-mwatch 3 > /dev/null 2>&1 & wa=$!; sleep 1; mwatch 30 > /dev/null 2>&1 & mw=$!
+mwatch 3 > /dev/null 2>&1 & wa=$!; sleep 1; mwatch 30 --force > /dev/null 2>&1 & mw=$!
 n=0; while [ $n -lt 10 ] && ! isb; do sleep 1; n=$((n+1)); done
 wait "$wa"
 expect "a watcher that ends leaves a later watcher's pid file alone" 0 - isb
@@ -3153,6 +3154,42 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
+echo "== one watcher per name and store on a machine"
+T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
+as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
+as wa1 register --kind t --about t --no-key >/dev/null 2>&1
+R="$W/home-wa1/.local/state/agent-mailbox/run"
+# wpid: the pid a watcher wrote to the name's pid file, once it has (up to 10 s)
+wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null; }
+(as wa1 watch 1 0 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cut -d' ' -f3 "$R/wa1.pid")
+expect "a second watch for the name, while the first runs, is refused (exit 7)" 7 \
+  "another watcher for wa1 is running \(pid $p1\); stop it, or run this with --force" as wa1 watch 1 2
+[ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p1" ] &&
+  ok "and leaves the first's pid files as they were" || no "a refused watch changed the pid files" "$(cat "$R"/*.pid)"
+# --force takes the files over without stopping the first; the first's exit then leaves the files --force wrote
+(as wa1 watch 1 0 --force >/dev/null 2>&1 &)
+i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+p2=$(cut -d' ' -f1 "$R/wa1.pid")
+[ -n "$p2" ] && [ "$p2" != "$p1" ] && kill -0 "$p2" 2>/dev/null && kill -0 "$p1" 2>/dev/null && ok "watch --force takes over the pid files, and doesn't stop the other watcher" ||
+  no "watch --force didn't take over, or stopped the other watcher" "$(cat "$R"/*.pid)"
+kill "$p1" 2>/dev/null; i=0; while kill -0 "$p1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+[ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
+  ok "and the first watcher's exit leaves the files --force wrote" || no "the first watcher's exit removed --force's pid files" "$(cat "$R"/*.pid 2>&1)"
+kill "$p2" 2>/dev/null; i=0; while kill -0 "$p2" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+# a stale file whose pid is gone, and one whose pid now belongs to another process, don't block
+sh -c 'exit 0' & dead=$!; wait "$dead"
+for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$dead wa1 $sid" > "$f"; done
+expect "a pid file whose pid is gone doesn't block a watch" 2 "no mail for wa1 after 1s" as wa1 watch 1 1
+sleep 30 & other=$!
+for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$other wa1 $sid" > "$f"; done
+expect "nor one whose pid now belongs to another process" 2 "no mail for wa1 after 1s" as wa1 watch 1 1
+kill "$other" 2>/dev/null; wait "$other" 2>/dev/null
+# a watcher for the name on another store doesn't block this store's (one name, several stores)
+as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
+as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
+(as wa1 watch 1 0 >/dev/null 2>&1 &); p3=$(wpid)
+expect "a watcher for the name on another store doesn't block this one" 2 "no mail for wa1 after 1s" as wa1 --config "$T/c2" watch 1 1
+kill "$p3" 2>/dev/null; i=0; while kill -0 "$p3" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
