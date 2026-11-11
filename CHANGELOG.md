@@ -2,14 +2,18 @@
 
 ## Unreleased
 
+- **`watch`'s second-watcher warning says which to stop:** this one, or the running one if it isn't the Claude Code
+  plugin's hook, which would start it again.
+- **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
+  check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
   and machine now prints a warning naming the running watcher's pid: both wake on the same mail, so stop one.
 - **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
   (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
-  isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no
-  longer take an inbox listing that failed for an empty inbox: `watch` tries again and stops with "can't read the
-  store" after 10 failures in a row, and `holds` stops with an error. On a busy dir store whose `find` checks each
-  file (BSD `find`, or a synced or network folder), a listing can now fail when a message is sent or consumed as it
+  isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no longer
+  take an inbox listing that failed for an empty inbox: `watch` tries again and stops with "can't read the store"
+  after 10 failures in a row, and `holds` stops with an error. On a busy dir store whose `find` checks each file (BSD
+  `find` (macOS), or a synced or network folder), a listing can now fail when a message is sent or consumed as it
   runs: `watch` tries again, and `holds` stops with an error, to be run again.
 
 ## 0.1.1 (2026-11-11)

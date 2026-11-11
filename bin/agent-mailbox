@@ -208,14 +208,16 @@ one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't ho
 one_line "the state folder (from AGENT_MAILBOX_STATE, XDG_STATE_HOME or HOME)" "$STATE"
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
-# other_watcher <pid file>: print the pid of a live watcher the file names for this store (not this process), as
-# hooks/claude-watch-guard.sh's alive() checks one: the pid is running, and its command line (/proc, or ps where
-# there's none, as on macOS) is an agent-mailbox watch. Status 1 when there's none
+# other_watcher <pid file>: print the pid of a live watcher the file names for this store (not this process): the pid
+# is running, and its command line (/proc, or ps where there's none, as on macOS) is an agent-mailbox watch. That's
+# stricter than hooks/claude-watch-guard.sh's alive(), which takes any command line holding agent-mailbox and watch.
+# Status 1 when there's none
 other_watcher() { set -- $(cat "$1" 2>/dev/null); [ "${3:-}" = "$STORE_ID" ] || return 1
   case "${1:-}" in ''|*[!0-9]*|"$$") return 1 ;; esac
   kill -0 "$1" 2>/dev/null || return 1
   if [ -r "/proc/$1/cmdline" ]; then a=$(tr '\0' ' ' < "/proc/$1/cmdline"); else a=$(ps -p "$1" -o args= 2>/dev/null); fi
-  # (watch as an argument of its own after the CLI: a hook script or a name holding "watch" isn't a watcher)
+  # (watch as an argument of its own after the CLI: a hook script, or a name with "watch" inside it, isn't a watcher;
+  # a name that is just "watch" still matches)
   case "$a " in *agent-mailbox*" watch "*) echo "$1" ;; *) return 1 ;; esac; }
 # no_mail: an empty inbox, said so (exit 3); unless the name has no record in this mailbox, which more likely means the
 # wrong name (another store's, or the one a session's watch recorded) than no mail (exit 1). A retired name has its record
@@ -976,7 +978,7 @@ watch)
   # hooks/claude-watch-guard.sh checks, so a stale file, a dead pid or one reused by another process doesn't count
   for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
     wp=$(other_watcher "$pf") || continue
-    warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop one"; break
+    warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop this one, or pid $wp if it isn't the Claude Code plugin's hook (which starts it again)"; break
   done
   # (one for the name, and one for the name on this store, since one name can be in use on several stores)
   for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done

@@ -334,8 +334,9 @@ notes.md"'
   for t in cons-1 cons-2; do as bob send alice $t "$T/body" >/dev/null; done
   c1=$(as alice list 2>/dev/null | grep -- '-bob-cons-1\.md$'); c2=$(as alice list 2>/dev/null | grep -- '-bob-cons-2\.md$')
   expect "send still takes several --consume" 0 - as alice send bob cons-ack "$T/body" --consume "$(basename "$c1")" --consume "$(basename "$c2")"
-  out=$(as alice list 2>&1); printf '%s\n' "$out" | grep -q -- '-bob-cons-[12]\.md$' && no "and consumes each of them" "$out" ||
-    ok "and consumes each of them"
+  out=$(as alice list 2>&1); rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 3 ] && [ -z "$(printf '%s\n' "$out" | grep -- '-bob-cons-[12]\.md$')" ]; then ok "and consumes each of them"
+  else no "and consumes each of them (list exit $rc)" "$out"; fi
   expect "watch refuses a third number, not ignoring it" 1 "^agent-mailbox: watch takes an interval and a max, not '99' too$" as alice watch 1 1 99
   if [ "$AD" = git ]; then
     for m in $(as alice list 2>/dev/null | grep '\.md$'); do as alice consume "$(basename "$m")" >/dev/null; done
@@ -3314,7 +3315,7 @@ rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cu
 (as wa1 watch 1 30 > "$T/w2.out" 2>&1 &)
 i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 p2=$(cut -d' ' -f1 "$R/wa1.pid")
-grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop one" "$T/w2.out" &&
+grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop this one, or pid $p1 if it isn't the Claude Code plugin's hook" "$T/w2.out" &&
   ok "a second watch for the name, while the first runs, warns, naming the first" || no "a second watch didn't warn" "$(cat "$T/w2.out")"
 [ -n "$p2" ] && [ "$p2" != "$p1" ] && kill -0 "$p2" 2>/dev/null && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
   ok "and starts anyway, writing its own pid to both pid files" || no "the second watch didn't start, or didn't take the pid files" "$(cat "$R"/*.pid)"
@@ -3334,6 +3335,15 @@ for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$other wa1 $sid" > "$f"; done
 out=$(as wa1 watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor one whose pid now belongs to another process" || no "a reused pid counted as a watcher" "$out"
 kill "$other" 2>/dev/null; wait "$other" 2>/dev/null
+# a process whose command line names agent-mailbox and watch only in a script's name (the plugin's guard hook) isn't a
+# watcher: no warning
+mkdir -p "$T/agent-mailbox/hooks"; printf '%s\n' 'sleep 30' > "$T/agent-mailbox/hooks/claude-watch-guard.sh"
+sh "$T/agent-mailbox/hooks/claude-watch-guard.sh" & gh=$!
+for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$gh wa1 $sid" > "$f"; done
+out=$(as wa1 watch 1 1 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor a hook script whose name holds agent-mailbox and watch" ||
+  no "a hook script counted as a watcher" "$out"
+kill "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 # a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1

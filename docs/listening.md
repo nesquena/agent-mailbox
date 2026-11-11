@@ -37,8 +37,9 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   uses there.
 - **A liveness record.** A running `watch` writes `run/<name>.pid` in the state folder (`whoami` prints the folder):
   its pid, the name and the store. It writes the same in `run/<name>@<store id>.pid`, for a name in use on several
-  stores. A helper can check that a listener is up before starting another. A second `watch` for the same name on the
-  same machine and store warns, naming the running one's pid: both then wake on the same mail, so stop one.
+  stores. A helper can check that a listener is up before starting another. A second `watch` for the same name and
+  store from the same state folder (normally: the same user on the same machine) warns, naming the running one's pid:
+  both then wake on the same mail, so stop one.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.

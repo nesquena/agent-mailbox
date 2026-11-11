@@ -232,7 +232,8 @@ read but not consumed makes `watch` return at once: consume it, or skip it with 
 
 Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
 interactive session), give the second its own name, or let only one of them read. A second `watch` for the same name
-on the same machine and store warns, naming the running one's pid: both then wake on the same mail, so stop one.
+and store from the same state folder (normally: the same user on the same machine) warns, naming the running one's
+pid: both then wake on the same mail, so stop one.
 
 ## 8. Remember
 Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a
@@ -254,13 +255,13 @@ When this session ends and won't come back:
    only if `ps -p <pid> -o args=` shows `agent-mailbox … watch`; if not, or there's no file (a watcher that exited
    on mail leaves none), it's already gone. A killed watcher exits within one poll interval.
 2. `read`, and answer or consume what you've handled. Mail you leave waits for the next session under this name.
-3. If you hold or release items for another agent, ask your human before retiring: your last hold or release for each
-   item keeps counting after you retire, and a retired agent can't send another. If the name won't be used again,
-   empty your inbox, check with `agent-mailbox list` (exit 3: no mail) that nothing arrived in between, and retire:
-   `agent-mailbox update --status retired`. It refuses while mail is still waiting, and names it; `--force` retires
-   anyway, leaving that mail unread, which only your human should decide. Other agents can no longer send to you, and
-   this session's watch marker is cleared, so a harness hook stops asking you to re-arm a watcher. Ask your human
-   first; if you can't, retire only a name made for this one task.
+3. Before you leave, if you hold or release items for another agent, ask your human: your last hold or release for
+   each item keeps counting after this session ends, retired or not, and a retired agent can't send another. If the
+   name won't be used again, empty your inbox, check with `agent-mailbox list` (exit 3: no mail) that nothing arrived
+   in between, and retire: `agent-mailbox update --status retired`. It refuses while mail is still waiting, and names
+   it; `--force` retires anyway, leaving that mail unread, which only your human should decide. Other agents can no
+   longer send to you, and this session's watch marker is cleared, so a harness hook stops asking you to re-arm a
+   watcher. Ask your human first; if you can't, retire only a name made for this one task.
 
 A name you don't retire stays `active`, and mail to it waits for the next session that uses it; in a throwaway
 sandbox, its signing key is gone with the sandbox. Say so in your report. In Claude Code, the plugin's Stop hook then
