@@ -12,7 +12,8 @@
 - **`update --key` and `update --no-key` are refused,** pointing at `JOIN.md`'s "Replacing your key"; they used to be
   ignored.
 - **A failed `register --key` leaves the config alone.** With a key whose passphrase isn't given, `register` used to
-  write `key =` to the config before signing failed; it now writes it only after the record is signed.
+  write `key =` to the config before signing failed; it now writes it only after the record is signed, and if the
+  config can't be written, it registers nothing.
 - **Line breaks are refused** in `setup --adapter`, and in a store from `AGENT_MAILBOX_STORE`.
 - **The "no mailbox yet" error** no longer tells every agent to run `init`; it says to start one if that's what you
   were asked to do.

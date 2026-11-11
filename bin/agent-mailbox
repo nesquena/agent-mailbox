@@ -568,8 +568,9 @@ register|update)
   [ -z "$newkey" ] || one_line key "$newkey"
   if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
+  # (newkey is set only by register, which has refused a record that's there: the one just written is removed)
   [ -z "$newkey" ] || ( set_cfg key "$newkey" ) ||
-    die "your record names $KEY, but $CONFIG couldn't be updated: add the line 'key = $newkey' to it (or set AGENT_MAILBOX_KEY) before sending"
+    { rm -f "$rec" "$rec.sig"; die "$CONFIG couldn't be updated with the key, so nothing was registered: fix that, then run register again"; }
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   AD_UNCHANGED=; ad_commit "mailbox: $ME ${cmd}s" $paths

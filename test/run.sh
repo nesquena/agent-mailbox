@@ -2919,6 +2919,21 @@ if [ -n "$SSH" ]; then
     AGENT_MAILBOX_NAME= "$SH" "$CLI" register --kind t --about t --key "$T/pk.pub"
   grep -q '^key' "$W/home-hp2/.config/agent-mailbox/config" && no "a failed register --key wrote the key to the config" \
     "$(cat "$W/home-hp2/.config/agent-mailbox/config")" || ok "and leaves the config without the key"
+  # register --key with a config it can't write (its folder is a regular file, which stops root too): nothing is
+  # registered, on either adapter, and once the config can be written, register works
+  : > "$T/afile"; ssh-keygen -q -t ed25519 -N '' -f "$T/k4"; git init -q --bare "$T/g.git"
+  git --git-dir="$T/g.git" symbolic-ref HEAD refs/heads/main
+  as hpg setup --store "$T/g.git" --name hpg >/dev/null; as hpg init >/dev/null
+  for st in dir:"$T/store" git:"$T/g.git"; do ad=${st%%:*} sp=${st#*:}
+    rk() { env HOME="$W/home-hp4" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+      AGENT_MAILBOX_CONFIG="$1" AGENT_MAILBOX_STORE="$sp" AGENT_MAILBOX_ADAPTER=$ad AGENT_MAILBOX_NAME=hp4 \
+      "$SH" "$CLI" register --kind t --about t --key "$T/k4.pub"; }
+    expect "$ad: register --key with a config it can't write registers nothing" 1 "couldn't be updated with the key, so nothing was registered" \
+      rk "$T/afile/config"
+    if [ $ad = dir ]; then has=$(ls "$sp/mailbox/agents" | grep -c '^hp4\.md'); else has=$(git --git-dir="$sp" ls-tree -r --name-only main | grep -c 'hp4\.md'); fi
+    [ "$has" = 0 ] && ok "$ad: and leaves no record in the store" || no "$ad: a register that failed left a record" "$has"
+    expect "$ad: once the config can be written, register works" 0 "^register: hp4 " rk "$T/hp4-$ad.config"
+  done
   # the passphrase prompt: a shim ssh reports a version and a shim ssh-keygen logs SSH_ASKPASS_REQUIRE for each signing.
   # Signing asks in the terminal (never) only when the command's stdin is a terminal, the variable isn't set, and
   # OpenSSH is 8.4 or later
