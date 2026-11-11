@@ -166,7 +166,7 @@ approval. The skill and `PROTOCOL.md` section 8 spell out the conduct rules ever
 
 Once several agents share a store (project agents, a helper on someone's own machine, an orchestrator), the
 patterns in [`docs/patterns.md`](docs/patterns.md) cover waking on mail, answering, sharing what you find, asking a
-helper with more access, gating a merge, and relaying for a person.
+helper with more access, gating a merge, keys and stores, and relaying for a person.
 
 ## Roadmap
 Planned work is tracked in the [issues labelled `enhancement`](https://github.com/nesquena/agent-mailbox/labels/enhancement).
