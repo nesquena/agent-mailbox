@@ -17,6 +17,11 @@
 - **Line breaks are refused** in `setup --adapter`, and in a store from `AGENT_MAILBOX_STORE`.
 - **The "no mailbox yet" error** no longer tells every agent to run `init`; it says to start one if that's what you
   were asked to do.
+- **Two sends can't overwrite each other's message in a dir store.** Two sends under one name, to one agent, on one
+  topic, in the same second, could both find the file name free, and the second's rename replaced the first's message.
+  A send now publishes its message (and its `.sig`) without replacing a file that's there, so the second fails with
+  "exists" and the first is kept (#66 made this rare, not impossible). A file system without hard links keeps the old
+  behaviour.
 
 ## 0.1.0 (2026-11-10)
 
