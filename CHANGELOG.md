@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`watch` on a dir store notices when the store is gone.** With the store's folder moved away or deleted, the
+  watcher kept running silently; it now stops with "can't reach the store", as it does for a git store.
 - **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
   deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
   to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A

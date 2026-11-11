@@ -3110,6 +3110,27 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
+echo "== dir: watch notices a store that's gone"
+T="$W/vanish"; mkdir -p "$T/store"
+for a in vw1 vw2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as vw1 init >/dev/null; for a in vw1 vw2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+# a healthy store, and one whose inbox folder for the name doesn't exist (yet): no mail, as before
+expect "watch on a healthy dir store reaches its limit" 2 "no mail for vw1 after 2s" as vw1 watch 1 2
+rm -rf "$T/store/mailbox/inbox/vw2"
+expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 2s" as vw2 watch 1 2
+# the store's folder is moved away while watch runs: watch stops loudly, well within the time limit
+(as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") &
+sleep 2; mv "$T/store" "$T/gone"
+i=0; while ! grep -q '^exit ' "$T/w.out" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "exit 0" ] &&
+  ok "watch stops with \"can't reach the store\" once the dir store is gone (after ${i}s)" ||
+  no "watch kept running, or exited quietly, after its dir store was moved away" "$(cat "$T/w.out")"
+# (a watcher still running is stopped through its own pid file, so the suite never waits on it)
+[ -n "$(grep '^exit ' "$T/w.out")" ] || { kill "$(cut -d' ' -f1 "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid")" 2>/dev/null; wait; }
+# other commands on the gone store don't read it as an empty one: holds can't pass
+expect "holds on a gone dir store fails, never exit 0" 1 "no mailbox" as vw1 holds "z#1" --version v1
+expect "and list says there's no mailbox" 1 "no mailbox" as vw1 list
+expect "and read too" 1 "no mailbox" as vw1 read
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"

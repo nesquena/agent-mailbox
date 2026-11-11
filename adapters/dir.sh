@@ -16,8 +16,12 @@ ad_unlock() { :; }
 # ceiling: no lock, so two writers replacing the same file (a registry record) race, and a file system without hard
 # links falls back to the rename for messages too; use git for many writers.
 ad_commit() { :; }
-ad_poll() { find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
-ad_peek() { [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ] || return 0; ( CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*" | LC_ALL=C sort ); }
+# a mailbox folder (or its store.md) that's gone, say the store folder was moved away, fails the poll and the peek:
+# cksum of no files still prints a value, and a missing folder would otherwise read as "no mail". An inbox folder that
+# doesn't exist yet, in a mailbox that does, is no mail
+ad_poll() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
+  find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
+ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ] || return 0; ( CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*" | LC_ALL=C sort ); }
 ad_history() { ad_peek "$1" | while IFS= read -r p; do printf '%s %s\n' - "$p"; done; }
 # (a plain file only: a link is no file of the store's, as read and verify also hold)
 ad_show() { [ -f "$AD_DIR/$2" ] && [ ! -L "$AD_DIR/$2" ] && cat "$AD_DIR/$2" 2>/dev/null; }
