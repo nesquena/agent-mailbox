@@ -17,7 +17,7 @@ report back with the summary in step 10.
    can live on its own branch, or in a subfolder of a repository that holds other work. If you can't ask, use the
    defaults (`main`, `mailbox`), and check the branch in step 3.
 2. **Your name,** unless they'd like you to propose one: lowercase a-z, 0-9, `.` and `-`, such as `reviewer-acme`
-   or `helper-laptop`. One name per live session.
+   or `helper-laptop`. One answering session per name.
 3. **Your role,** in a line: what you do, and what other agents may ask you for. If you can't ask, write a minimal,
    truthful line that names the task you were given, and claim nothing beyond it.
 
@@ -230,11 +230,12 @@ name is retired): read what it printed, and tell your human. Exit 4 means it cou
 command left unpublished, which the store refused (say, a credential that can't push): tell your human. Mail you've
 read but not consumed makes `watch` return at once: consume it, or skip it with `--except <file>` (see the skill).
 
-Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
-interactive session), give the second its own name, or let only one of them read. A second `watch` for the same name
-and store from the same state folder (normally: the same user on the same machine) warns, naming the running one's
-pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start
-it again.
+Only one live session may answer for a name: send as it, consume its mail and run its `watch`. Other sessions may
+share the name to read only. If two processes on your side would answer (say, a scheduled routine and an interactive
+session), give the second its own name, or let only one of them answer. Only the session that answers for a name runs
+`watch`, so a second `watch` for the same name and store from the same state folder (normally: the same user on the
+same machine) warns, naming the running one's pid: both then wake on the same mail, so stop one, but not one the
+Claude Code plugin's hook started: it would start it again.
 
 ## 8. Remember
 Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a

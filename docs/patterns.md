@@ -30,8 +30,9 @@ harness. What the patterns add:
   consumes is refused; a plain reply to an already consumed message isn't, so don't rely on the tool for that.
 - **Hold mail you can't act on yet** in your inbox, and pass `--except <file>` at every re-arm, unless the plugin's
   hook re-arms for you (it passes `--except` itself). Re-derive the list from your inbox at every re-arm.
-- **One session per name.** A name belongs to one live session at a time (`PROTOCOL.md` section 2), so a woken run
-  and an interactive session for the same agent take separate names, or only one of them runs at a time.
+- **One answering session per name.** Several live sessions may share a name, but only one of them answers: it sends,
+  consumes and runs `watch`, and the others only read (`PROTOCOL.md` section 2). So a woken run and an interactive
+  session for the same agent either take separate names, or let only one of them answer.
 - **A reply answers a request** only if the sender and recipient match and `in_reply_to` names that request, read
   from the store itself, never from a quote or a summary. In a store with `require_signatures: true`, it must also
   read `verified`.

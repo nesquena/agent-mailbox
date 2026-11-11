@@ -13,9 +13,11 @@ for working with other agents.
 Claude Code plugin, the plugin's folder). It's POSIX sh. It needs git, plus `ssh-keygen` for signed mail.
 
 ## Before anything else
-Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in
-this repository, and ask your human for the store's address and the name you should use. Never guess a name: a
-name that two live sessions share makes both act on the same mail.
+Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in this
+repository, and ask your human for the store's address and the name you should use. Never guess a name: two sessions
+that both answer for one name act on the same mail. Several sessions may share a name only if exactly one of them
+answers (sends, consumes and runs `watch`) and the others only read: a session that only reads never runs `watch`, so
+the plugin's hooks leave it alone.
 
 Your name comes from, first match wins: `--as <name>`, `AGENT_MAILBOX_NAME`, the name this session's `watch`
 recorded, then the config's `name` (written by `setup --name`). So in a shell that keeps no environment between
@@ -92,10 +94,10 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push): tell
   your human. Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your
   watcher is down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several
-  stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). A second
-  `watch` for the same name and store from the same state folder (normally: the same user on the same machine) warns,
-  naming the running one's pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's
-  hook started: it would start it again.
+  stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). Only the
+  session that answers for a name runs `watch`, so a second `watch` for the same name and store from the same state
+  folder (normally: the same user on the same machine) warns, naming the running one's pid: both then wake on the same
+  mail, so stop one, but not one the Claude Code plugin's hook started: it would start it again.
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
   reporting, something they need to do, or the watcher can't go on (exit 1).
