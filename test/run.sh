@@ -735,9 +735,25 @@ case " $ADAPTERS " in *" git "*)
   else
     as is1 init --title loser >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
     as is2 init --title winner >/dev/null
-    expect "on a seeded branch, the lost init is dropped too, and the next command works" 0 "dropped an init" as is1 agents
+    expect "on a seeded branch, doctor drops the lost init too, and says so" 1 "^warn dropped an init this clone made earlier" as is1 doctor
+    expect "after which commands work" 0 "NAME" as is1 agents
     expect "and the branch keeps its first commit and the winner's mailbox" 0 "^readme mailbox: init $" \
       sh -c "git --git-dir='$T/store.git' log --reverse --format=%s main | tr '\n' ' '"
+  fi
+  # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
+  # without it) isn't moved onto the new mailbox: it fails as before
+  T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email e@e && git config user.name e &&
+    git checkout -q -b main && echo hi > README.md && git add README.md && git commit -qm readme && git push -q origin main)
+  for a in im1 im2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  as im1 agents >/dev/null 2>&1
+  chmod -R a-w "$T/store.git/objects" "$T/store.git/refs"
+  if (true > "$T/store.git/refs/probe") 2>/dev/null; then rm -f "$T/store.git/refs/probe"; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    sk "a clone holding more than its lost init still fails (read-only folders don't stop this user)"
+  else
+    as im1 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
+    git --git-dir="$T/store.git" update-ref -d refs/heads/main; as im2 init >/dev/null 2>&1
+    expect "a clone holding more than its lost init still fails, naming the clone to remove" 1 "history doesn't match the store's" as im1 agents
   fi
   # an init the store once had isn't dropped: the store was reset and initialized again by another agent, and this
   # clone, holding only its old (published) init, fails as before, rather than being moved onto the new mailbox

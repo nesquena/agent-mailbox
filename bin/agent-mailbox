@@ -953,6 +953,8 @@ doctor)
     # (another command working in this name's copy of the store is waited for a few seconds, then said to be busy)
     if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
     then echo "ok   the store is reachable and initialized"; sok=1
+      # what the sync said on the way (a lost init dropped, earlier commits published) is shown, not swallowed
+      [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
     else case $derr in
       (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
       (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
