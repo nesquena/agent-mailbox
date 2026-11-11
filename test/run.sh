@@ -3160,10 +3160,12 @@ as vw1 init >/dev/null; for a in vw1 vw2; do as $a register --kind t --about t -
 # a healthy store, and one whose inbox folder for the name doesn't exist (yet): no mail, as before
 expect "watch on a healthy dir store reaches its limit" 2 "no mail for vw1 after 2s" as vw1 watch 1 2
 rm -rf "$T/store/mailbox/inbox/vw2"
-expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 2s" as vw2 watch 1 2
+# (past 10 intervals, so a missing inbox read as a failed peek would end the watch with "can't read the store")
+expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 12s" as vw2 watch 1 12
 # the store's folder is moved away while watch runs: watch stops loudly, well within the time limit
 (as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") &
-sleep 2; mv "$T/store" "$T/gone"
+i=0; while [ ! -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ] && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
+mv "$T/store" "$T/gone"
 i=0; while ! grep -q '^exit ' "$T/w.out" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
 grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "exit 0" ] &&
   ok "watch stops with \"can't reach the store\" once the dir store is gone (after ${i}s)" ||
@@ -3174,6 +3176,17 @@ grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "ex
 expect "holds on a gone dir store fails, never exit 0" 1 "no mailbox" as vw1 holds "z#1" --version v1
 expect "and list says there's no mailbox" 1 "no mailbox" as vw1 list
 expect "and read too" 1 "no mailbox" as vw1 read
+# a store that goes after holds has found it (here, as holds makes its temp folder) is an unreadable history, not an
+# empty one: holds stops with an error in both forms, rather than list nothing or say nothing was recorded
+# (the commands above, on the gone store, left an empty folder in its place)
+rm -rf "$T/store"; mv "$T/gone" "$T/store"; mkdir -p "$T/shim"
+printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nPATH='%s' exec mkdir "$@"\n' \
+  "$T/store" "$T/gone" "$PATH" > "$T/shim/mkdir"; chmod +x "$T/shim/mkdir"
+expect "holds on a dir store that goes mid-command stops with an error" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+rm -rf "$T/store"; mv "$T/gone" "$T/store"
+expect "and so does a gate check" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds "z#1" --version v1
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
