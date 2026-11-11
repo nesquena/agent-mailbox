@@ -205,6 +205,7 @@ KEY="${AGENT_MAILBOX_KEY:-$(cfg key)}"; [ -n "$KEY" ] || [ -z "$ME" ] || KEY="$C
 
 # --- helpers -------------------------------------------------------------------------------------------------------
 one_line() { [ "$(printf '%s' "$2" | tr -d '\r\n')" = "$2" ] || die "$1 can't hold a line break"; }
+one_line "the state folder (from AGENT_MAILBOX_STATE, XDG_STATE_HOME or HOME)" "$STATE"
 valid_name() { one_line name "$1"; matches "$NAME_RE" "$1" || die "'$1' isn't a valid name (lowercase a-z, 0-9, '.', '-'; up to 63)"; }
 need_me() { [ -n "$ME" ] || die "no agent name: run setup --name, set AGENT_MAILBOX_NAME, or pass --as"; valid_name "$ME"; }
 # no_mail: an empty inbox, said so (exit 3); unless the name has no record in this mailbox, which more likely means the
@@ -1009,10 +1010,15 @@ doctor)
     if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
     then echo "ok   the store is reachable and initialized"; sok=1
       # what the sync said on the way (a lost init dropped, earlier commits published) is shown, not swallowed
-      [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
-    else case $derr in
-      (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
-      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac
+      [ -z "$derr" ] || printf '%s\n' "$derr" | LC_ALL=C sed -n 's/^agent-mailbox: /warn /p'
+    # (only the lock's own failure is busy: the last line, starting with the lock's words; earlier lines, and the
+    # rest of a failure line, can quote the store or its host)
+    else case $(printf '%s\n' "$derr" | tail -n 1) in
+      ("agent-mailbox: another agent-mailbox command (pid "*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
+      (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1
+          # (the agent-mailbox: lines before the last one, which is the failure; a failure can span lines)
+          printf '%s\n' "$derr" | LC_ALL=C awk '{ l[NR] = $0; if (index($0, "agent-mailbox: ") == 1) last = NR }
+            END { for (i = 1; i < last; i++) if (index(l[i], "agent-mailbox: ") == 1) print "warn " substr(l[i], 16) }' ;; esac
     fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
