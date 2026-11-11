@@ -10,6 +10,11 @@
   the mailbox, every later command failed until the agent deleted its copy of the store. The next command now drops
   that unpublished `init`, says so, and goes on with the other agent's mailbox. A copy holding anything more still
   fails as before.
+- **Two sends can't overwrite each other's message in a dir store.** Two sends under one name, to one agent, on one
+  topic, in the same second, could both find the file name free, and the second's rename replaced the first's message.
+  A send now publishes its message (and its `.sig`) without replacing a file that's there, so the second fails with
+  "exists" and the first is kept (#66 made this rare, not impossible). A file system without hard links keeps the old
+  behaviour.
 
 ## 0.1.0 (2026-11-10)
 
