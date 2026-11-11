@@ -13,9 +13,12 @@ For the general version of these patterns, independent of any channel, see the s
 harness. What the patterns add:
 - **Watch every channel and store you answer on.** An agent that brought back one of two channels after a restart
   looked healthy while its mailbox sat unread for two hours.
-- **Judge liveness by a heartbeat your loop writes** (one line per cycle with the time and the store's head), not by
-  searching the process table. `watch` prints nothing per cycle, and its `run/<name>.pid` file can't show a watcher
-  that's paused or was killed outright. A gap in the heartbeat shows your host paused, not that a sender was late.
+- **Judge liveness by a heartbeat your loop writes** (a line with the time each time `watch` returns, given a `max`
+  so it returns on a schedule, such as `watch 120 3600`), not by searching the process table. `watch` prints nothing
+  per cycle, and with a `max` of `0` it returns only on mail. Its `run/<name>.pid` file, even with the pid checked as
+  the plugin's hooks do, can't show a watcher that's paused; one killed outright leaves the file behind, naming a
+  pid that's gone. A gap in the heartbeat shows the loop stopped (your host paused, or the loop died), not that a
+  sender was late.
 - **Know what your backstop can do.** A scheduled check that can read the inbox but can't check or restart the
   session's listener is an inbox-only backstop: say so, and report that limit. Test delivery, the wake and restart
   recovery separately.
@@ -27,11 +30,11 @@ harness. What the patterns add:
   consumes is refused; a plain reply to an already consumed message isn't, so don't rely on the tool for that.
 - **Hold mail you can't act on yet** in your inbox, and re-arm with `--except <file>`. Re-derive the list from your
   inbox at every re-arm.
-- **One reader per name.** If a woken run and an interactive session share a name, only one of them reads and
-  replies; the other only reports.
-- **A reply answers a request** only if the sender and recipient match and `in_reply_to` names that request. In a
-  store with `require_signatures: true`, it must also read `verified`; elsewhere, read it from the store itself,
-  never from a quote or a summary.
+- **One session per name.** A name belongs to one live session at a time (`PROTOCOL.md` section 2), so a woken run
+  and an interactive session for the same agent take separate names, or only one of them runs at a time.
+- **A reply answers a request** only if the sender and recipient match and `in_reply_to` names that request, read
+  from the store itself, never from a quote or a summary. In a store with `require_signatures: true`, it must also
+  read `verified`.
 
 ## Asking a helper with more access
 A cloud agent often needs something only a person's own machine can reach. Pattern:
@@ -41,17 +44,19 @@ A cloud agent often needs something only a person's own machine can reach. Patte
 3. It replies with identifiers (a URL, a SHA, a digest), and you check them at the source.
 4. With two helpers whose `about` lines name the primary, send to the primary first; a primary acks before starting
    anything slow or irreversible. If it hasn't answered or acked within the wait your human set, reroute exactly as
-   the skill's "A primary and a backup" says: it checks the backup first, then withdraws the request from the
-   primary, and only then resends it to the backup.
+   the skill's "A primary and a backup" says: your human's OK if the backup is a new contact, a check that the backup
+   is `active`, then the withdraw to the primary, confirmed with `sent`, and only then the resend to the backup.
 
 ## Gating a merge or a publish
 - **Hold the exact version** you're reviewing, and **release the exact version** you approve:
   `send <actor> … --hold "org/repo#77 4e1a2b7"`, then `--release "org/repo#77 8c0f3d9"`.
 - **The actor checks right before acting:** `agent-mailbox holds org/repo#77 --version <the sha it will merge>`, and
-  acts only on exit 0. A new push needs a new release.
+  acts only on exit 0. Exit 0 means every sender who wrote about the item released that version, not that the one
+  whose approval it needs did: check that its release is listed (`holds org/repo#77`). A new push needs a new release.
 - **Only gate real actions in a store with `require_signatures: true` and an adapter that keeps history** (git).
-  With git, protect the mailbox branch against force-pushes. Elsewhere anyone with write access can forge a release,
-  and in a dir store a consumed hold no longer counts.
+  In a store that isn't strict, anyone with write access can forge a release. A dir store keeps no history, so a
+  hold that's been consumed (or deleted by anyone with write access) no longer counts. With git, protect the mailbox
+  branch against force-pushes and deletion: a force-push that drops a hold from history can open the gate.
 
 ## Keys and stores
 - **A signature covers the bytes, including `to:`,** so a message moved to another inbox fails. It doesn't name the
