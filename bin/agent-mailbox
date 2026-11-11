@@ -226,17 +226,19 @@ field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" {
 put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
   { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"
   (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && plain "$tmp" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }
-  if [ -n "$PUT_NEW" ]; then land "$tmp" "$1" || { rm -f "$tmp"; taken "$1"; }
+  if [ -n "$PUT_NEW" ]; then
+    if land "$tmp" "$1"; then :; else lr=$?; rm -f "$tmp"; [ "$lr" != 1 ] || taken "$1"; die "can't write $(rel "$1")"; fi
   else mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; fi; }
 # PUT_NEW (set by send): put and put_signed publish a new file without replacing one that's there. In a dir store two
 # sends can pick the same file name at once (one name, one topic, one second); each checks the name is free, and a
 # rename would let the second overwrite the first. land <temp> <file> hard-links the temp to the file, which fails if
-# the file exists, then removes the temp: exit 1 when the file was taken, 0 when it landed. ceiling: a file system
-# without hard links (some synced or FAT folders) falls back to the rename, and keeps the race
+# the file exists, then removes the temp: 0 when it landed, 1 when the file was taken, 2 when the fallback rename
+# failed (the temp is removed). ceiling: a file system without hard links (some synced or FAT folders) falls back to the
+# rename, and keeps the race
 PUT_NEW=""
 land() { if ln "$1" "$2" 2>/dev/null; then rm -f "$1"; return 0; fi
   { [ -e "$2" ] || [ -L "$2" ]; } && return 1
-  mv -f "$1" "$2" || die "can't write $(rel "$2")"; }
+  mv -f "$1" "$2" || { rm -f "$1"; return 2; }; }
 # taken <file>: stop, because another writer published that file name first
 taken() { die "$(rel "$1") exists (another send took this file name in the same second; send again)"; }
 # plain <path>...: each is a regular file, not a link
@@ -429,18 +431,20 @@ put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
       { rm -f "$ps" "$ps.sig" "$ps.ok"; die "the signature made with $KEY doesn't verify against your registry record's key"; }
     rm -f "$ps.ok"
   fi
+  # a new file (PUT_NEW) never replaces anything: it lands its .sig first, and a .sig already at that name means
+  # another send took the name (it may have landed while this one signed). If the file name is then taken, only its own
+  # .sig is removed, so the winner's pair is left as it was
+  if [ -n "$PUT_NEW" ]; then
+    plain "$ps" "$ps.sig" || { rm -f "$ps" "$ps.sig"; die "can't write $(rel "$1")"; }
+    if land "$ps.sig" "$1.sig"; then :; else
+      lr=$?; rm -f "$ps" "$ps.sig"; [ "$lr" != 1 ] || taken "$1"; die "can't write $(rel "$1")"; fi
+    if land "$ps" "$1"; then return 0; else lr=$?; fi
+    rm -f "$ps" "$1.sig"; [ "$lr" != 1 ] || taken "$1"; die "can't write $(rel "$1")"
+  fi
   # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
   # (only a regular file is kept: a .sig that's a link is replaced, never read, so nothing outside the store is copied in)
   old=; if [ -f "$1.sig" ] && [ ! -L "$1.sig" ]; then
     (set -C; cat "$1.sig" > "$ps.old") 2>/dev/null && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
-  # a new file (PUT_NEW) lands its .sig first, without replacing one that's there; if the file name is then taken,
-  # only its own .sig is removed, so the winner's pair is left as it was
-  if [ -n "$PUT_NEW" ] && [ -z "$old" ]; then
-    plain "$ps" "$ps.sig" || { rm -f "$ps" "$ps.sig"; die "can't write $(rel "$1")"; }
-    land "$ps.sig" "$1.sig" || { rm -f "$ps" "$ps.sig"; taken "$1"; }
-    land "$ps" "$1" && return 0
-    rm -f "$ps" "$1.sig"; taken "$1"
-  fi
   if plain "$ps" "$ps.sig" && mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
