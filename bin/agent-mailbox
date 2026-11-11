@@ -978,7 +978,7 @@ watch)
   # (other_watcher), so a stale file, a dead pid or one reused by another process doesn't count
   for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
     wp=$(other_watcher "$pf") || continue
-    warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop this one, or pid $wp if it isn't the Claude Code plugin's hook (which starts it again)"; break
+    warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop this one, or pid $wp unless the Claude Code plugin's hook started it (its parent is claude-rewake.sh; the hook would start it again)"; break
   done
   # (one for the name, and one for the name on this store, since one name can be in use on several stores)
   for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done

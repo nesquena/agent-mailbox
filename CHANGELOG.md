@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- **`watch`'s second-watcher warning says which to stop:** this one, or the running one if it isn't the Claude Code
-  plugin's hook, which would start it again.
+- **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
+  plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
   check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store

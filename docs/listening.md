@@ -39,7 +39,8 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   its pid, the name and the store. It writes the same in `run/<name>@<store id>.pid`, for a name in use on several
   stores. A helper can check that a listener is up before starting another. A second `watch` for the same name and
   store from the same state folder (normally: the same user on the same machine) warns, naming the running one's pid:
-  both then wake on the same mail, so stop one.
+  both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start it
+  again.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.

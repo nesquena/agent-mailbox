@@ -880,6 +880,16 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     ! printf '%s\n' "$out" | LC_ALL=C grep -q "$(printf '\302\233')" &&
     ok "the failed checkout's die line keeps git's words and spells out a C1 control (locale: ${u8:-default})" ||
     no "the failed checkout's die line lost git's words, or holds a raw C1 control" "$out"
+  # a store without the mailbox's branch yet: a failure starting it is the same one die line, with git's words
+  T="$W/rtfail"; mkdir -p "$T/rtfail"; git init -q --bare "$T/store.git"
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" read-tree --empty "*) printf "fatal: no \302\205 tree\n" >&2; exit 128 ;; esac' \
+    "exec '$(command -v git)' \"\$@\"" > "$T/rtfail/git"; chmod +x "$T/rtfail/git"
+  as rt setup --store "$T/store.git" --name rt >/dev/null
+  out=$(PATH="$T/rtfail:$PATH"; export PATH; as rt list 2>&1); rc=$?
+  [ "$rc" = 1 ] && [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] &&
+    printf '%s\n' "$out" | LC_ALL=C grep -q "^agent-mailbox: can.t check out the store: fatal: no <U+0085> tree" &&
+    ok "starting the mailbox's branch fails with one die line, keeping git's words" ||
+    no "starting the mailbox's branch didn't fail with one die line holding git's words (exit $rc)" "$out"
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
   T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -3315,7 +3325,7 @@ rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cu
 (as wa1 watch 1 30 > "$T/w2.out" 2>&1 &)
 i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 p2=$(cut -d' ' -f1 "$R/wa1.pid")
-grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop this one, or pid $p1 if it isn't the Claude Code plugin's hook" "$T/w2.out" &&
+grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop this one, or pid $p1 unless the Claude Code plugin's hook started it" "$T/w2.out" &&
   ok "a second watch for the name, while the first runs, warns, naming the first" || no "a second watch didn't warn" "$(cat "$T/w2.out")"
 [ -n "$p2" ] && [ "$p2" != "$p1" ] && kill -0 "$p2" 2>/dev/null && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
   ok "and starts anyway, writing its own pid to both pid files" || no "the second watch didn't start, or didn't take the pid files" "$(cat "$R"/*.pid)"
@@ -3343,7 +3353,7 @@ for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$gh wa1 $sid" > "$f"; done
 out=$(as wa1 watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor a hook script whose name holds agent-mailbox and watch" ||
   no "a hook script counted as a watcher" "$out"
-kill "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
+kill $(pgrep -P "$gh") "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 # a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1

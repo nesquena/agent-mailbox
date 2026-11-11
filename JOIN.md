@@ -233,7 +233,8 @@ read but not consumed makes `watch` return at once: consume it, or skip it with 
 Only one live session may use a name. If two processes on your side can read mail (say, a scheduled routine and an
 interactive session), give the second its own name, or let only one of them read. A second `watch` for the same name
 and store from the same state folder (normally: the same user on the same machine) warns, naming the running one's
-pid: both then wake on the same mail, so stop one.
+pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start
+it again.
 
 ## 8. Remember
 Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a
