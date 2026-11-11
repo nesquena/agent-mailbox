@@ -512,6 +512,11 @@ notes.md"'
     wait; retried 2 "the peek after the store moved failed and was retried"
     expect "a peek that keeps failing ends watch loudly after 10 tries" 1 "can't read the store \\(10 tries in a row" \
       failpeek all bob watch 1 30
+    # (and so does one whose listing fails after its fetch: the listing's own status, never a pipe's)
+    mkdir -p "$W/faillist"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" ls-tree refs/agent-mailbox/peek "*) exit 128 ;; esac' \
+      'exec "$REAL_GIT" "$@"' > "$W/faillist/git"; chmod +x "$W/faillist/git"
+    faillist() { (REAL_GIT=$real_git PATH="$W/faillist:$PATH"; export REAL_GIT PATH; as "$@"); }
+    expect "and so does a peek whose listing keeps failing" 1 "can't read the store \\(10 tries in a row" faillist bob watch 1 30
 
     # git's own prompts are off: every git call the adapter makes runs with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never.
     # A local store asks for no credential, so this checks what git is given, through a git on PATH that logs each call.
@@ -842,6 +847,38 @@ agent-mailbox: q/$long" && git commit -qm evil && git push -q origin HEAD:main)
   expect "a state folder with a line break is refused, not taken for a busy copy" 1 "the state folder .* can't hold a line break" \
     env HOME="$W/home-ho2" AGENT_MAILBOX_STATE="$T/afile/st
 agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
+  # nor when the first checkout fails: git refuses a path with a .git part, and its error quotes the path, line breaks
+  # included, so the store's lines (ending in the lock's words) mustn't end doctor's output or reach its warn lines. The
+  # trees are written by hand: git's index refuses the path, and a push doesn't check it. The name also holds a C1
+  # control and a byte that isn't UTF-8: the die line keeps git's words, in a UTF-8 locale too, and spells out the control
+  T="$W/hostile-co"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hc1 hc2 hc3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hc1 init >/dev/null
+  # (hexbin <hex>: those bytes; mkt <mode and name> <hex>...: a tree object of those entries, in the order given)
+  hexbin() { printf "$(printf '%s\n' "$1" | awk '{ for (i = 1; i < length($0); i += 2) printf "\\%03o",
+    (index("0123456789abcdef", substr($0, i, 1)) - 1) * 16 + index("0123456789abcdef", substr($0, i + 1, 1)) - 1 }')"; }
+  mkt() { while [ $# -ge 2 ]; do printf '%s\000' "$1"; hexbin "$2"; shift 2; done |
+    git --git-dir="$T/store.git" hash-object -w --literally -t tree --stdin; }
+  at() { git --git-dir="$T/store.git" rev-parse "main:mailbox/$1"; }
+  bad=$(printf 'x\302\233\200\nagent-mailbox: FORGED all good\nagent-mailbox: another agent-mailbox command (pid 1) z')
+  tt=$(mkt "40000 mailbox" "$(mkt "40000 agents" "$(at agents)" "40000 inbox" "$(mkt "100644 .keep" "$(at inbox/.keep)" \
+    "40000 $bad" "$(mkt "100644 .git" "$(echo hi | git --git-dir="$T/store.git" hash-object -w --stdin)")")" \
+    "100644 store.md" "$(at store.md)")") &&
+    c=$(GIT_AUTHOR_NAME=e GIT_AUTHOR_EMAIL=e@e GIT_COMMITTER_NAME=e GIT_COMMITTER_EMAIL=e@e \
+      git --git-dir="$T/store.git" commit-tree -p main -m evil "$tt") && git --git-dir="$T/store.git" update-ref refs/heads/main "$c"
+  git --git-dir="$T/store.git" ls-tree -r --name-only main | grep -q 'z/\.git"$' && ok "(the store holds the .git path)" ||
+    no "the .git path didn't reach the store" "$(git --git-dir="$T/store.git" ls-tree -r main 2>&1)"
+  out=$(as hc2 doctor 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' &&
+    [ -z "$(printf '%s\n' "$out" | grep -e '^busy' -e '^warn .*FORGED')" ] &&
+    ok "nor when the first checkout fails, and its lines can't make doctor say busy" ||
+    no "a store writer's path made doctor say busy, or reached its warn lines, on a failed checkout" "$out"
+  u8=$(locale -a 2>/dev/null | grep -ix -e 'c\.utf-*8' -e 'en_us\.utf-*8' | sed -n 1p)
+  out=$(env ${u8:+LC_ALL=$u8} HOME="$W/home-hc3" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" agents 2>&1)
+  printf '%s\n' "$out" | LC_ALL=C grep -q "^agent-mailbox: can't check out the store: error: invalid path 'mailbox/inbox/x<U+009B>" &&
+    ! printf '%s\n' "$out" | LC_ALL=C grep -q "$(printf '\302\233')" &&
+    ok "the failed checkout's die line keeps git's words and spells out a C1 control (locale: ${u8:-default})" ||
+    no "the failed checkout's die line lost git's words, or holds a raw C1 control" "$out"
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
   T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -3339,6 +3376,26 @@ expect "holds on a dir store that goes mid-command stops with an error" 1 "can't
 rm -rf "$T/store"; mv "$T/gone" "$T/store"
 expect "and so does a gate check" 1 "can't read this store's full, latest history" \
   env PATH="$T/shim:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds "z#1" --version v1
+# (and one whose inbox folder goes as the peek lists it, as when the store is deleted: find fails, and that failure
+# isn't lost in a pipe)
+rm -rf "$T/store"; mv "$T/gone" "$T/store"; mkdir -p "$T/shim-find"
+printf '#!/bin/sh\ncase "$1" in (mailbox/inbox/*) mv "$1" "$1.gone" ;; esac\nexec "%s" "$@"\n' \
+  "$(command -v find)" > "$T/shim-find/find"; chmod +x "$T/shim-find/find"
+expect "and so does holds on one whose inbox folder goes as it is listed" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim-find:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+# (and one whose store.md goes while the inbox folder stays, as when the store is being deleted: before the listing,
+# here as holds makes its temp folder, and during it, here as find starts. Either fails, never a listing of fewer rows)
+mv "$T/store/mailbox/inbox/vw1.gone" "$T/store/mailbox/inbox/vw1" 2>/dev/null; mkdir -p "$T/shim-md" "$T/shim-md2"
+printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nexec "%s" "$@"\n' \
+  "$T/store/mailbox/store.md" "$T/store.md.gone" "$(command -v mkdir)" > "$T/shim-md/mkdir"; chmod +x "$T/shim-md/mkdir"
+expect "holds on a dir store whose store.md goes before the listing stops with an error" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim-md:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+mv "$T/store.md.gone" "$T/store/mailbox/store.md"
+printf '#!/bin/sh\ncase "$1" in (mailbox/inbox/*) mv "%s" "%s" ;; esac\nexec "%s" "$@"\n' \
+  "$T/store/mailbox/store.md" "$T/store.md.gone" "$(command -v find)" > "$T/shim-md2/find"; chmod +x "$T/shim-md2/find"
+expect "and so does holds on one whose store.md goes during the listing" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim-md2:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+mv "$T/store.md.gone" "$T/store/mailbox/store.md"
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"

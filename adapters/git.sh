@@ -33,7 +33,9 @@ ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -c submodule.recurse=fa
   -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
-ad_gist() { sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' '; }
+# ad_gist: git's error output as one line for a die or warn. In the C locale, so a byte that isn't UTF-8 can't make grep
+# take it for binary and drop it, and through clean: git masks ASCII controls in its errors, but not C1 ones
+ad_gist() { ( LC_ALL=C && export LC_ALL && sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' ' | clean ); }
 ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
 # ad_clone: clone the store into $AD_DIR, in the C locale so its messages read the same everywhere. git clone takes a
 # name that exists as a repository or bundle where it runs as that local path first, even a URL's (ssh://h/x is also
@@ -345,7 +347,8 @@ ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 ad_peek() {
   ad_git fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
-  ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
+  pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
+  [ -z "$pl" ] || printf '%s\n' "$pl" | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
 
 # ad_history <dir> [<ERE>]: "<ref> <path>" for every version of every file that was ever under <dir>, oldest first
