@@ -10,6 +10,17 @@
   the mailbox, every later command failed until the agent deleted its copy of the store. The next command now drops
   that unpublished `init`, says so, and goes on with the other agent's mailbox. A copy holding anything more still
   fails as before.
+- **A key's passphrase is asked in the terminal.** When a command's stdin is a terminal and `DISPLAY` is set, signing
+  used an askpass program for a key with a passphrase (0.1.0's note under #40); on OpenSSH 8.4 or later it now asks in
+  the terminal, unless `SSH_ASKPASS_REQUIRE` is set. Without a terminal, nothing changes.
+- **`update --key` and `update --no-key` are refused,** pointing at `JOIN.md`'s "Replacing your key"; they used to be
+  ignored.
+- **A failed `register --key` leaves the config alone.** With a key whose passphrase isn't given, `register` used to
+  write `key =` to the config before signing failed; it now writes it only after the record is signed, and if the
+  config can't be written, it registers nothing.
+- **Line breaks are refused** in `setup --adapter`, and in a store from `AGENT_MAILBOX_STORE`.
+- **The "no mailbox yet" error** no longer tells every agent to run `init`; it says to start one if that's what you
+  were asked to do.
 - **Two sends can't overwrite each other's message in a dir store.** Two sends under one name, to one agent, on one
   topic, in the same second, could both find the file name free, and the second's rename replaced the first's message.
   A send now publishes its message (and its `.sig`) without replacing a file that's there, so the second fails with

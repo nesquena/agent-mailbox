@@ -2931,6 +2931,75 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+echo "== CLI hardening: update --key, register --key's config, line breaks, the passphrase prompt"
+T="$W/harden"; mkdir -p "$T/store"
+for a in hp1 hp2 hp3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as hp1 init >/dev/null; as hp1 register --kind t --about t --no-key >/dev/null 2>&1
+expect "a store with no mailbox doesn't tell every agent to init" 1 "if that's what you were asked to do" \
+  env HOME="$W/home-hp1" AGENT_MAILBOX_ROOT=elsewhere "$SH" "$CLI" list
+expect "update refuses --key, pointing at Replacing your key" 1 "update can't change a key; see JOIN.md's .Replacing your key." \
+  as hp1 update --key "$T/any.pub"
+expect "and refuses --no-key the same way" 1 "update can't change a key" as hp1 update --no-key
+expect "setup refuses an adapter with a line break" 1 "adapter can't hold a line break" as hp2 setup --store "$T/store" \
+  --adapter "dir
+x" --name hp2
+expect "a store from AGENT_MAILBOX_STORE with a line break is refused" 1 "store \(from AGENT_MAILBOX_STORE.*can't hold a line break" \
+  env HOME="$W/home-hp1" AGENT_MAILBOX_STORE="$T/store
+x" "$SH" "$CLI" list
+[ ! -e "$T/store
+x" ] && ok "and nothing is created at that path" || no "a store path with a line break was created"
+if [ -n "$SSH" ]; then
+  # register --key with a key whose passphrase isn't given (an askpass that fails): register fails, and the config
+  # doesn't name the key
+  ssh-keygen -q -t ed25519 -N pw -f "$T/pk"; printf '#!/bin/sh\nexit 1\n' > "$T/noask"; chmod +x "$T/noask"
+  expect "register --key fails when its key's passphrase isn't given" 1 "signing failed" env DISPLAY=:0 SSH_ASKPASS="$T/noask" \
+    SSH_ASKPASS_REQUIRE=force HOME="$W/home-hp2" XDG_CONFIG_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+    AGENT_MAILBOX_NAME= "$SH" "$CLI" register --kind t --about t --key "$T/pk.pub"
+  grep -q '^key' "$W/home-hp2/.config/agent-mailbox/config" && no "a failed register --key wrote the key to the config" \
+    "$(cat "$W/home-hp2/.config/agent-mailbox/config")" || ok "and leaves the config without the key"
+  # register --key with a config it can't write (its folder is a regular file, which stops root too): nothing is
+  # registered, on either adapter, and once the config can be written, register works
+  : > "$T/afile"; ssh-keygen -q -t ed25519 -N '' -f "$T/k4"; git init -q --bare "$T/g.git"
+  git --git-dir="$T/g.git" symbolic-ref HEAD refs/heads/main
+  as hpg setup --store "$T/g.git" --name hpg >/dev/null; as hpg init >/dev/null
+  for st in dir:"$T/store" git:"$T/g.git"; do ad=${st%%:*} sp=${st#*:}
+    rk() { env HOME="$W/home-hp4" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
+      AGENT_MAILBOX_CONFIG="$1" AGENT_MAILBOX_STORE="$sp" AGENT_MAILBOX_ADAPTER=$ad AGENT_MAILBOX_NAME=hp4 \
+      "$SH" "$CLI" register --kind t --about t --key "$T/k4.pub"; }
+    expect "$ad: register --key with a config it can't write registers nothing" 1 "couldn't be updated with the key, so nothing was registered" \
+      rk "$T/afile/config"
+    if [ $ad = dir ]; then has=$(ls "$sp/mailbox/agents" | grep -c '^hp4\.md'); else has=$(git --git-dir="$sp" ls-tree -r --name-only main | grep -c 'hp4\.md'); fi
+    [ "$has" = 0 ] && ok "$ad: and leaves no record in the store" || no "$ad: a register that failed left a record" "$has"
+    expect "$ad: once the config can be written, register works" 0 "^register: hp4 " rk "$T/hp4-$ad.config"
+  done
+  # the passphrase prompt: a shim ssh reports a version and a shim ssh-keygen logs SSH_ASKPASS_REQUIRE for each signing.
+  # Signing asks in the terminal (never) only when the command's stdin is a terminal, the variable isn't set, and
+  # OpenSSH is 8.4 or later
+  as hp3 register --kind t --about t >/dev/null 2>&1; echo hi > "$T/body"; mkdir -p "$T/ps"
+  printf '%s\n' '#!/bin/sh' 'echo "OpenSSH_${FAKESSHV}p1, LibreSSL 3.3.6" >&2' > "$T/ps/ssh"
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y sign "*) echo "${SSH_ASKPASS_REQUIRE-unset}" >> "$ASKLOG" ;; esac' \
+    "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/ps/ssh-keygen"; chmod +x "$T/ps/ssh" "$T/ps/ssh-keygen"
+  # runner <version> <topic> [<SSH_ASKPASS_REQUIRE>]: a script that sends as hp3 with the shims
+  runner() { printf '%s\n' '#!/bin/sh' "export PATH='$T/ps:$PATH' FAKESSHV='$1' ASKLOG='$T/asklog' HOME='$W/home-hp3'" \
+    'unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID AGENT_MAILBOX_NAME SSH_ASKPASS_REQUIRE' \
+    "${3:+export SSH_ASKPASS_REQUIRE='$3'}" "exec '$SH' '$CLI' send hp1 '$2' '$T/body'" > "$T/r.sh"; chmod +x "$T/r.sh"; }
+  # in_tty: run $T/r.sh with a terminal as its stdin (BSD and util-linux script differ)
+  in_tty() { case "$(uname)" in (Linux) script -qc "'$T/r.sh'" /dev/null ;; (*) script -q /dev/null "$T/r.sh" ;; esac < /dev/null >/dev/null 2>&1; }
+  asked() { tail -n 1 "$T/asklog" 2>/dev/null; }
+  if command -v script >/dev/null 2>&1; then
+    : > "$T/asklog"; runner 10.2 pp1; in_tty
+    [ "$(asked)" = never ] && ok "in a terminal with OpenSSH 8.4+, signing asks for a passphrase in the terminal" ||
+      no "in a terminal, signing didn't set SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"
+    for v in 9.6 8.4; do : > "$T/asklog"; runner $v "pp-$v"; in_tty
+      [ "$(asked)" = never ] && ok "and with OpenSSH $v" || no "OpenSSH $v didn't get SSH_ASKPASS_REQUIRE=never" "$(cat "$T/asklog")"; done
+    : > "$T/asklog"; runner 8.3 pp2; in_tty
+    [ "$(asked)" = unset ] && ok "with OpenSSH before 8.4, it's left alone" || no "OpenSSH 8.3 got SSH_ASKPASS_REQUIRE" "$(cat "$T/asklog")"
+    : > "$T/asklog"; runner 10.2 pp3 force; in_tty
+    [ "$(asked)" = force ] && ok "and a SSH_ASKPASS_REQUIRE that's set is kept" || no "a set SSH_ASKPASS_REQUIRE was changed" "$(cat "$T/asklog")"
+  else sk "no script command to give signing a terminal"; fi
+  : > "$T/asklog"; runner 10.2 pp4; "$T/r.sh" < /dev/null >/dev/null 2>&1
+  [ "$(asked)" = unset ] && ok "with no terminal, signing leaves SSH_ASKPASS_REQUIRE alone" || no "no terminal, yet SSH_ASKPASS_REQUIRE was set" "$(cat "$T/asklog")"
+fi
 echo "== dir: two sends that pick the same file name at once can't overwrite each other"
 # one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
 # (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
