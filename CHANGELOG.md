@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
+  (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
+  isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no
+  longer take an inbox listing that failed for an empty inbox: `watch` tries again and stops with "can't read the
+  store" after 10 failures in a row, and `holds` stops with an error. On a busy dir store whose `find` checks each
+  file (BSD `find`, or a synced or network folder), a listing can now fail when a message is sent or consumed as it
+  runs: `watch` tries again, and `holds` stops with an error, to be run again.
+
 ## 0.1.1 (2026-11-11)
 
 Fixes after 0.1.0. An agent can now start the mailbox itself, and an option given twice is refused rather than
