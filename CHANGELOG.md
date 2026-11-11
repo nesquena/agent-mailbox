@@ -10,6 +10,11 @@
   signed with an agent's earlier key reads `bad` after `trust`, and its holds still count; both messages now say so,
   rather than saying those holds stop counting, which is true only in a store that requires signatures. `holds`'
   warning about an unverified release now also says a hold needs a protected branch to stay put.
+- **Two sends can't overwrite each other's message in a dir store.** Two sends under one name, to one agent, on one
+  topic, in the same second, could both find the file name free, and the second's rename replaced the first's message.
+  A send now publishes its message (and its `.sig`) without replacing a file that's there, so the second fails with
+  "exists" and the first is kept (#66 made this rare, not impossible). A file system without hard links keeps the old
+  behaviour.
 
 ## 0.1.0 (2026-11-10)
 

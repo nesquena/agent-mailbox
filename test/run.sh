@@ -2936,6 +2936,69 @@ expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H"
 echo "== capability probe"
 mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+echo "== dir: two sends that pick the same file name at once can't overwrite each other"
+# one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
+# (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
+# folders stand in for two processes that both checked the name was free before either wrote it. Every message
+# survives, or its sender fails loudly: B's lands, and A's stops with "exists", leaving B's as it was. PAUSEAT picks
+# where A pauses: at its first publish step (any), only at the message (md, after its .sig landed), or while signing
+# (sign, before it publishes anything)
+T="$W/clobber"; mkdir -p "$T/store" "$T/cs"
+printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20260101T000000Z; exit 0; fi' \
+  "exec '$(command -v date)' \"\$@\"" > "$T/cs/date"
+pause='i=0; while [ ! -e "$PAUSE.go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done'
+for c in ln mv; do printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done' \
+  'case $d in (*-clob*.md.sig) k=sig ;; (*-clob*.md) k=md ;; (*) k= ;; esac' \
+  'if [ -n "$k" ] && [ -n "${PAUSE:-}" ] && [ ! -e "$PAUSE.at" ] && { [ "${PAUSEAT:-any}" = any ] || [ "$PAUSEAT" = "$k" ]; }' \
+  "then : > \"\$PAUSE.at\"; $pause; fi" "exec '$(command -v $c)' \"\$@\"" > "$T/cs/$c"; done
+command -v ssh-keygen >/dev/null 2>&1 && printf '%s\n' '#!/bin/sh' \
+  'case " $* " in (*" -Y sign "*) if [ -n "${PAUSE:-}" ] && [ "${PAUSEAT:-}" = sign ] && [ ! -e "$PAUSE.at" ]' \
+  "then : > \"\$PAUSE.at\"; $pause; fi ;; esac" "exec '$(command -v ssh-keygen)' \"\$@\"" > "$T/cs/ssh-keygen"
+chmod +x "$T/cs/"*
+for a in cl1 cl2 cl3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as cl2 init >/dev/null; as cl1 register --kind t --about t --no-key >/dev/null 2>&1; as cl2 register --kind t --about t --no-key >/dev/null 2>&1
+[ -n "$SSH" ] && as cl3 register --kind t --about t >/dev/null 2>&1
+# race <sender> <topic> [<pause at>]: A (paused) and B send <topic> to cl2 in the same second; their output, ending
+# with "exit <code>", is left in $T/a.out and $T/b.out
+race() { rm -f "$T/p.at" "$T/p.go"
+  (echo from-a | env PATH="$T/cs:$PATH" PAUSE="$T/p" PAUSEAT="${3:-any}" AGENT_MAILBOX_STATE="$T/state-a-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/a.out" 2>&1
+   echo "exit $?" >> "$T/a.out") &
+  i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+  echo from-b | env PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
+    XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/b.out" 2>&1
+  echo "exit $?" >> "$T/b.out"; : > "$T/p.go"; wait; }
+# lost <out file>: that sender stopped with "exists" and a non-zero exit
+lost() { grep -q "exists" "$1" && [ "$(tail -n 1 "$1")" != "exit 0" ]; }
+race cl1 clob-u
+f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl1-clob-u.md"
+grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && [ "$(tail -n 1 "$T/a.out")" != "exit 0" ] &&
+  ok "an unsigned send that loses the race fails with 'exists', and the first message is kept" ||
+  no "a racing unsigned send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
+if [ -n "$SSH" ]; then
+  race cl3 clob-s
+  f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-s.md"
+  grep -q from-b "$f" 2>/dev/null && grep -q "exists" "$T/a.out" && [ "$(tail -n 1 "$T/a.out")" != "exit 0" ] &&
+    ok "a signed send that loses the race fails with 'exists', and the first message is kept" ||
+    no "a racing signed send overwrote a message, or didn't say so" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
+  expect "and the kept message still verifies (its .sig is its own)" 0 "cl3-clob-s.md \[verified" as cl2 read
+  # A's .sig has landed, and it pauses before its message: B finds the .sig taken and stops; A's pair lands whole
+  race cl3 clob-m md
+  f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-m.md"
+  grep -q from-a "$f" 2>/dev/null && lost "$T/b.out" && [ "$(tail -n 1 "$T/a.out")" = "exit 0" ] &&
+    ok "a send whose .sig landed first keeps its message; the other stops with 'exists'" ||
+    no "a send whose .sig landed first lost its message, or the other didn't stop" "$(cat "$T/a.out"; echo ---; cat "$T/b.out")"
+  expect "and that message verifies" 0 "cl3-clob-m.md \[verified" as cl2 read
+  # A pauses while signing, before it publishes anything: B lands its pair, and A then finds the name taken
+  race cl3 clob-g sign
+  f="$T/store/mailbox/inbox/cl2/20260101T000000Z-cl3-clob-g.md"
+  grep -q from-b "$f" 2>/dev/null && lost "$T/a.out" &&
+    ok "a send that was still signing when the other landed stops with 'exists'; the first is kept" ||
+    no "a send that was still signing overwrote the other's message" "$(cat "$T/a.out"; echo ---; cat "$f" 2>&1)"
+  expect "and the kept message verifies" 0 "cl3-clob-g.md \[verified" as cl2 read
+  [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
+    no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
+fi
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
