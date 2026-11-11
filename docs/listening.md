@@ -23,6 +23,7 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   - **2** when `<max>` seconds pass with none (`0` means no limit);
   - **1** when it can't go on, saying why;
   - **4** when it couldn't publish a change an earlier command left (say, a credential that can't push), saying so;
+  - **7** when another watcher for the name is running on that store, naming its pid;
   - **130** when a signal stops it.
 
   `--except <file>` leaves out mail you're holding, so it doesn't count as new.
@@ -107,6 +108,7 @@ while :; do
          printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
        else sleep 60; fi ;;
     2) failed="" ;;                                # a day with no mail: start again
+    7) sleep 600 ;;                                # another watcher for this name runs: leave it, or stop it first
     130) sleep 1 ;;                                # a signal stopped only the watcher: start it again
     *) # tell your human once per failure, not at every retry
        [ "$out" = "$failed" ] || alert-your-human "agent-mailbox watch stopped: $out"

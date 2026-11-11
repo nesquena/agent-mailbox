@@ -3,9 +3,10 @@
 ## Unreleased
 
 - **One watcher per name on a machine.** A second `watch` for a name on the same store and machine used to take over
-  the first's pid files, and both woke on the same mail; it now refuses (exit 7), naming the running watcher's pid. If
-  you see it, leave the running watcher: it wakes you. To replace it, stop it first, or pass `--force`, which takes
-  over its pid files without stopping it.
+  the first's pid files, and both woke on the same mail; it now refuses (exit 7), naming the running watcher's pid. On
+  exit 7, leave the running watcher if it's one you started in this session and can see; otherwise (a leftover from an
+  earlier session or a killed shell) run `watch` again with `--force`, which takes over its pid files without stopping
+  it. The Claude Code plugin's hook does this for a watcher it left itself.
 - **A store started again while `holds` ran no longer makes published mail look unpublished.** If the store was
   deleted and re-created while `holds` read its history, later commands said the agent's commits were unpublished and
   to send again what they held. `holds` no longer changes what an agent's copy of the store counts as published. A
