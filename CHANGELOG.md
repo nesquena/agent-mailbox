@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A git error in a failure message keeps git's words in any locale, with control characters spelled out; a failed
+  inbox listing is no longer read as no mail.** When cloning, checking out, pulling or pushing the store failed, the
+  message quoting git lost git's words in a UTF-8 locale if they held a byte that isn't UTF-8 (grep's "binary file
+  matches" took their place), and let C1 control characters through as they were; they're now spelled out, as in other
+  text from the store. `watch` and `holds` no longer take a listing of the inbox that failed (git's `ls-tree`, or `find`
+  on a dir store, including a dir store that goes while it's listed) for an empty inbox: `watch` tries again and stops
+  with "can't read the store" after 10 failures in a row, and `holds` stops with an error.
 - **An option given twice is refused, not replaced by the second.** `send` with two `--release` (or `--hold`) options
   delivered only the last one, without saying so, so a reader whose merge waited on the other kept waiting. It now
   fails and sends nothing ("--release was given twice: a message carries one hold or release"): send one message per
