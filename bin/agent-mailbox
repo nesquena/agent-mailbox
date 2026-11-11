@@ -285,6 +285,7 @@ load_adapter() {
   root_ok || die "root must be a relative path of letters, digits, '.', '_' and '-' (no part '..' or '.git' in any case, or starting with '-'), not '$ROOT'"
   branch_ok "$BRANCH" || die "bad branch name '$BRANCH' (from ${AGENT_MAILBOX_BRANCH:+AGENT_MAILBOX_BRANCH, which overrides }the config)"
   [ -n "$STORE" ] || die "no store configured: run 'agent-mailbox setup --store <url|path>' (or set AGENT_MAILBOX_STORE)"
+  one_line "the store (from ${AGENT_MAILBOX_STORE:+AGENT_MAILBOX_STORE, which overrides }the config)" "$STORE"
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
   [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
   STORE_ID=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)
@@ -294,7 +295,7 @@ load_adapter() {
   M="$AD_DIR/$ROOT"
 }
 need_store() {
-  [ -f "$M/store.md" ] || die "the store has no mailbox at '$ROOT/' yet: run 'agent-mailbox init' once"
+  [ -f "$M/store.md" ] || die "the store has no mailbox at '$ROOT/' yet (start one with 'agent-mailbox init', if that's what you were asked to do)"
   v=$(field protocol "$M/store.md"); case "$v" in ''|*[!0-9]*) die "store.md has no valid protocol version" ;; esac
   [ "$v" -le "$PROTOCOL" ] || die "this mailbox uses protocol $v; this client speaks $PROTOCOL (upgrade agent-mailbox)"
 }
@@ -412,7 +413,15 @@ verify_sig() {
   rm -f "$allowed"; echo "$r"
 }
 # sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
-sign_file() { (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null || die "signing failed with $KEY"; }
+sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
+  else (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null; fi || die "signing failed with $KEY"; }
+# askpass_never: signing reads the message on stdin, so ssh-keygen asks for a key's passphrase through an askpass
+# program whenever DISPLAY is set, even in a terminal. When this command's own stdin is a terminal and
+# SSH_ASKPASS_REQUIRE isn't set, sign with SSH_ASKPASS_REQUIRE=never, so the passphrase is asked in the terminal.
+# OpenSSH 8.4 added that variable; older versions keep their own behaviour
+askpass_never() { [ -t 0 ] && [ -z "${SSH_ASKPASS_REQUIRE+set}" ] || return 1
+  v=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
+  [ -n "$v" ] && { set -- $v; [ "$1" -gt 8 ] || { [ "$1" -eq 8 ] && [ "$2" -ge 4 ]; }; }; }
 # put_signed <file> <content> [<key>]: sign a temp copy and put the .sig in place before the file, so a new file never
 # shows without its signature; with <key>, the signature must verify against it first. A failed signing or check
 # leaves neither behind.
@@ -469,7 +478,7 @@ setup)
   done
   [ -n "$store" ] || die "usage: setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]"
   [ -z "$name" ] || valid_name "$name"
-  for v in store:"$store" root:"$root" branch:"$branch"; do one_line "${v%%:*}" "${v#*:}"; done
+  for v in store:"$store" adapter:"$adapter" root:"$root" branch:"$branch"; do one_line "${v%%:*}" "${v#*:}"; done
   [ -z "$branch" ] || branch_ok "$branch" || die "bad branch name '$branch': pass --branch <name>"
   mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
@@ -505,6 +514,7 @@ register|update)
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
                  --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
   done
+  [ "$cmd" = register ] || [ -z "$keyfile$nokey" ] || die "update can't change a key; see JOIN.md's \"Replacing your key\""
   if [ "$cmd" = register ]; then
     [ -f "$rec" ] && die "'$ME' is already registered (names are unique; use 'update' to change your record)"
     [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]"
@@ -525,7 +535,7 @@ register|update)
     fi
   fi
   for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
-  pub="" own=""
+  pub="" own="" newkey=""
   if [ "$cmd" = update ]; then
     # an agent holding its key never re-signs a record whose key someone else changed; without it (a machine that
     # lost its key) the record is republished as it is, and nothing is pinned below
@@ -544,7 +554,9 @@ register|update)
       pub=$(cut -d' ' -f1,2 "$keyfile"); KEY="${keyfile%.pub}"
       [ -f "$KEY" ] || die "the private key ${KEY} (beside $keyfile) is missing"
       [ "$(own_pub)" = "$pub" ] || die "$keyfile isn't the public half of $KEY"
-      set_cfg key "$(CDPATH= cd -P -- "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
+      # written to the config below, once the record is signed with it (a key whose passphrase isn't given leaves
+      # the config as it was)
+      newkey="$(CDPATH= cd -P -- "$(dirname "$KEY")" && pwd -P)/$(basename "$KEY")"
     elif have_ssh; then
       if [ ! -f "$KEY" ]; then
         mkdir -p "$(dirname "$KEY")" && chmod 700 "$(dirname "$KEY")"
@@ -578,8 +590,12 @@ register|update)
       { print }
       END { if (!closed) exit 2 }' "$rec"); then record_text=$kept; fi
   paths="$ROOT/agents/$ME.md"
+  [ -z "$newkey" ] || one_line key "$newkey"
   if [ -n "$pub" ] && can_sign; then put_signed "$rec" "$record_text" "$pub"; paths="$paths $ROOT/agents/$ME.md.sig"
   else put "$rec" "$record_text"; fi
+  # (newkey is set only by register, which has refused a record that's there: the one just written is removed)
+  [ -z "$newkey" ] || ( set_cfg key "$newkey" ) ||
+    { rm -f "$rec" "$rec.sig"; die "$CONFIG couldn't be updated with the key, so nothing was registered: fix that, then run register again"; }
   mkdir -p "$M/inbox/$ME"; [ -f "$M/inbox/$ME/.keep" ] || { new_keep "$M/inbox/$ME/.keep"; paths="$paths $ROOT/inbox/$ME/.keep"; }
   # shellcheck disable=SC2086
   AD_UNCHANGED=; ad_commit "mailbox: $ME ${cmd}s" $paths
@@ -980,6 +996,8 @@ doctor)
     # (another command working in this name's copy of the store is waited for a few seconds, then said to be busy)
     if derr=$( ( AGENT_MAILBOX_LOCK_WAIT=5; export AGENT_MAILBOX_LOCK_WAIT; load_adapter && ad_sync && need_store ) 2>&1 >/dev/null )
     then echo "ok   the store is reachable and initialized"; sok=1
+      # what the sync said on the way (a lost init dropped, earlier commits published) is shown, not swallowed
+      [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
     else case $derr in
       (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
       (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1 ;; esac

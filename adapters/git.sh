@@ -8,8 +8,9 @@
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
 # - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
-# - The watcher's peek fetch writes only its own ref (`--refmap=`): git updates a ref only from the value it read, so a
-#   peek that also moved origin/<branch> made a send's fetch or push in this clone fail.
+# - The watcher's peek fetch and holds' history fetch write only their own refs (`--refmap=`): git updates a ref only
+#   from the value it read, so a peek that also moved origin/<branch> made a send's fetch or push in this clone fail;
+#   and origin/<branch> is the clone's record of where it last synced, which tells it what it has published.
 # - Commits carry the agent's mailbox name as author, never a person's name or email. It's set in each command's
 #   environment, never in the clone's config, which commands sharing the clone would race to rewrite.
 # - Symlinks in the store are checked out as plain files (core.symlinks=false), and `ad_peek` lists only regular
@@ -133,6 +134,20 @@ ad_pull() {
   # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
   rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
   taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+  # an init an earlier command made but never published (its push failed), when the branch now has a mailbox in its
+  # folder: another agent's init won while this one waited. It's dropped, and the clone goes on with that mailbox. Only
+  # a lone commit `init` writes (store.md and the two .keep files) that the store never had is dropped; a clone holding
+  # anything more, or one whose init the store once had (a mailbox since reset), fails below as before
+  if [ -n "$taken" ] && [ -z "${AD_INIT:-}" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
+    [ "$(ad_git rev-list --count HEAD --not "origin/$BRANCH")" = 1 ] &&
+    [ "$(ad_git log -1 --format=%s HEAD)" = "mailbox: init" ] &&
+    { [ -z "$pre" ] || ! ad_git merge-base --is-ancestor HEAD "$pre"; } &&
+    [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root HEAD |
+      grep -vxF -e "${rr:+$rr/}store.md" -e "${rr:+$rr/}agents/.keep" -e "${rr:+$rr/}inbox/.keep")" ]; then
+    ad_git reset -q --hard "origin/$BRANCH"
+    warn "dropped an init this clone made earlier but never published: another agent has since started the mailbox at '$ROOT/' (its settings are in $ROOT/store.md)"
+    return 0
+  fi
   # the commit `init` made in this same command (AD_INIT), when the branch now has a mailbox in its folder, is a race
   # lost just now: init saw no mailbox there, and its own sync published anything left before, so that commit is all
   # this clone holds unpublished. It's dropped, and init reports the winner
@@ -342,10 +357,12 @@ ad_peek() {
 # single row "! !", never as fewer rows: holds stops
 # on it rather than decide from part of the history. A gitlink isn't a file, so it's never listed.
 ad_history() {
-  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD)
+  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD). It
+  # fetches into a ref of its own, as ad_peek does, so the clone's tracking ref still says where the clone last synced:
+  # ad_pull reads it to tell what this clone published, and a store re-created in between mustn't move it
   u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
-  ad_git fetch -q $u origin "$AD_SPEC" 2>/dev/null || { echo '! !'; return 0; }
-  tip=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH") || { echo '! !'; return 0; }
+  ad_git fetch -q $u --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/history" 2>/dev/null || { echo '! !'; return 0; }
+  tip=$(ad_git rev-parse -q --verify refs/agent-mailbox/history) || { echo '! !'; return 0; }
   AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
       --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
