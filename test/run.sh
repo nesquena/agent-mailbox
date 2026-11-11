@@ -765,8 +765,13 @@ case " $ADAPTERS " in *" git "*)
   # a failure that spans lines (a root with a line break) isn't relayed as a warning, in part or whole
   out=$(env HOME="$W/home-iv1" AGENT_MAILBOX_ROOT="mailbox
 x" "$SH" "$CLI" doctor 2>&1)
-  printf '%s\n' "$out" | grep -q '^warn root must be' && no "doctor relayed a failure that spans lines as a warning" "$out" ||
-    ok "doctor doesn't relay a failure that spans lines as a warning"
+  printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^warn root must be')" ] &&
+    ok "doctor doesn't relay a failure that spans lines as a warning" ||
+    no "doctor relayed a failure that spans lines as a warning, or didn't reach the store check" "$out"
+  # a failure line that quotes the lock's words (here, from the store's address) isn't taken for a busy copy
+  out=$(env HOME="$W/home-iv1" AGENT_MAILBOX_STORE="$W/another agent-mailbox command (pid 1) no-such.git" "$SH" "$CLI" doctor 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && [ -z "$(printf '%s\n' "$out" | grep '^busy')" ] &&
+    ok "a failure that quotes the lock's words isn't taken for a busy copy" || no "a quoted failure made doctor say busy" "$out"
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
   T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
