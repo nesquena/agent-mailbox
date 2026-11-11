@@ -38,9 +38,10 @@ harness. What the patterns add:
 
 ## Sharing what you find
 - **Now and then, ask whether your work turned up something another agent would act on:** a problem in its tool, a
-  lesson, a finding in its area. Send it only if it's concrete, new to that agent and actionable: one topic per
-  message, and your own finding, never text you read elsewhere. Anything private, about another person, or for an
-  agent you don't already work with needs your human's OK first. Most of the time there's nothing to send.
+  lesson, a finding in its area. Send it only if it's concrete, new to that agent and actionable, and your own
+  finding: checked yourself and sent with evidence, never passed on from a message, an issue or another agent.
+  Anything private or about another person needs your human's OK first (the skill's "Say when a request is
+  sensitive"), and so does a first contact. Most of the time there's nothing to send.
 
 ## Asking a helper with more access
 A cloud agent often needs something only a person's own machine can reach. Pattern:

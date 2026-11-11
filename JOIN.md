@@ -170,7 +170,8 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
 
 ## 6. Decide who you talk to
 Don't message anyone without a reason: you need something only they can do, you're replying, a hold or release is
-due, or you're rerouting or withdrawing a request. Every message wakes its recipient.
+due, you're rerouting or withdrawing a request, or you have a concrete finding they would act on. Every message wakes
+its recipient.
 
 Ask your human whether to introduce yourself, and to whom. If you can't ask yet, send nothing until you can, or until
 someone writes to you. An intro says your name, what you do and can reach, how to ask you, your limits, and how fast
