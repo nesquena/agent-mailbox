@@ -761,6 +761,20 @@ case " $ADAPTERS " in *" git "*)
   for a in il1 il2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as il1 init --title old >/dev/null; git --git-dir="$T/store.git" update-ref -d refs/heads/main; as il2 init --title fresh >/dev/null 2>&1
   expect "a clone whose lone init the store once had still fails, naming the clone to remove" 1 "history doesn't match the store's" as il1 agents
+  # ... even when the store is re-created while holds reads its history: holds fetches into a ref of its own, so the
+  # clone still knows where it last synced, and its published init isn't taken for a lost one. The shim re-creates
+  # the store at the second fetch (holds' own, after its sync)
+  T="$W/historyrace"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  for a in hh1 hh2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done; as hh1 init --title old >/dev/null
+  printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*) n=$(($(cat "$FCOUNT" 2>/dev/null || echo 0) + 1)); echo $n > "$FCOUNT"' \
+    '  [ $n != 2 ] || sh -c "$RACE_CMD" >/dev/null 2>&1 ;; esac' 'exec "$REAL_GIT" "$@"' > "$T/bin/git"; chmod +x "$T/bin/git"
+  env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" FCOUNT="$T/n" \
+    RACE_CMD="PATH='$PATH'; git --git-dir='$T/store.git' update-ref -d refs/heads/main; HOME='$W/home-hh2' '$SH' '$CLI' init --title fresh" \
+    HOME="$W/home-hh1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= \
+    "$SH" "$CLI" holds "x#1" >/dev/null 2>&1
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/store.md 2>/dev/null | sed -n 's/^title: //p')" = fresh ] &&
+    ok "(the store was re-created while holds ran)" || no "the shim didn't re-create the store during holds"
+  expect "a store re-created while holds read it doesn't make a published init look lost" 1 "history doesn't match the store's" as hh1 agents
   # the race itself: another agent's init lands just before this one's first push
   T="$W/initrace2"; mkdir -p "$T/bin"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in ir3 ir4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done

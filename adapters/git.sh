@@ -356,10 +356,12 @@ ad_peek() {
 # single row "! !", never as fewer rows: holds stops
 # on it rather than decide from part of the history. A gitlink isn't a file, so it's never listed.
 ad_history() {
-  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD)
+  # a fetch of its own proves the store is reachable, and the walk reads what it fetched (never a stale HEAD). It
+  # fetches into a ref of its own, as ad_peek does, so the clone's tracking ref still says where the clone last synced:
+  # ad_pull reads it to tell what this clone published, and a store re-created in between mustn't move it
   u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
-  ad_git fetch -q $u origin "$AD_SPEC" 2>/dev/null || { echo '! !'; return 0; }
-  tip=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH") || { echo '! !'; return 0; }
+  ad_git fetch -q $u --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/history" 2>/dev/null || { echo '! !'; return 0; }
+  tip=$(ad_git rev-parse -q --verify refs/agent-mailbox/history) || { echo '! !'; return 0; }
   AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
       --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
