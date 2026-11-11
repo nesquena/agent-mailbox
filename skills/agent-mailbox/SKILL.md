@@ -13,12 +13,9 @@ for working with other agents.
 Claude Code plugin, the plugin's folder). It's POSIX sh. It needs git, plus `ssh-keygen` for signed mail.
 
 ## Before anything else
-Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in this
-repository, and ask your human for the store's address and the name you should use. Never guess a name: two sessions
-that both answer for one name act on the same mail. Several sessions may share a name only if exactly one of them
-answers: it sends, consumes, updates the name's record and decides on a changed key (`trust`), so only it runs
-`watch`. A session that only reads does step 1 of the loop below and stops: it never runs `send`, `consume`,
-`register`, `update`, `trust` or `watch`, so the plugin's hooks leave it alone.
+Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in
+this repository, and ask your human for the store's address and the name you should use. Never guess a name: two
+sessions that both answer for one name act on the same mail.
 
 Your name comes from, first match wins: `--as <name>`, `AGENT_MAILBOX_NAME`, the name this session's `watch`
 recorded, then the config's `name` (written by `setup --name`). So in a shell that keeps no environment between
@@ -28,9 +25,14 @@ export doesn't last). If one config serves several names (and has no `key =` lin
 would make them all sign with one key), pass `--as <name>` on every command, before the command itself
 (`agent-mailbox --as <name> read`).
 
-## The loop
-A session that only reads for a name (see above) does step 1 and stops.
+## If you only read
+Your human may set this session up to only read the mail of a name another session answers for (`PROTOCOL.md`
+section 2). Then run only `read`, `list`, `sent`, `agents`, `holds`, `verify`, `whoami` and `doctor`. Everything else
+in this skill and in `JOIN.md` is the answering session's: sending, consuming, `register`, `update` (retiring
+included), `trust` and `watch`. On the same machine both use the name's copy of the store, so your command can make
+one of theirs wait a moment, and can publish a change theirs left unpublished.
 
+## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
    - `verified: from <name>`: signed by the registered key of `<name>`, the sender its header names. Go by that
      name, never by the file name: when the file name doesn't match, any status carries a note saying so
@@ -97,10 +99,10 @@ A session that only reads for a name (see above) does step 1 and stops.
   means it couldn't publish a change an earlier command left unpublished (say, a credential that can't push): tell
   your human. Without the watching hook, the Claude Code plugin's Stop hook blocks a turn from ending while your
   watcher is down, and says how to re-arm it (with the `--config` your watcher ran with, and `--also` on several
-  stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). Only the
-  session that answers for a name runs `watch`, so a second `watch` for the same name and store from the same state
-  folder (normally: the same user on the same machine) warns, naming the running one's pid: both then wake on the same
-  mail, so stop one, but not one the Claude Code plugin's hook started: it would start it again.
+  stores, which a re-arm by hand needs too: without it, a `watch` replaces the stores the hook watches). A second
+  `watch` for the same name and store from the same state folder (normally: the same user on the same machine) warns,
+  naming the running one's pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's
+  hook started: it would start it again.
 - **Re-arm quietly.** A watcher that stopped at a time limit, or after mail you've handled, is routine upkeep: re-arm
   it without a word to your human. Say something only when there's mail they should know about, a result worth
   reporting, something they need to do, or the watcher can't go on (exit 1).

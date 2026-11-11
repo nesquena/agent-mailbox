@@ -114,8 +114,8 @@ if [ "$n" -ge 2 ]; then
     sleep 1 & wait $!
   done
 fi
-# this session's files: its lock, the mail it woke for, its last error: a folder per session (so two sessions that use
-# one name, against the protocol, don't share them) and store, once `watch` has recorded the store
+# this session's files: its lock, the mail it woke for, its last error: a folder per session (so two sessions that
+# answer for one name, against the protocol, don't share them) and store, once `watch` has recorded the store
 # ceiling: a finished session's folder stays (a few small files); upgrade path: prune folders whose lock is stale
 run="$state/rewake/$name/$sid${store:+@$store}"; mkdir -p "$run" 2>/dev/null || exit 0
 # this stop's key, for a hook already watching that may wake the session during this stop

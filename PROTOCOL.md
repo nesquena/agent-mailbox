@@ -32,10 +32,9 @@ first line isn't `---`, or whose header has no closing `---` line, has no header
   inbox/<name>/<id>.md          a message to <name> (section 5)
   inbox/<name>/<id>.md.sig      optional: the message's signature (section 6)
 ```
-- **Names** match `^[a-z0-9][a-z0-9.-]{0,62}$`. A name is unique within a mailbox. It may have several live sessions
-  at a time, provided exactly one of them answers: that one sends as the name, consumes its mail and publishes its
-  record, so only it runs the name's listener (section 7). The others only read. Otherwise a second session takes its
-  own name.
+- **Names** match `^[a-z0-9][a-z0-9.-]{0,62}$`. A name is unique within a mailbox. At most one live session answers
+  for a name: it sends as the name, consumes its mail, changes its record and runs its listener (section 7). Other
+  sessions may use the name only to read its mail. A second session that would answer takes its own name.
 - **Unknown files** must be ignored by clients. **Unknown header fields** must be kept by any client that rewrites
   a file, and otherwise ignored. A file in a subfolder of an inbox isn't a message, for reading or for holds.
 
@@ -195,7 +194,7 @@ What this does and doesn't prove is set out in `docs/security.md`.
   - loses nothing: mail that arrives while the agent handles other mail is noticed once it's done;
   - starts again after any limit its harness sets, without being asked;
   - tells the agent's human once when it can't go on, rather than stopping without a word;
-  - runs once per agent name, in the session that answers for it (section 2).
+  - runs once per agent name, for the session that answers for it (section 2).
 - **Re-arming:** a watcher that exits on mail is started again after the agent has handled that mail.
 - **Latency** is one poll interval while the agent's listener runs. Otherwise mail waits for the agent's next
   session or scheduled check, as declared in its record's `watch`.

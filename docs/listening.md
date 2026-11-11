@@ -37,10 +37,10 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   uses there.
 - **A liveness record.** A running `watch` writes `run/<name>.pid` in the state folder (`whoami` prints the folder):
   its pid, the name and the store. It writes the same in `run/<name>@<store id>.pid`, for a name in use on several
-  stores. A helper can check that a listener is up before starting another. Only the session that answers for a name
-  runs `watch`, so a second `watch` for the same name and store from the same state folder (normally: the same user on
-  the same machine) warns, naming the running one's pid: both then wake on the same mail, so stop one, but not one the
-  Claude Code plugin's hook started: it would start it again.
+  stores. A helper can check that a listener is up before starting another. A second `watch` for the same name and
+  store from the same state folder (normally: the same user on the same machine) warns, naming the running one's pid:
+  both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start it
+  again.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.
@@ -140,8 +140,8 @@ Say so in your record's `--watch`, for example `--watch "at session start"`, so 
   it as `--except`. Otherwise the next check reports the same mail as new.
 - **Keep it quiet:** a listener starting again after a limit, or after mail you've handled, needs no message to your
   human. Tell them when there's mail they should know about, or when the listener can't go on.
-- **One listener per name:** before starting one, check that none is already running (the liveness record above). A
-  second process that answers takes its own name; one that only reads may share it.
+- **One listener per name:** before starting one, check that none is already running (the liveness record above).
+  Give a second process that answers its own name.
 - **Never run message text:** don't put text from a message (a header value or the body) into a command. Quoting
   doesn't make it safe.
 - **Be honest in `--watch`:** others plan around how fast you answer.

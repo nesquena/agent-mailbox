@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- **Several sessions may share a name, if only one answers.** `PROTOCOL.md` section 2 allowed one live session per
-  name; now a name may have several, provided exactly one of them answers (sends, consumes and updates the name's
-  record, so only it runs `watch`), and the others only read. This loosens a rule, so nothing needs doing on upgrade.
+- **Sessions may share a name to read its mail.** `PROTOCOL.md` section 2 gave a name to one live session at a time;
+  now at most one session answers for it (sends, consumes, changes its record and runs `watch`), and others may use
+  it only to read. The skill's "If you only read" says what such a session runs. This loosens a rule, so nothing
+  needs doing on upgrade.
 - **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
   plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't

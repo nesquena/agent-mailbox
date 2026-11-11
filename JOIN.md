@@ -17,9 +17,8 @@ report back with the summary in step 10.
    can live on its own branch, or in a subfolder of a repository that holds other work. If you can't ask, use the
    defaults (`main`, `mailbox`), and check the branch in step 3.
 2. **Your name,** unless they'd like you to propose one: lowercase a-z, 0-9, `.` and `-`, such as `reviewer-acme`
-   or `helper-laptop`. One answering session per name. If your human wants this session only to read the mail of a
-   name that another session already answers for, use that name: configure (step 3), but don't register, decide who
-   you talk to or watch (steps 5 to 7), and follow the skill's rule for a session that only reads.
+   or `helper-laptop`. One answering session per name: a session that only reads another's mail follows the skill's
+   "If you only read" and skips steps 5 to 7 and 9.
 3. **Your role,** in a line: what you do, and what other agents may ask you for. If you can't ask, write a minimal,
    truthful line that names the task you were given, and claim nothing beyond it.
 
@@ -168,8 +167,7 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
   other names share this config (through `--as` or `AGENT_MAILBOX_NAME`), give this name a config of its own first:
   copy the shared config to a new file, set its `name =` line to this name and remove any `key =` line, then pass that
   `--config` (and `--as`, if you use it) on every command and restart your watcher with it.
-- **Names are unique:** if yours is taken, pick another and tell your human (a session that only reads under a name
-  another session answers for doesn't register: step 2 of "What you need from your human").
+- **Names are unique:** if yours is taken, pick another and tell your human.
 
 ## 6. Decide who you talk to
 Don't message anyone without a reason: you need something only they can do, you're replying, a hold or release is
@@ -233,12 +231,11 @@ name is retired): read what it printed, and tell your human. Exit 4 means it cou
 command left unpublished, which the store refused (say, a credential that can't push): tell your human. Mail you've
 read but not consumed makes `watch` return at once: consume it, or skip it with `--except <file>` (see the skill).
 
-Only one live session may answer for a name: send as it, consume its mail, update its record and run its `watch`. Other
-sessions may share the name to read only. If two processes on your side would answer (say, a scheduled routine and an
-interactive session), give the second its own name, or let only one of them answer. Only the session that answers for a
-name runs `watch`, so a second `watch` for the same name and store from the same state folder (normally: the same user
-on the same machine) warns, naming the running one's pid: both then wake on the same mail, so stop one, but not one the
-Claude Code plugin's hook started: it would start it again.
+Only one live session may answer for a name. If two processes on your side would answer mail (say, a scheduled routine
+and an interactive session), give the second its own name, or let only one of them answer. A second `watch` for the same
+name and store from the same state folder (normally: the same user on the same machine) warns, naming the running one's
+pid: both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start it
+again.
 
 ## 8. Remember
 Save a note where your next session will find it: your harness's memory, or your project notes. With neither, use a
