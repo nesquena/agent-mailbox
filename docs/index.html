@@ -119,14 +119,12 @@ li { margin: 0.3rem 0; }
 }
 .jump a:hover { color: var(--text); background: var(--surface-2); }
 .jump a[aria-current="true"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.jump a:focus-visible { outline-offset: -3px; border-radius: 999px; }
 @media (max-width: 760px) {
   .bar { flex-wrap: wrap; gap: 0; padding-top: 0.5rem; }
   .jump { flex-basis: 100%; }
   .jump ul { justify-content: flex-start; }
   .jump a { padding: 0.35rem 0.6rem; }
-  .steps > li { padding-left: 2.8rem; }
-  .steps > li::before { width: 2rem; height: 2rem; font-size: 1rem; }
-  .prompt { padding: 1rem; }
 }
 
 /* Layout */
@@ -169,6 +167,7 @@ section:nth-of-type(even) { background: var(--surface-2); }
 }
 .card h3 { margin-top: 0; font-size: 1.15rem; }
 .card p:last-child { margin-bottom: 0; }
+.more { margin-top: 1.6rem; }
 .card .tag {
   display: inline-block; font: 600 0.75rem/1 var(--sans); letter-spacing: 0.04em;
   color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 0.35rem 0.6rem;
@@ -285,6 +284,19 @@ footer p { margin: 0; }
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+
+/* Narrow screens. These come last, so they win over the rules above. */
+@media (max-width: 760px) {
+  .steps > li { padding-left: 2.8rem; }
+  .steps > li::before { width: 2rem; height: 2rem; font-size: 1rem; }
+  .prompt { padding: 1rem; }
+  .has-copy pre { padding: 2.9rem 1rem 1rem; }
+}
+@media (max-width: 520px) {
+  .steps > li { padding-left: 0; }
+  .steps h3 { padding-left: 2.8rem; min-height: 2.2rem; display: flex; align-items: center; margin-bottom: 0.6rem; }
+  .note { padding: 0.9rem 1rem; }
+}
 </style>
 </head>
 <body>
@@ -375,8 +387,8 @@ footer p { margin: 0; }
         <p>
           A coding agent opens a pull request and mails a reviewer agent: &ldquo;Please review PR 12.&rdquo;
           The reviewer puts a <em>hold</em> on that version while it reads, then replies with its notes and a
-          <em>release</em> once it's happy. The coding agent merges only after the release, and a new push
-          means a new review.
+          <em>release</em> once it's happy. The coding agent checks right before it merges, and merges only
+          after the release. A new push means a new review.
         </p>
       </article>
       <article class="card">
@@ -398,6 +410,10 @@ footer p { margin: 0; }
         </p>
       </article>
     </div>
+    <p class="wrap more">The
+      <a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/patterns.md">coordination patterns</a>
+      spell each of these out: waking on mail, answering, asking a helper with more access, gating a merge and
+      relaying for a person.</p>
   </div>
 </section>
 
@@ -448,6 +464,25 @@ from the internal dashboard? I need them to review PR 12.</pre>
       <li><strong>It's mail, not chat.</strong> Delivery takes a poll interval, usually a minute or more with a git
         host.</li>
     </ul>
+
+    <h3>Holds gate a shared action</h3>
+    <p>When one agent must approve before another merges, deploys or publishes, it sends a <em>hold</em> on the
+      version it's reviewing, then a <em>release</em> naming the exact version it approves. The acting agent checks
+      right before it acts.</p>
+    <figure class="code">
+      <figcaption>A reviewer gates a merge by <code>coder-cloud</code></figcaption>
+<pre><span class="c"># the reviewer, while it reads, then once it's happy</span>
+agent-mailbox send coder-cloud pr12 notes.md --hold "acme/app#12 4e1a2b7"
+agent-mailbox send coder-cloud pr12 notes.md --release "acme/app#12 4e1a2b7"
+
+<span class="c"># the coding agent, right before it merges: exit 0 means released</span>
+agent-mailbox holds "acme/app#12" --version 4e1a2b7</pre>
+    </figure>
+    <p>
+      The check passes only when every agent that wrote to the acting agent about the item has released that exact
+      version. So if two reviewers disagree, the hold wins: the gate stays shut until the holder releases, and a
+      new push needs a new release.
+    </p>
   </div>
 </section>
 
@@ -457,7 +492,9 @@ from the internal dashboard? I need them to review PR 12.</pre>
     <h2 id="setup-h">Get your agent on the mailbox</h2>
     <p class="lede">Make a private repo, give your agent access, then give it one sentence. The agent does the rest,
       including starting the mailbox.</p>
-    <p>Agents need Linux or macOS, a shell, git 2.9 or later, and OpenSSH 8.1 or later.</p>
+    <p><strong>Before you start:</strong> you need a git host where you can make a private repository, such as
+      GitHub. Each agent needs to run shell commands on Linux or macOS, with git 2.9 or later, plus OpenSSH 8.1 or
+      later to sign and verify mail.</p>
 
     <ol class="steps">
       <li>
@@ -500,7 +537,8 @@ from the internal dashboard? I need them to review PR 12.</pre>
         </p>
         <div class="note">
           <p><strong>Will your agents gate merges or deploys?</strong> Say &ldquo;start it, requiring signatures, if
-          there isn't one yet&rdquo;, so only verified releases open a gate.</p>
+          there isn't one yet&rdquo;, so only verified releases open a gate. Then protect the mailbox branch against
+          force-pushes and deletion, so a hold can't be erased.</p>
         </div>
         <div class="note">
           <p><strong>Names</strong> are up to 63 lowercase letters, digits, <code>.</code> and <code>-</code>,
@@ -528,6 +566,8 @@ from the internal dashboard? I need them to review PR 12.</pre>
           it there. Then ask one agent to send another a hello that needs a one-line ack, and watch the reply come
           back.
         </p>
+        <p>If something's off, ask the agent to run <code>agent-mailbox doctor</code>: it checks that machine's
+          setup, and each failure says what to do.</p>
       </li>
     </ol>
   </div>
@@ -559,7 +599,8 @@ from the internal dashboard? I need them to review PR 12.</pre>
   <div class="wrap">
     <h3>Or take part yourself</h3>
     <p>
-      Install the command, register under your own name, and read and send mail from your terminal like any agent:
+      Once an agent has started the mailbox, install the command, register under your own name, and read and send
+      mail from your terminal like any agent:
     </p>
     <div class="code has-copy">
 <pre><code>git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
@@ -572,7 +613,8 @@ agent-mailbox sent       <span class="c"># what you sent that's still waiting</s
       <button class="copy" type="button" hidden>Copy</button>
     </div>
     <p><code>install.sh</code> links <code>agent-mailbox</code> into <code>~/.local/bin</code>. If it says that
-      folder isn't on your PATH, add it, or run <code>~/agent-mailbox/bin/agent-mailbox</code> instead.</p>
+      folder isn't on your PATH, add it, or run <code>~/agent-mailbox/bin/agent-mailbox</code> instead.
+      <code>agent-mailbox help</code> lists every command.</p>
     <p>Every message is a file in your repository, so you can also browse the inboxes there, along with the history
       of everything consumed.</p>
 
@@ -603,6 +645,9 @@ agent-mailbox sent       <span class="c"># what you sent that's still waiting</s
       <li><strong>Signing is optional.</strong> Agents can sign their mail with their own SSH key, kept on their own
         machine. A reader remembers the first key it verifies from a sender and expects that key from then on. A
         store can require signatures, so only verified releases open a gate.</li>
+      <li><strong>Gates need a strict store.</strong> Without required signatures, anyone who can write to the
+        repository can forge a release. And only a branch protected against force-pushes and deletion keeps a hold
+        from being erased.</li>
       <li><strong>Approval stays with you.</strong> A message is never approval. Anything an agent's human must
         approve still needs that human's own yes, in that agent's own session, and a yes relayed by another
         agent doesn't count. It's a rule the agents follow, not something the CLI enforces.</li>
@@ -629,6 +674,7 @@ agent-mailbox sent       <span class="c"># what you sent that's still waiting</s
       <li><a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/security.md"><b>docs/security.md</b><span>What a signature proves, what it doesn't, and the operating rules.</span></a></li>
       <li><a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/listening.md"><b>docs/listening.md</b><span>How to listen for mail in any agent harness.</span></a></li>
       <li><a href="https://github.com/nesquena/agent-mailbox/blob/main/docs/patterns.md"><b>docs/patterns.md</b><span>Coordination patterns for a store with several agents.</span></a></li>
+      <li><a href="https://github.com/nesquena/agent-mailbox/blob/main/CHANGELOG.md"><b>CHANGELOG.md</b><span>What each release changed.</span></a></li>
     </ul>
     <p class="wrap" style="margin-top:1.6rem">Found a vulnerability? Please
       <a href="https://github.com/nesquena/agent-mailbox/blob/main/SECURITY.md">report it privately</a>, not in a public issue.</p>
