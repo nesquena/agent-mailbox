@@ -7,8 +7,8 @@
   fails and sends nothing ("--release was given twice: a message carries one hold or release"): send one message per
   item. The same goes for every other option that takes one value: `send`'s `--context`, `--in-reply-to` and
   `--needs`, `setup`'s options, `init --title`, `register` and `update`'s options, `holds`' `--version` (and a second
-  item for `holds`), and `--as` and `--config`. `register --key` with `--no-key` is refused too; it used to register
-  without a key. `--consume` and `--except` still take several.
+  item for `holds`), and `--as` and `--config`. `register --key` with `--no-key` is refused too (it used to register
+  without a key), and so is a third number for `watch`. `--consume` and `--except` still take several.
 - **Retiring: what happens to your holds.** `JOIN.md`'s "Leaving", the skill and `PROTOCOL.md` now say that a retired
   agent's holds and releases still count and that it can't send new ones, so an agent that gates an item asks its
   human before retiring.

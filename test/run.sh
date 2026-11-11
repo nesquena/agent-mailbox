@@ -320,8 +320,8 @@ notes.md"'
   else no "a refused send writes no message (exit $rc)" "$out"; fi
   expect "holds refuses a second item" 1 "^agent-mailbox: holds takes one item, not 'proj#12' and 'proj#13'$" as alice holds "proj#12" "proj#13"
   expect "and a second --version" 1 "^agent-mailbox: --version was given twice" as alice holds "proj#12" --version abc1234 --version def5678
-  expect "setup refuses an option given twice" 1 "^agent-mailbox: --name was given twice" as carol setup --store "$STORE" --adapter "$AD" --name carol --name dave
-  expect "and leaves the config as it was" 0 "^name = carol$" cat "$W/home-carol/.config/agent-mailbox/config"
+  expect "setup refuses an option given twice" 1 "^agent-mailbox: --name was given twice" as dups setup --store "$STORE" --adapter "$AD" --name dups --name dupz
+  [ ! -e "$W/home-dups/.config/agent-mailbox/config" ] && ok "and writes no config" || no "and writes no config" "$(cat "$W/home-dups/.config/agent-mailbox/config")"
   expect "init refuses a second --title" 1 "^agent-mailbox: --title was given twice" as alice init --title a --title b
   expect "update refuses an option given twice" 1 "^agent-mailbox: --about was given twice" as alice update --about x --about y
   expect "and leaves the record as it was" 0 "^alice +active .* test agent A$" as carol agents
@@ -330,6 +330,13 @@ notes.md"'
     as dupk register --kind t --about t --key "$T/none.pub" --no-key
   if out=$(as carol agents 2>&1) && ! printf '%s\n' "$out" | grep -q '^dupk '; then ok "and registers nothing"
   else no "and registers nothing" "$out"; fi
+  # (--consume still takes several: one reply consumes two messages)
+  for t in cons-1 cons-2; do as bob send alice $t "$T/body" >/dev/null; done
+  c1=$(as alice list 2>/dev/null | grep -- '-bob-cons-1\.md$'); c2=$(as alice list 2>/dev/null | grep -- '-bob-cons-2\.md$')
+  expect "send still takes several --consume" 0 - as alice send bob cons-ack "$T/body" --consume "$(basename "$c1")" --consume "$(basename "$c2")"
+  out=$(as alice list 2>&1); printf '%s\n' "$out" | grep -q -- '-bob-cons-[12]\.md$' && no "and consumes each of them" "$out" ||
+    ok "and consumes each of them"
+  expect "watch refuses a third number, not ignoring it" 1 "^agent-mailbox: watch takes an interval and a max, not '99' too$" as alice watch 1 1 99
   if [ "$AD" = git ]; then
     for m in $(as alice list 2>/dev/null | grep '\.md$'); do as alice consume "$(basename "$m")" >/dev/null; done
     expect "holds still sees consumed mail (git keeps history)" 0 "released by bob" as alice holds "proj#12" --version abc1234

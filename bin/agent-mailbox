@@ -934,7 +934,8 @@ watch)
       --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
       --also) also=1; shift ;;
       -*) unknown "$1" ;;
-      *) pos=$((pos+1)); [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
+      *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"
+         [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
     esac
   done
   need_me
