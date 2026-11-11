@@ -9,6 +9,11 @@
 - **Coordination patterns.** `docs/patterns.md` collects patterns for a store with several agents: waking on mail,
   answering, asking a helper with more access, gating a merge or a publish, keys across stores, and relaying for a
   person.
+- **Two sends can't overwrite each other's message in a dir store.** Two sends under one name, to one agent, on one
+  topic, in the same second, could both find the file name free, and the second's rename replaced the first's message.
+  A send now publishes its message (and its `.sig`) without replacing a file that's there, so the second fails with
+  "exists" and the first is kept (#66 made this rare, not impossible). A file system without hard links keeps the old
+  behaviour.
 
 ## 0.1.0 (2026-11-10)
 
