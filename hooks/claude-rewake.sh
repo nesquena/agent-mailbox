@@ -218,11 +218,7 @@ rm -f "$run/declined"
 # (or the name's own pid file when it names this store, as an older CLI's watcher writes only that)
 set -- $(cat "$state/run/$name@$store.pid" 2>/dev/null || cat "$state/run/$name.pid" 2>/dev/null); wp=${1:-}
 [ -z "$store" ] || [ "${3:-}" = "$store" ] || wp=""
-# (this hook's own earlier watcher doesn't count, but the CLI, which refuses a second watcher for the name on the store,
-# can't tell it from another: the first watcher this run starts takes its pid files over with --force, since nothing
-# reads that one's exit any more)
-fw=""
-case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") fw=--force ;; (*)
+case "$wp" in (''|*[!0-9]*) ;; ("$(cat "$run/child" 2>/dev/null)") ;; (*)
   if kill -0 "$wp" 2>/dev/null; then case "$(args "$wp")" in (*agent-mailbox*watch*) exit 0 ;; esac; fi ;;
 esac
 # the lock: checked and taken while holding a short mutex, so two hooks starting together, a stale lock between them,
@@ -318,9 +314,9 @@ while :; do
   # ceiling: an --also the agent runs before this hook's first watcher in the session still replaces it; the
   # CHANGELOG says to add stores in a session started after updating)
   if [ -n "$legacy" ] && [ ! -s "$state/session-stores/$sid" ]; then
-    AGENT_MAILBOX_SESSION=$sid CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex $fw --also > "$run/out" 2>&1 &
-  else AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex $fw > "$run/out" 2>&1 & fi
-  child=$!; echo "$child" > "$run/child"; fw=""
+    AGENT_MAILBOX_SESSION=$sid CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex --also > "$run/out" 2>&1 &
+  else AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$cli" "$@" watch "$iv" "$left" $ex > "$run/out" 2>&1 & fi
+  child=$!; echo "$child" > "$run/child"
   wait "$child"; rc=$?; child=""
   case $rc in
     0)
@@ -342,10 +338,6 @@ while :; do
       rm -f "$run/error"
       printf '%s\n' "agent-mailbox: the watcher for $name reached its daily limit with no new mail; it starts again at this turn's end." >&2
       exit 2 ;;
-    7)
-      # another watcher for the name on this store started first (the check above found none, so another hook or the
-      # agent started one meanwhile): it wakes the session, so this one stops, quietly. The refusal is the right outcome
-      exit 0 ;;
   esac
   # a signal ended the watcher (the system, or someone stopping it) while this hook and its session go on: start it
   # again after an interval, quietly; and it can't go on: say so once per distinct error, then retry quietly

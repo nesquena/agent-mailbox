@@ -23,7 +23,6 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   - **2** when `<max>` seconds pass with none (`0` means no limit);
   - **1** when it can't go on, saying why;
   - **4** when it couldn't publish a change an earlier command left (say, a credential that can't push), saying so;
-  - **7** when another watcher for the name is running on that store, naming its pid;
   - **130** when a signal stops it.
 
   `--except <file>` leaves out mail you're holding, so it doesn't count as new.
@@ -38,9 +37,8 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   uses there.
 - **A liveness record.** A running `watch` writes `run/<name>.pid` in the state folder (`whoami` prints the folder):
   its pid, the name and the store. It writes the same in `run/<name>@<store id>.pid`, for a name in use on several
-  stores. A helper can check that a listener is up before starting another. While one is running, a second `watch` for
-  the name on that store refuses to start (exit 7), so two never wake on the same mail; `--force` takes the files
-  over.
+  stores. A helper can check that a listener is up before starting another. A second `watch` for the same name on the
+  same machine and store warns, naming the running one's pid: both then wake on the same mail, so stop one.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.
@@ -108,7 +106,6 @@ while :; do
          printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
        else sleep 60; fi ;;
     2) failed="" ;;                                # a day with no mail: start again
-    7) sleep 600 ;;                                # another watcher for this name runs: leave it, or stop it first
     130) sleep 1 ;;                                # a signal stopped only the watcher: start it again
     *) # tell your human once per failure, not at every retry
        [ "$out" = "$failed" ] || alert-your-human "agent-mailbox watch stopped: $out"

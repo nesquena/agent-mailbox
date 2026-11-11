@@ -30,19 +30,16 @@
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
 #   holds [<item>] [--version <v>]      each sender's latest hold or release in mail to you; with an item and
 #                                       --version, exit 0 only if every sender's latest record releases it (else 5)
-#   watch [interval=120] [max=7000] [--except <file>]... [--also] [--force]
+#   watch [interval=120] [max=7000] [--except <file>]... [--also]
 #                                       wait for mail without spending model tokens; exits 0 with the mail listed,
 #                                       2 after max seconds (0 = no limit). Run it in the background. --also: in a
-#                                       Claude Code session, the plugin's hook watches this store too, not instead.
-#                                       Exits 7 if another watcher for the name is running on this store; --force
-#                                       takes over its pid files (it doesn't stop it)
+#                                       Claude Code session, the plugin's hook watches this store too, not instead
 #   whoami | doctor                     show the resolved config | check this machine's setup
 #   --version                           the CLI's version and protocol, and its commit when run from a git clone
 #
 # Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 a change saved locally isn't published
 # (re-run a command with the same name to publish; don't resend, unless it says this command wrote nothing: then run it
-# again once that's published); 5 not released; 6 signature not verified; 7 another watcher for the name is running
-# on this store.
+# again once that's published); 5 not released; 6 signature not verified.
 set -u
 VERSION=0.1.1
 # (set only by init, around its own commit: never taken from the environment)
@@ -940,12 +937,11 @@ holds)
     END { if (!bad && weak) print "holds: warning: a deciding release isn'"'"'t signature-verified; only a store with require_signatures: true stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased" > "/dev/stderr"
           exit bad ? 5 : 0 }' ;;
 watch)
-  interval=120 max=7000 except="" pos=0 also="" force=""
+  interval=120 max=7000 except="" pos=0 also=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
       --also) also=1; shift ;;
-      --force) force=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"
          [ $pos -eq 1 ] && interval=$1; [ $pos -eq 2 ] && max=$1; shift ;;
@@ -974,15 +970,13 @@ watch)
     echo "$ME" > "$STATE/sessions/$SESSION"
     session_store "$c" "$also"
   fi
-  # one watcher per name and store on this machine: a second would wake on the same mail, and take over the pid files
-  # the harness hooks check. The session is recorded above first, so a session's watch still registers it. A live
-  # watcher is one whose pid file names this store and a running process whose command line is an agent-mailbox watch,
-  # as hooks/claude-watch-guard.sh checks, so a stale file, a dead pid or one reused by another process doesn't count.
-  # --force takes the pid files over, without stopping that watcher
-  [ -n "$force" ] || for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
+  # a second watcher for the name on this store and machine wakes on the same mail as the first: say so, once, and
+  # carry on, taking the pid files over as before (a refusal could leave a session that nothing wakes). A live watcher
+  # is one whose pid file names this store and a running process whose command line is an agent-mailbox watch, as
+  # hooks/claude-watch-guard.sh checks, so a stale file, a dead pid or one reused by another process doesn't count
+  for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do
     wp=$(other_watcher "$pf") || continue
-    printf 'agent-mailbox: watch: another watcher for %s is running (pid %s); stop it, or run this with --force to take over\n' "$ME" "$wp" >&2
-    exit 7
+    warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop one"; break
   done
   # (one for the name, and one for the name on this store, since one name can be in use on several stores)
   for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done

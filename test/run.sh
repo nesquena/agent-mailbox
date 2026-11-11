@@ -1797,14 +1797,13 @@ if up "$R1/pid" && up "$T/wpid"; then hp=$(cut -d' ' -f1 "$R1/pid"); kill -TERM 
 else no "a hook whose shell is gone stops itself" "it didn't start"; fi
 kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
 # a watcher the agent started itself wakes the session on its own: the hook stands aside while it runs. And a watcher
-# that ends (here A, at its limit) leaves the pid file of one started after it (B, which takes the files over with
-# --force, since a second watcher for the name on the store is otherwise refused) alone
-mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" ${2:-} $(sed 's/^/--except /' "$R1/woke"); }
+# that ends (here A, at its limit) leaves the pid file of one started after it (B) alone
+mwatch() { HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= "$SH" "$CLI" watch 1 "$1" $(sed 's/^/--except /' "$R1/woke"); }
 n=0; while [ $n -lt 10 ] && p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; do
   sleep 1; n=$((n+1)); done
 # isb: the pid file names watcher B (the one with the 30 s limit)
 isb() { p=$(cut -d' ' -f1 "$RS/run/rw.pid" 2>/dev/null) && [ -n "$p" ] && ps -o args= -p "$p" 2>/dev/null | grep -q 'watch 1 30'; }
-mwatch 3 > /dev/null 2>&1 & wa=$!; sleep 1; mwatch 30 --force > /dev/null 2>&1 & mw=$!
+mwatch 3 > /dev/null 2>&1 & wa=$!; sleep 1; mwatch 30 > /dev/null 2>&1 & mw=$!
 n=0; while [ $n -lt 10 ] && ! isb; do sleep 1; n=$((n+1)); done
 wait "$wa"
 expect "a watcher that ends leaves a later watcher's pid file alone" 0 - isb
@@ -1813,31 +1812,6 @@ if kill -0 "$mw" 2>/dev/null; then rm -f "$R1/out"
   expect "starting no watcher of its own" 1 - test -e "$R1/out"
 else no "a hook stands aside while the agent's own watcher runs" "the watcher didn't start"; fi
 kill "$mw" 2>/dev/null; wait "$mw" 2>/dev/null
-# lwatch: a watcher with no session (as one a killed hook left), polling only once an hour, that leaves the mail
-# already woken for alone; its pid in lw, once its pid files name it
-lwatch() { rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
-  for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done
-  HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= "$SH" "$CLI" \
-    watch 3600 3600 $(sed 's/^/--except /' "$R1/woke") > /dev/null 2>&1 &
-  up "$RS/run/rw.pid" && lw=$(cut -d' ' -f1 "$RS/run/rw.pid"); }
-# a watcher this hook's run left (its child, which no hook reads any more) is taken over: the new watcher starts with
-# --force, so the session still wakes for new mail
-lw=""; lwatch
-if [ -n "$lw" ]; then echo "$lw" > "$R1/child"
-  echo hi | as rx send rw rw-lf - >/dev/null 2>&1
-  expect "a hook takes over its own leftover watcher, and the session wakes for new mail" 2 "new mail for rw" \
-    rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
-  kill "$lw" 2>/dev/null; wait "$lw" 2>/dev/null
-else no "a hook takes over its own leftover watcher" "the leftover watcher didn't start"; fi
-# another watcher started between the hook's check and its watcher's (here: the store's pid file names a dead pid,
-# the name's still names a live watcher on this store) refuses the hook's (exit 7): the hook stops, quietly
-lw=""; lwatch
-if [ -n "$lw" ]; then rm -f "$R1/child"; sid=$(cut -d' ' -f3 "$RS/run/rw.pid")
-  sh -c 'exit 0' & dead=$!; wait "$dead"; echo "$dead rw $sid" > "$RS/run/rw@$sid.pid"
-  expect "a hook whose watcher is refused for another one stops quietly" 0 '^$' rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
-  kill "$lw" 2>/dev/null; wait "$lw" 2>/dev/null
-else no "a hook whose watcher is refused stops quietly" "the other watcher didn't start"; fi
-rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 
 # the two Stop hooks at one turn end, as Claude Code starts them (both get this stop's prompt id)
 # hookbg <prompt id>: the rewake hook in the background (its pid in bp); guardr <prompt id>: the guard's reason (empty:
@@ -3289,48 +3263,47 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
-echo "== one watcher per name and store on a machine"
+echo "== a second watcher for a name on a machine warns"
 T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
 as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
 as wa1 register --kind t --about t --no-key >/dev/null 2>&1
 R="$W/home-wa1/.local/state/agent-mailbox/run"
-# wpid: the pid a watcher wrote to the name's pid file, once it has (up to 10 s)
+# wpid: the pid a watcher wrote to the name's pid file, once it has (up to 10 s); stopw <pid>: stop it, and wait
+# (every watcher here has a short max: a stopped watcher waits out its current sleep before it exits)
 wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null; }
-rm -f "$R"/wa1*.pid; (as wa1 watch 1 60 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cut -d' ' -f3 "$R/wa1.pid")
-expect "a second watch for the name, while the first runs, is refused (exit 7)" 7 \
-  "another watcher for wa1 is running \(pid $p1\); stop it, or run this with --force" as wa1 watch 1 2
-[ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p1" ] &&
-  ok "and leaves the first's pid files as they were" || no "a refused watch changed the pid files" "$(cat "$R"/*.pid)"
-# --force takes the files over without stopping the first; the first's exit then leaves the files --force wrote
-(as wa1 watch 1 60 --force >/dev/null 2>&1 &)
+stopw() { kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; }
+rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cut -d' ' -f3 "$R/wa1.pid")
+# a second watcher, while the first runs, says so (naming the first), and starts anyway, writing its own pid to both files
+(as wa1 watch 1 30 > "$T/w2.out" 2>&1 &)
 i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 p2=$(cut -d' ' -f1 "$R/wa1.pid")
-[ -n "$p2" ] && [ "$p2" != "$p1" ] && kill -0 "$p2" 2>/dev/null && kill -0 "$p1" 2>/dev/null && ok "watch --force takes over the pid files, and doesn't stop the other watcher" ||
-  no "watch --force didn't take over, or stopped the other watcher" "$(cat "$R"/*.pid)"
-kill "$p1" 2>/dev/null; i=0; while kill -0 "$p1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop one" "$T/w2.out" &&
+  ok "a second watch for the name, while the first runs, warns, naming the first" || no "a second watch didn't warn" "$(cat "$T/w2.out")"
+[ -n "$p2" ] && [ "$p2" != "$p1" ] && kill -0 "$p2" 2>/dev/null && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
+  ok "and starts anyway, writing its own pid to both pid files" || no "the second watch didn't start, or didn't take the pid files" "$(cat "$R"/*.pid)"
+[ "$(grep -c 'another watcher' "$T/w2.out")" = 1 ] && ok "(it warns once)" || no "the second watch warned more than once" "$(cat "$T/w2.out")"
+# the first watcher's exit leaves the files the second wrote
+stopw "$p1"
 [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
-  ok "and the first watcher's exit leaves the files --force wrote" || no "the first watcher's exit removed --force's pid files" "$(cat "$R"/*.pid 2>&1)"
-kill "$p2" 2>/dev/null; i=0; while kill -0 "$p2" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-# a stale file whose pid is gone, and one whose pid now belongs to another process, don't block
+  ok "the first watcher's exit leaves the second's pid files" || no "the first watcher's exit removed the second's pid files" "$(cat "$R"/*.pid 2>&1)"
+stopw "$p2"
+# a stale file whose pid is gone, and one whose pid now belongs to another process, aren't watchers: no warning
 sh -c 'exit 0' & dead=$!; wait "$dead"
 for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$dead wa1 $sid" > "$f"; done
-expect "a pid file whose pid is gone doesn't block a watch" 2 "no mail for wa1 after 1s" as wa1 watch 1 1
+out=$(as wa1 watch 1 1 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a pid file whose pid is gone doesn't count" || no "a dead pid counted as a watcher" "$out"
 sleep 30 & other=$!
 for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$other wa1 $sid" > "$f"; done
-expect "nor one whose pid now belongs to another process" 2 "no mail for wa1 after 1s" as wa1 watch 1 1
+out=$(as wa1 watch 1 1 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor one whose pid now belongs to another process" || no "a reused pid counted as a watcher" "$out"
 kill "$other" 2>/dev/null; wait "$other" 2>/dev/null
-# a watcher for the name on another store doesn't block this store's (one name, several stores)
+# a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
-rm -f "$R"/wa1*.pid; (as wa1 watch 1 60 >/dev/null 2>&1 &); p3=$(wpid)
-expect "a watcher for the name on another store doesn't block this one" 2 "no mail for wa1 after 1s" as wa1 --config "$T/c2" watch 1 1
-(as wa1 --config "$T/c2" watch 1 60 >/dev/null 2>&1 &)
-i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p3" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
-p4=$(cut -d' ' -f1 "$R/wa1.pid")
-expect "with the name's pid file now another store's, this store's own file still refuses a second watcher" 7 \
-  "another watcher for wa1 is running \(pid $p3\)" as wa1 watch 1 2
-kill "$p4" 2>/dev/null; i=0; while kill -0 "$p4" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-kill "$p3" 2>/dev/null; i=0; while kill -0 "$p3" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p3=$(wpid)
+out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
+stopw "$p3"
 echo "== dir: watch notices a store that's gone"
 T="$W/vanish"; mkdir -p "$T/store"
 for a in vw1 vw2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done

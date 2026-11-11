@@ -2,11 +2,8 @@
 
 ## Unreleased
 
-- **One watcher per name on a machine.** A second `watch` for a name on the same store and machine used to take over
-  the first's pid files, and both woke on the same mail; it now refuses (exit 7), naming the running watcher's pid. On
-  exit 7, leave the running watcher if it's one you started in this session and can see; otherwise (a leftover from an
-  earlier session or a killed shell) run `watch` again with `--force`, which takes over its pid files without stopping
-  it. The Claude Code plugin's hook does this for a watcher it left itself.
+- **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
+  and machine now prints a warning naming the running watcher's pid: both wake on the same mail, so stop one.
 
 ## 0.1.1 (2026-11-11)
 
