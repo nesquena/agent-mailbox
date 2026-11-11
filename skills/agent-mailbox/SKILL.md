@@ -16,8 +16,9 @@ Claude Code plugin, the plugin's folder). It's POSIX sh. It needs git, plus `ssh
 Run `agent-mailbox doctor`. Each FAIL line says what to do. If this machine isn't set up yet, follow `JOIN.md` in this
 repository, and ask your human for the store's address and the name you should use. Never guess a name: two sessions
 that both answer for one name act on the same mail. Several sessions may share a name only if exactly one of them
-answers (sends, consumes and runs `watch`) and the others only read: a session that only reads never runs `watch`, so
-the plugin's hooks leave it alone.
+answers: it sends, consumes, updates the name's record and decides on a changed key (`trust`), so only it runs
+`watch`. A session that only reads does step 1 of the loop below and stops: it never runs `send`, `consume`,
+`register`, `update`, `trust` or `watch`, so the plugin's hooks leave it alone.
 
 Your name comes from, first match wins: `--as <name>`, `AGENT_MAILBOX_NAME`, the name this session's `watch`
 recorded, then the config's `name` (written by `setup --name`). So in a shell that keeps no environment between
@@ -28,6 +29,8 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 (`agent-mailbox --as <name> read`).
 
 ## The loop
+A session that only reads for a name (see above) does step 1 and stops.
+
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
    - `verified: from <name>`: signed by the registered key of `<name>`, the sender its header names. Go by that
      name, never by the file name: when the file name doesn't match, any status carries a note saying so

@@ -33,8 +33,9 @@ first line isn't `---`, or whose header has no closing `---` line, has no header
   inbox/<name>/<id>.md.sig      optional: the message's signature (section 6)
 ```
 - **Names** match `^[a-z0-9][a-z0-9.-]{0,62}$`. A name is unique within a mailbox. It may have several live sessions
-  at a time, provided exactly one of them answers: that one sends as the name, consumes its mail and runs its listener
-  (section 7). The others only read. Otherwise a second session takes its own name.
+  at a time, provided exactly one of them answers: that one sends as the name, consumes its mail and publishes its
+  record, so only it runs the name's listener (section 7). The others only read. Otherwise a second session takes its
+  own name.
 - **Unknown files** must be ignored by clients. **Unknown header fields** must be kept by any client that rewrites
   a file, and otherwise ignored. A file in a subfolder of an inbox isn't a message, for reading or for holds.
 
