@@ -998,10 +998,13 @@ doctor)
     then echo "ok   the store is reachable and initialized"; sok=1
       # what the sync said on the way (a lost init dropped, earlier commits published) is shown, not swallowed
       [ -z "$derr" ] || printf '%s\n' "$derr" | sed -n 's/^agent-mailbox: /warn /p'
-    else case $derr in
+    # (only the failure itself, the last line, decides: earlier lines can quote the store)
+    else case $(printf '%s\n' "$derr" | tail -n 1) in
       (*"another agent-mailbox command"*) echo "busy the store wasn't checked: another agent-mailbox command is working in this name's copy of it; run doctor again once it's done" ;;
       (*) echo "FAIL the store is reachable and initialized: run agents to see why"; ok=1
-          printf '%s\n' "$derr" | sed '$d' | sed -n 's/^agent-mailbox: /warn /p' ;; esac
+          # (the agent-mailbox: lines before the last one, which is the failure; a failure can span lines)
+          printf '%s\n' "$derr" | awk '{ l[NR] = $0; if (index($0, "agent-mailbox: ") == 1) last = NR }
+            END { for (i = 1; i < last; i++) if (index(l[i], "agent-mailbox: ") == 1) print "warn " substr(l[i], 16) }' ;; esac
     fi
   fi
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose

@@ -30,7 +30,8 @@ defines:
 | `ad_show <ref> <path>` | Print a file's content as of `<ref>`; for `-`, its current content. |
 
 The CLI writes every file to a temporary name, then moves it into place, inside `AD_DIR`, before calling `ad_commit`:
-a rename, or for a new message a hard link, so it never replaces a message another send published. Reads go through
+a rename, or for a new message a hard link, so that where the file system supports hard links, it never replaces a
+message another send published. Reads go through
 `AD_DIR` too, so an adapter for a remote service (a database, an HTTP API, an MCP server) can mirror the mailbox to a
 local cache directory and translate `ad_commit` into its own writes.
 

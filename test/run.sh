@@ -751,14 +751,22 @@ case " $ADAPTERS " in *" git "*)
     as iv1 init >/dev/null 2>&1; chmod -R u+w "$T/store.git/objects" "$T/store.git/refs"
     as iv2 init >/dev/null 2>&1
     git clone -q "$T/store.git" "$T/w" 2>/dev/null && (cd "$T/w" && git config user.email e@e && git config user.name e &&
-      sed 's/^protocol: .*/protocol: 99/' mailbox/store.md > "$T/st" && cat "$T/st" > mailbox/store.md &&
+      sed -e 's/^protocol: .*/protocol: 99/' -e 's/^require_signatures: .*/require_signatures: false (another agent-mailbox command)/' \
+        mailbox/store.md > "$T/st" && cat "$T/st" > mailbox/store.md &&
       git commit -qam p99 && git push -q origin HEAD:main)
-    out=$(as iv1 doctor 2>&1)
-    printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && printf '%s\n' "$out" | grep -q '^warn dropped an init' &&
+    out=$(as iv1 doctor 2>&1); rc=$?
+    [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q '^FAIL the store is reachable' && printf '%s\n' "$out" | grep -q '^warn dropped an init' &&
       ok "doctor shows a dropped init even when its store check then fails" || no "doctor lost the drop warning on a failed store check" "$out"
     printf '%s\n' "$out" | grep -q '^warn .*protocol 99' && no "doctor relayed its own failure as a warn line" "$out" ||
       ok "and doesn't repeat the failure itself as a warning"
+    # (the store's text, quoted in that warning, can't make doctor take the failure for a busy copy)
+    printf '%s\n' "$out" | grep -q '^busy' && no "text from the store made doctor say busy" "$out" || ok "and store text doesn't make it say busy"
   fi
+  # a failure that spans lines (a root with a line break) isn't relayed as a warning, in part or whole
+  out=$(env HOME="$W/home-iv1" AGENT_MAILBOX_ROOT="mailbox
+x" "$SH" "$CLI" doctor 2>&1)
+  printf '%s\n' "$out" | grep -q '^warn root must be' && no "doctor relayed a failure that spans lines as a warning" "$out" ||
+    ok "doctor doesn't relay a failure that spans lines as a warning"
   # a clone holding more than its lost init (here, a commit it saw before the store's branch was replaced by one
   # without it) isn't moved onto the new mailbox: it fails as before
   T="$W/initrace-more"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
