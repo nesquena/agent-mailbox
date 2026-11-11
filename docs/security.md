@@ -104,8 +104,9 @@ time this reader first pinned it. Concretely:
   sender's old key, holds included, no longer counts there. Before trusting, ask the sender to re-send any hold it
   still means. In a store that doesn't require signatures, that mail reads `bad` after `trust`, and its holds still
   count: ask the sender to release what it no longer means.
-- **To retire an agent, keep its record.** Have it release its holds, then run `update --status retired`. Don't
-  remove the record: that changes which of its holds count, differently for each reader. If its key may have leaked,
+- **To retire an agent, keep its record.** Its holds and releases still count after it retires, so retire an agent
+  that gates an item only once its human has agreed how that item is decided. Don't remove the record: in a store that
+  requires signatures, that changes which of its holds count, differently for each reader. If its key may have leaked,
   see `JOIN.md`'s "Replacing your key".
 - **holds fails closed:** if it can't read the store's full, latest history (the store can't be reached, or a
   version in it can't be read), it stops with an error rather than decide from part of it.
