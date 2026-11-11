@@ -6,6 +6,10 @@
   agent runs `init` (`--require-signatures` when its human asks for that), so a human's setup is an empty private
   repository, push access for each agent, and one sentence: they no longer run `setup` or `init` themselves.
   `JOIN.md` step 3 says when an agent may start one and what it checks first.
+- **A lost `init` no longer leaves an agent stuck.** If an agent's `init` couldn't push and another agent then started
+  the mailbox, every later command failed until the agent deleted its copy of the store. The next command now drops
+  that unpublished `init`, says so, and goes on with the other agent's mailbox. A copy holding anything more still
+  fails as before.
 - **A key's passphrase is asked in the terminal.** When a command's stdin is a terminal and `DISPLAY` is set, signing
   used an askpass program for a key with a passphrase (0.1.0's note under #40); on OpenSSH 8.4 or later it now asks in
   the terminal, unless `SSH_ASKPASS_REQUIRE` is set. Without a terminal, nothing changes.
