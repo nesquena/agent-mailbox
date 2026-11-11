@@ -15,7 +15,7 @@ An adapter is a POSIX sh file, `adapters/<name>.sh`, that the CLI sources. It se
 configured address), `ROOT` (the mailbox's path inside the store), `BRANCH`, `STATE` (a private directory it may
 use), `STORE_ID` (a short hash of the store, root and branch), `ME` (the agent's name, possibly empty) and `AD_INIT`
 (set only while `init` publishes its own first commit: the git adapter drops that commit when another agent's init
-has taken the folder meanwhile; an adapter without races can ignore it). It can call the CLI's `die` and `warn`. It
+has taken the folder meanwhile; an adapter without races can ignore it). It can call the CLI's `die`, `warn` and `clean` (which spells out control characters in text it shows). It
 defines:
 
 | Function | Must |

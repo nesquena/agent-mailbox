@@ -3342,6 +3342,19 @@ printf '#!/bin/sh\ncase "$1" in (mailbox/inbox/*) mv "$1" "$1.gone" ;; esac\nexe
   "$(command -v find)" > "$T/shim-find/find"; chmod +x "$T/shim-find/find"
 expect "and so does holds on one whose inbox folder goes as it is listed" 1 "can't read this store's full, latest history" \
   env PATH="$T/shim-find:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+# (and one whose store.md goes while the inbox folder stays, as when the store is being deleted: before the listing,
+# here as holds makes its temp folder, and during it, here as find starts. Either fails, never a listing of fewer rows)
+mv "$T/store/mailbox/inbox/vw1.gone" "$T/store/mailbox/inbox/vw1" 2>/dev/null; mkdir -p "$T/shim-md" "$T/shim-md2"
+printf '#!/bin/sh\ncase "$*" in (*tmp.holds*) mv "%s" "%s" 2>/dev/null ;; esac\nexec "%s" "$@"\n' \
+  "$T/store/mailbox/store.md" "$T/store.md.gone" "$(command -v mkdir)" > "$T/shim-md/mkdir"; chmod +x "$T/shim-md/mkdir"
+expect "holds on a dir store whose store.md goes before the listing stops with an error" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim-md:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+mv "$T/store.md.gone" "$T/store/mailbox/store.md"
+printf '#!/bin/sh\ncase "$1" in (mailbox/inbox/*) mv "%s" "%s" ;; esac\nexec "%s" "$@"\n' \
+  "$T/store/mailbox/store.md" "$T/store.md.gone" "$(command -v find)" > "$T/shim-md2/find"; chmod +x "$T/shim-md2/find"
+expect "and so does holds on one whose store.md goes during the listing" 1 "can't read this store's full, latest history" \
+  env PATH="$T/shim-md2:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
+mv "$T/store.md.gone" "$T/store/mailbox/store.md"
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"

@@ -21,10 +21,12 @@ ad_commit() { :; }
 # doesn't exist yet, in a mailbox that does, is no mail
 ad_poll() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
   find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
-# (the peek tests the inbox folder first, and store.md only when it's missing, so a store moved away between the two
-# tests can't read as no mail)
-ad_peek() { if [ ! -d "$AD_DIR/$1" ] || [ -L "$AD_DIR/$1" ]; then [ -f "$AD_DIR/$ROOT/store.md" ]; return; fi
-  pl=$(CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*") || return 1
+# (the peek checks store.md before and after listing, so a store moved away or being deleted meanwhile fails it rather
+# than reading as no mail, or as fewer messages)
+ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; pl=""
+  if [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ]; then
+    pl=$(CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*") || return 1; fi
+  [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | LC_ALL=C sort; }
 # (a failed peek is the `! !` row, never fewer rows: holds then stops rather than read a gone store as an empty one)
 ad_history() { p=$(ad_peek "$1") || { echo '! !'; return 0; }
