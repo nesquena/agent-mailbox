@@ -90,7 +90,7 @@ ad_open() {
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
     ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
-    if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH"
+    if ad_remote_has_branch; then ad_git checkout -q -B "$BRANCH" "origin/$BRANCH" 2>/dev/null
     else ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty
     fi || { rm -rf "$AD_DIR"; die "can't check out the store"; }
     # another command may set up the same clone meanwhile: whichever moves first is kept, and is never removed. A loser
@@ -143,7 +143,9 @@ ad_pull() {
     { [ -z "$pre" ] || ! ad_git merge-base --is-ancestor HEAD "$pre"; } &&
     [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root HEAD |
       grep -vxF -e "${rr:+$rr/}store.md" -e "${rr:+$rr/}agents/.keep" -e "${rr:+$rr/}inbox/.keep")" ]; then
-    ad_git reset -q --hard "origin/$BRANCH"
+    # (git prints a path it can't create as it is, line breaks included, and a store writer chooses paths: its output
+    # is returned for the one die line, never passed through)
+    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
     warn "dropped an init this clone made earlier but never published: another agent has since started the mailbox at '$ROOT/' (require_signatures: $(field require_signatures "$AD_DIR/$ROOT/store.md" | clean "$CAP"); its settings are in $ROOT/store.md)"
     return 0
   fi
@@ -152,7 +154,7 @@ ad_pull() {
   # this clone holds unpublished. It's dropped, and init reports the winner
   if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
     [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ]; then
-    ad_git reset -q --hard "origin/$BRANCH"; return 0
+    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }; return 0
   fi
   # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
   # it, so nothing it holds is published into that mailbox, when it had seen the store's branch before (one since
@@ -176,7 +178,7 @@ ad_pull() {
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
     ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
   else
-    ad_git reset -q --hard "origin/$BRANCH"
+    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
   fi
 }
 
