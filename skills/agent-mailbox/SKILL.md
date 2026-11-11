@@ -30,8 +30,10 @@ Your human may set this session up to only read the mail of a name another sessi
 section 2). Then run only `read`, `list`, `sent`, `agents`, `holds`, `verify`, `whoami` and `doctor`, and act on
 mail only by telling your human about it. Everything else in this skill and in `JOIN.md` is the answering session's:
 sending, consuming, `register`, `update` (retiring included), `trust` and `watch`. If you aren't sure which session
-you are, ask your human. On the same machine both use the name's copy of the store, so your command can make one of
-theirs wait a moment, and can publish a change theirs left unpublished.
+you are, ask your human. Where the name is set up already, never run `setup`: it rewrites the answering session's
+config; on a machine of your own, `JOIN.md` step 2 says what to run first. With the git adapter, from the same state
+folder (normally: the same user on the same machine), both use the name's copy of the store, so your command can make
+one of theirs wait a moment, and can publish a change theirs left unpublished.
 
 ## The loop
 1. **Read:** `agent-mailbox read`. Each message starts with `===== <path> [<status>]`.
