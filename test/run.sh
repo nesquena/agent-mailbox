@@ -27,7 +27,8 @@ CCD=""; trap 'leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
 leftovers() { set -- $(for _lp in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v -e grep -e "^ *$$ " | awk '{ print $1 }') \
     $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
-  kill -TERM "$@" 2>/dev/null; sleep 1; for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
+  kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
+  for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
 pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
 no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
@@ -37,20 +38,26 @@ sk() { skip=$((skip+1)); echo "  skip $1"; }
 # wait is bounded: a test fails, saying it timed out, instead of the run hanging until someone notices.
 # tree <pid>: that process and everything it started, deepest first
 tree() { for _tn in $(pgrep -P "$1" 2>/dev/null); do tree "$_tn"; done; echo "$1"; }
-# kill_tree <pid>: stop a process and everything it started: TERM, then KILL whatever is left 2 seconds later
-# (the pids are kept as arguments, so every shell splits them, zsh included)
+# alive <pid>...: any of them still running
+alive() { for _ap in "$@"; do kill -0 "$_ap" 2>/dev/null && return 0; done; return 1; }
+# kill_tree <pid>: stop a process and everything it started: TERM, then up to 5 s for them to exit (their traps may clean
+# up), then KILL whatever is left (the pids are kept as arguments, so every shell splits them, zsh included)
 kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
-  kill -TERM "$@" 2>/dev/null; sleep 2; for _kp in "$@"; do kill -0 "$_kp" 2>/dev/null && kill -KILL "$_kp" 2>/dev/null; done; return 0; }
+  kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
+  for _kp in "$@"; do kill -0 "$_kp" 2>/dev/null && kill -KILL "$_kp" 2>/dev/null; done; return 0; }
 # time_cap <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything
 # it started, and return 124, saying so on stderr; otherwise its own exit. (Its names, and its variables' _t prefix, are
 # its own: the suite defines `within` and `bounded` for other jobs, and a function defined later replaces one of the
 # same name for the rest of the run)
-time_cap() { _tl=$1; shift
+# The command's output goes to files, passed on when it's done: a process it started that escapes the stop (one whose
+# parent died) can't hold the caller's pipe, and so a $(...) around time_cap, open
+time_cap() { _tl=$1; shift; _to=$(mktemp "$W/.tc.XXXXXX") && _te=$(mktemp "$W/.tc.XXXXXX") || return 125
   # (an asynchronous command's stdin is /dev/null unless it's given one: fd 3 hands it the caller's)
-  { "$@" <&3 3<&- & } 3<&0; _tc=$!
+  { "$@" <&3 3<&- >"$_to" 2>"$_te" & } 3<&0; _tc=$!
   ( n=0; while [ "$n" -lt "$_tl" ]; do sleep 1; kill -0 "$_tc" 2>/dev/null || exit 0; n=$((n+1)); done
     : > "$W/.time_cap.$_tc"; kill_tree "$_tc" ) >/dev/null 2>&1 & _tw=$!
   wait "$_tc"; _tr=$?; kill "$_tw" 2>/dev/null; wait "$_tw" 2>/dev/null
+  cat "$_to"; cat "$_te" >&2; rm -f "$_to" "$_te"
   if [ -f "$W/.time_cap.$_tc" ]; then rm -f "$W/.time_cap.$_tc"; echo "(timed out: stopped after ${_tl} s)" >&2; return 124; fi
   return "$_tr"; }
 # the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15):
@@ -107,8 +114,13 @@ t0=$(date +%s); out=$(time_cap 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date
   ok "time_cap stops a command that runs over its limit, saying so (exit 124)" || no "time_cap didn't stop a command (exit $rc, $((t1 - t0)) s)" "$out"
 expect "and returns the command's own exit when it finishes in time" 3 - time_cap 5 sh -c 'exit 3'
 [ "$(echo kept | time_cap 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "time_cap lost the command's stdin"
+# a process the command started that escapes the stop (its parent killed) can't hold a $(...) around time_cap open
+t0=$(date +%s); out=$(time_cap 2 sh -c '( sleep 30 & ); sleep 60' 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 10 ] && ok "and an escaped process can't keep its caller waiting" ||
+  no "an escaped process kept time_cap's caller waiting (exit $rc, $((t1 - t0)) s)" "$out"
+pkill -f '^sleep 30$' 2>/dev/null
 # (the git section defines its own `within` and `bounded`: none of the names here is one of them)
-for f in tree kill_tree time_cap leftovers; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
+for f in tree alive kill_tree time_cap leftovers; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
 ( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
 c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
 [ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "time_cap left the command's child running" "pid $c"
