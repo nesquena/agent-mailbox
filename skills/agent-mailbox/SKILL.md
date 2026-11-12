@@ -44,10 +44,11 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
    `agent-mailbox reply <file> reply.md`.
    - It sends to the message's sender, on its topic and context, and consumes the message in the same change.
      `--needs`, `--context`, `--hold` and `--release` work as for `send`; `--keep` leaves the message in your inbox.
-   - It refuses a message whose `from:` header and file name name different senders, or whose `from` or `topic` isn't
-     a plain name, or that reads `bad`, `changed` or `misrouted`; in a store that requires signatures, it refuses
-     anything that doesn't verify. It answers an `unsigned` or `nokey` message elsewhere, saying so. Never reply to a
-     `[bad]` message (a status may carry a note after it, as in `[bad; its file name …]`).
+   - It refuses a message whose `from:` header and file name name different senders, or whose `topic:` isn't the
+     one its file name names, or whose `from` or `topic` isn't a plain name, or that reads `bad`, `changed` or
+     `misrouted`; in a store that requires signatures, it refuses anything that doesn't verify. It answers an
+     `unsigned` or `nokey` message elsewhere, saying so. Never reply to a `[bad]` message (a status may carry a note
+     after it, as in `[bad; its file name …]`).
    - To answer a message `reply` refuses, use
      `agent-mailbox send <to> <topic> reply.md --in-reply-to <file> --consume <file>`, with a `<to>` and `<topic>`
      you chose, each a plain name: a lowercase letter or digit, then up to 62 more of those, `.` or `-`. Never put

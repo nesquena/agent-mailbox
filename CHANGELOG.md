@@ -28,7 +28,8 @@ table has new columns: see the first entry if a script reads it.
   topic, with `in_reply_to` naming it and its context kept, and removes it from your inbox in the same change, as
   `send … --in-reply-to <file> --consume <file>` does. `--keep` leaves it in your inbox, and `--needs`, `--context`,
   `--hold` and `--release` pass through to `send`. It refuses a message that isn't in your inbox, one whose `from:`
-  header and file name name different senders (or whose header isn't plain), and one that reads `bad`, `changed` or
+  header and file name name different senders or whose `topic:` isn't the one its file name names (or whose header
+  isn't plain), and one that reads `bad`, `changed` or
   `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
   refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
 - **`holds` warns when the adapter keeps no history.** An adapter now declares whether it does, by setting
@@ -44,13 +45,12 @@ table has new columns: see the first entry if a script reads it.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.
-- **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
-  plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
   check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
   from the same state folder (normally: the same user on the same machine) now prints a warning naming the running
-  watcher's pid: both wake on the same mail, so stop one.
+  watcher's pid: both wake on the same mail, so stop one: this one, or the running one unless the Claude Code plugin's
+  hook started it, since the hook would start it again.
 - **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
   (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
   isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no longer
