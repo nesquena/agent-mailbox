@@ -20,6 +20,35 @@ pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
 no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
 sk() { skip=$((skip+1)); echo "  skip $1"; }
+
+# --- nothing waits forever. A step can lose what it waits for (a crashed shell, a send that never happened), so every
+# wait is bounded: a test fails, saying it timed out, instead of the run hanging until someone notices.
+# tree <pid>: that process and everything it started, deepest first
+tree() { for c in $(pgrep -P "$1" 2>/dev/null); do tree "$c"; done; echo "$1"; }
+# kill_tree <pid>: stop a process and everything it started: TERM, then KILL whatever is left 2 seconds later
+# (the pids are kept as arguments, so every shell splits them, zsh included)
+kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
+  kill -TERM "$@" 2>/dev/null; sleep 2; for p in "$@"; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done; return 0; }
+# within <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything it
+# started, and return 124, saying so on stderr; otherwise its own exit
+within() { wl=$1; shift
+  # (an asynchronous command's stdin is /dev/null unless it's given one: fd 3 hands it the caller's)
+  { "$@" <&3 3<&- & } 3<&0; wc=$!
+  ( n=0; while [ "$n" -lt "$wl" ]; do sleep 1; kill -0 "$wc" 2>/dev/null || exit 0; n=$((n+1)); done
+    : > "$W/.within.$wc"; kill_tree "$wc" ) >/dev/null 2>&1 & ww=$!
+  wait "$wc"; wr=$?; kill "$ww" 2>/dev/null; wait "$ww" 2>/dev/null
+  if [ -f "$W/.within.$wc" ]; then rm -f "$W/.within.$wc"; echo "(timed out: stopped after ${wl} s)" >&2; return 124; fi
+  return "$wr"; }
+# the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15):
+# past that, a watchdog stops the run and everything it started, and the run fails, saying so. The last "==" line
+# printed names the section it was in
+TL=${AGENT_MAILBOX_TEST_LIMIT:-2400}
+case $TL in ''|*[!0-9]*) echo "FAIL AGENT_MAILBOX_TEST_LIMIT must be a number of seconds, not '$TL'"; exit 1 ;; esac
+trap 'echo "  FAIL the run went over its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT): stopped; see the last section above"; exit 124' TERM
+SUITE=$$
+( wd=$(sh -c 'echo $PPID'); n=0; while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+5)); done
+  for p in $(tree "$SUITE"); do [ "$p" = "$SUITE" ] || [ "$p" = "$wd" ] || kill -TERM "$p" 2>/dev/null; done
+  kill -TERM "$SUITE" 2>/dev/null ) >/dev/null 2>&1 &
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
 [ -n "$SSH" ] || [ -z "${REQUIRE_SSH:-}" ] || { echo "FAIL ssh-keygen -Y isn't available, and REQUIRE_SSH is set"; exit 1; }
@@ -53,6 +82,23 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   if [ "$pat" != - ] && ! printf '%s\n' "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
   ok "$d"
 }
+
+echo "== the suite's own safeguards: nothing waits forever"
+t0=$(date +%s); out=$(within 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 8 ] && printf '%s\n' "$out" | grep -q 'timed out: stopped after 2 s' &&
+  ok "within stops a command that runs over its limit, saying so (exit 124)" || no "within didn't stop a command (exit $rc, $((t1 - t0)) s)" "$out"
+expect "and returns the command's own exit when it finishes in time" 3 - within 5 sh -c 'exit 3'
+[ "$(echo kept | within 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "within lost the command's stdin"
+( within 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
+c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
+[ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "within left the command's child running" "pid $c"
+kill "$c" 2>/dev/null
+# the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 &$/p' "$0" | sed 1d
+  echo 'sleep 600 & wait'; } > "$W/hang.sh"
+t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 within 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run went over its limit of 1 s' &&
+  ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
 
 for AD in $ADAPTERS; do
   echo "== adapter: $AD (shell: $SH)"
@@ -1478,7 +1524,11 @@ woken() { find "$RS/rewake" \( -name woke -o -name pending \) -type f -exec cat 
 # wakes <description> <file> <command...>: the command wakes the session for new mail (exit 2), and <file> is recorded.
 # The mail is there before the hook starts, so its run's limit is a minute, not the usual 2 s: on a loaded machine the
 # watcher's first check can take longer than 2 s, and the run ends as soon as it finds the mail anyway
-wakes() { d=$1 f=$2; shift 2; out=$(RWMAX=60 "$@" 2>&1); rc=$?
+# The mail is checked first, so a send that failed before it (a crashed shell, say) fails the test at once, saying so,
+# rather than leaving the hook to wait out its limit; and the hook gets 120 s at most (within), whatever its limit
+wakes() { d=$1 f=$2; shift 2
+  [ -n "$(find "$T" -path '*/mailbox/inbox/rw/*' -name "*$f" 2>/dev/null)" ] || { no "$d (the mail it waits for, $f, was never sent)"; return; }
+  out=$(RWMAX=60 within 120 "$@" 2>&1); rc=$?
   if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^agent-mailbox: new mail for ' && woken "$f"; then ok "$d"
   else no "$d (exit $rc, or $f not recorded)" "$out"; fi; }
 # cc.sh <session JSON> [args...]: a stand-in Claude Code, started with <args> (what its command line shows), that runs
