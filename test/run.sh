@@ -1,6 +1,10 @@
 #!/bin/sh
-# test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
-# gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
+# test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]: end-to-end tests of
+# bin/agent-mailbox against throwaway stores. Each simulated agent gets its own HOME, so config, keys, pins and the
+# store checkout are as separate as on two machines. The suite is a list of sections, each run in a folder of its own,
+# and each makes what it needs itself, so any of them runs alone or in any order. --list prints the ids of the sections
+# a run would run; --only runs the named ones; --shard i/n runs shard i of n, split by the times in
+# test/section-costs; --order <seed> shuffles them. Any other argument names an adapter.
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
@@ -14,13 +18,11 @@ SH="${TEST_SHELL:-sh}"
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
   AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
-# --list prints the ids of the sections a run would run; --only runs the named ones; --shard i/n runs shard i of n,
-# split by the times in test/section-costs; --order <seed> shuffles them. Any other argument names an adapter
 LIST="" ONLY="" SHARD="" ORDER="" ADAPTERS="" BAD=""
 while [ $# -gt 0 ]; do
   case $1 in
     (--list) LIST=1 ;;
-    (--only|--shard|--order) [ $# -ge 2 ] && [ -n "$2" ] || { BAD=1; break; }
+    (--only|--shard|--order) [ -n "${2:-}" ] || { BAD=1; break; }
       case $1 in (--only) ONLY=$2 ;; (--shard) SHARD=$2 ;; (*) ORDER=$2 ;; esac; shift ;;
     (-*) BAD=1 ;;
     (*) ADAPTERS="${ADAPTERS:+$ADAPTERS }$1" ;;
@@ -28,17 +30,19 @@ while [ $# -gt 0 ]; do
 done
 case $SHARD in
   ('') ;;
-  ([0-9]*/*[0-9]) case $SHARD in (*[!0-9/]*|*/*/*) BAD=1 ;; esac
-    [ -n "$BAD" ] || { [ "${SHARD%/*}" -ge 1 ] && [ "${SHARD%/*}" -le "${SHARD#*/}" ] && [ -z "$ONLY" ]; } || BAD=1 ;;
+  (*[!0-9/]*|*/*/*|/*|*/) BAD=1 ;;
+  (*/*) [ "${SHARD%/*}" -ge 1 ] && [ "${SHARD%/*}" -le "${SHARD#*/}" ] && [ -z "$ONLY" ] || BAD=1 ;;
   (*) BAD=1 ;;
 esac
 case $ORDER in (*[!0-9]*) BAD=1 ;; esac
 [ -z "$BAD" ] || { echo "usage: test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]" >&2; exit 64; }
 ADAPTERS="${ADAPTERS:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
-W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+RUNW=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
 # (every cleanup below stops what names this folder, so a run that couldn't make it stops here, before any of them)
-[ -n "$W" ] && [ -d "$W" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
+[ -n "$RUNW" ] && [ -d "$RUNW" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
+# (W, the folder tests make things in, is this one until each section gets its own in it, $RUNW/<id>)
+W=$RUNW
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
@@ -46,14 +50,14 @@ procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
-  [ -d "$d" ] && [ "$d" != "$W" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+  [ -d "$d" ] && [ "$d" != "$RUNW" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
     [ -z "$(procs_naming "$d")" ] && rm -rf "$d"
 done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
-CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
+CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
-leftovers() { set -- $(for _lp in $(procs_naming "$W" | awk -v me=$$ '$1 != me { print $1 }') \
+leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
     $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
   kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
   for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
@@ -110,9 +114,9 @@ SUITE=$$
 # skips its exit trap, so the watchdog then stops what still names the run's folder and removes it. (It never holds
 # the run's output: a caller reading that to its end before reaping the run would see a zombie run still there)
 ( ( wd=$(sh -c 'echo $PPID'); n=0
-  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$W" 2>/dev/null; n=$((n+5)); done
+  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$RUNW" 2>/dev/null; n=$((n+5)); done
   # (the list is a command's output, which every shell splits, zsh included)
-  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$W" | awk '{ print $1 }'); do tree "$_wq"; done); do
+  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$RUNW" | awk '{ print $1 }'); do tree "$_wq"; done); do
     [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
   kill -TERM "$SUITE" 2>/dev/null; [ $# -eq 0 ] || kill -TERM "$@" 2>/dev/null
   _wn=0; while [ $_wn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
@@ -121,7 +125,7 @@ SUITE=$$
   while [ $_wn -lt 50 ] && kill -0 "$SUITE" 2>/dev/null; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
   kill -0 "$SUITE" 2>/dev/null || exit 0
   kill -KILL "$SUITE" 2>/dev/null
-  for _wp in $(procs_naming "$W" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$W" ) >/dev/null 2>&1 & )
+  for _wp in $(procs_naming "$RUNW" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$RUNW" ) >/dev/null 2>&1 & )
 # (end of the run's watchdog: the safeguards' checks copy the suite's start up to here)
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
@@ -169,8 +173,7 @@ fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
 old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' \
   > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"; }
 # section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
-# and run in that order at the end (or as the options above pick). Each makes what it needs itself, so any one can run
-# alone or in any order
+# and run in that order at the end (or as the options above pick)
 SECTIONS=""
 section() { SECTIONS="$SECTIONS$*$NL"; }
 
@@ -1356,13 +1359,13 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
       CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about mine
   rm -f "$T/store.git/hooks/pre-receive"
   # on a store with no mailbox branch yet: a first init the store won't take, then the next command
-  T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  T="$W/left2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   fast_sleep; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
   expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
   # an update run again after its exit 4: its sync publishes the earlier change, and it says so, not just "nothing"
-  T="$W/left3"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  T="$W/left3"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   fast_sleep; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
   as xq4 init >/dev/null; as xq4 register --kind t --about t --no-key >/dev/null 2>&1
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
@@ -1372,7 +1375,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
   # a command whose sync publishes what an earlier one left, then can't publish its own change, says its own change
   # isn't published (don't resend), not that it wrote nothing: the leftover mark ends with the leftover's push
-  T="$W/left4"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  T="$W/left4"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   fast_sleep; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq5 init >/dev/null; for a in xq5 xq6; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"; echo hi > "$T/m"
@@ -1388,7 +1391,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
 
   sec_git_leftover_conflict() {
   echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
-  T="$W/stuck"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  T="$W/stuck"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   fast_sleep; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   nk=--no-key; [ -z "$SSH" ] || nk=""
   as ga init >/dev/null; for a in ga ga-x gb; do as $a register --kind t --about t $nk >/dev/null 2>&1; done
@@ -3230,14 +3233,14 @@ expect "consume still refuses an unknown option" 1 "unknown option --bogus" as o
 expect "and a misplaced --as" 1 "goes before the command" as o1 consume -z.md --as o2
 # a dir store given by a relative path starting with '-'
 mkdir -p "$T/rel2"
-for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-rel2-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done
-(cd "$T/rel2" && HOME="$W/home-rel2-d1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-rel2-d1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
-  HOME="$W/home-rel2-d2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-rel2-d1" "$SH" "$CLI" send d2 dd - >/dev/null 2>&1)
-expect "a dir store at a relative path starting with - lists mail" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-rel2-d2" "$SH" "$CLI" list
+for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done
+(cd "$T/rel2" && HOME="$W/home-d1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-d1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
+  HOME="$W/home-d2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-d1" "$SH" "$CLI" send d2 dd - >/dev/null 2>&1)
+expect "a dir store at a relative path starting with - lists mail" 0 "d1-dd\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list
 # watch must notice mail that arrives while it waits (its poll reads the store too)
-in_dir "$T/rel2" env HOME="$W/home-rel2-d2" "$SH" "$CLI" consume "$(basename "$(in_dir "$T/rel2" env HOME="$W/home-rel2-d2" "$SH" "$CLI" list | grep d1-dd)")" >/dev/null
-( sleep 2; echo hi | in_dir "$T/rel2" env HOME="$W/home-rel2-d1" "$SH" "$CLI" send d2 dd2 - >/dev/null 2>&1 ) &
-expect "and watch wakes on new mail" 0 "d1-dd2\.md" in_dir "$T/rel2" env HOME="$W/home-rel2-d2" "$SH" "$CLI" watch 1 8
+in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" consume "$(basename "$(in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" list | grep d1-dd)")" >/dev/null
+( sleep 2; echo hi | in_dir "$T/rel2" env HOME="$W/home-d1" "$SH" "$CLI" send d2 dd2 - >/dev/null 2>&1 ) &
+expect "and watch wakes on new mail" 0 "d1-dd2\.md" in_dir "$T/rel2" env HOME="$W/home-d2" "$SH" "$CLI" watch 1 8
 wait
 # a git store given by a path starting with '-' is a path, never an option to git clone
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
@@ -3955,7 +3958,7 @@ elif [ -n "$SHARD" ]; then
   # (the longest first, each to the shard with the least so far, the first of them on a tie: every shard of n runs
   # the same split. A section with no time there counts 1 s)
   PLAN=$(printf '%s\n' "$PLAN" | awk -v i="${SHARD%/*}" -v n="${SHARD#*/}" -v f="$ROOTDIR/test/section-costs" '
-    BEGIN { while ((getline l < f) > 0) if (split(l, a, " ") == 2 && a[1] !~ /^#/) c[a[1]] = a[2] + 0 }
+    BEGIN { while ((getline l < f) > 0) if (l ~ /^[a-z0-9][a-z0-9-]* [0-9]+$/) { split(l, a, " "); c[a[1]] = a[2] + 0 } }
     { id[++m] = $1; w[m] = ($1 in c) ? c[$1] : 1 }
     END { for (k = 1; k <= m; k++) { b = 0; for (j = 1; j <= m; j++) if (!t[j] && (!b || w[j] > w[b])) b = j
         s = 1; for (q = 2; q <= n; q++) if (load[q] < load[s]) s = q
@@ -3964,9 +3967,11 @@ elif [ -n "$SHARD" ]; then
 fi
 # (shuffled by a Park-Miller generator, not awk's rand, which some awks seed from the clock whatever the seed)
 [ -z "$ORDER" ] || PLAN=$(printf '%s\n' "$PLAN" | awk -v s="$ORDER" '
-  BEGIN { x = s % 2147483647; if (x < 1) x = 1; for (i = 0; i < 9; i++) x = x * 16807 % 2147483647 }
+  BEGIN { x = s % 2147483647; if (x < 1) x = 1; for (i = 0; i < 9 + s % 97; i++) x = x * 16807 % 2147483647 }
   NF { x = x * 16807 % 2147483647; print x, $0 }' | sort -n | cut -d' ' -f2)
 if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
-for _sid in $PLAN; do set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; done
+[ -z "$ORDER" ] || echo "order: seed $ORDER"
+for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"
+  set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; done
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]

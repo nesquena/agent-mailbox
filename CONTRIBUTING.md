@@ -40,22 +40,26 @@ To run them alone, `bats test/`, or `TEST_SHELL=dash bats test/` for the CLI und
 the CLI they drive runs under `TEST_SHELL` (default `sh`). A new test goes in a `.bats` file; its shared setup is in
 `test/helpers.bash`.
 
-`test/run.sh` is a list of sections, each opening with its `==` line. Each makes what it needs itself (its own store,
-homes and helper files), so any of them runs alone or in any order: `--order <seed>` shuffles them, to check that
-none leans on what another left behind. `--shard i/n` runs shard i of n, the sections split so the shards take about
-as long: by the seconds each takes alone, in `test/section-costs`. A new section needs a line there (time
-`test/run.sh --only <id>`). `sh test/shards-cover.sh` checks that the shards of 4, and of 3, run every section once
-between them, and that `test/section-costs` names each section, and nothing else.
+`test/run.sh` is a list of sections, each opening with its `==` line and run in a folder of its own. Each makes what
+it needs itself (its own store, homes and helper files), so any of them runs alone or in any order: `--order <seed>`
+shuffles them, to check that none leans on what another did. A shuffled run prints its seed first (`order: seed N`):
+the same options with `--order N` run that order again. `--shard i/n` runs shard i of n, the sections split so the
+shards take about as long: by the seconds each takes alone, in `test/section-costs`, one `<id> <seconds>` line each.
+A new section needs a line there (time `test/run.sh --only <id>`). `sh test/shards-cover.sh` checks that the shards
+of 4, and of 3, run every section once between them, and that `test/section-costs` has a well-formed line for each
+section, and nothing else; `sh test/shards-cover.sh --logs <whole run's output> <each shard's output>...` checks that
+the shards printed the same checks as a whole run.
 
 CI runs the suite on Linux for every pull request, and on Linux and macOS for every push to main, every manual run
-(Actions, "test", "Run workflow", on your branch) and every release, in four shards per shell, side by side. A push to
-main, a manual run and a release also run it once per OS unsharded, start to end. A pull request with the `macos`
+(Actions, "test", "Run workflow", on your branch) and every release, in four shards per shell, side by side. A
+push to main runs the shards with `--order` and the run's number, so each push tries another order. A manual run and
+a release also run the whole suite once per OS, as one shard (`--shard 1/1`). A pull request with the `macos`
 label runs macOS too, from its next push. A re-run doesn't pick up the label (it reuses the labels the run started
 with): push a commit, or, for a branch you can't push to, close and reopen the pull request. For a change macOS's
 tools may treat differently (`find`, `sed`, `ps`, process handling), add the label or start a manual run. A change
 only to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or a newer manual run
 on the same branch, cancels the run it supersedes. The `gate` job reports on every run: it passes at once for a
-prose-only change, and otherwise only when every test job (every shard, and each unsharded run) passed, so it's the
+prose-only change, and otherwise only when every test job (every shard, and each whole run) passed, so it's the
 one check a branch rule needs to require. After retargeting a pull request to another base branch, push a commit, or
 close and reopen the pull request, so the gate checks the new base (a re-run checks the old one).
 

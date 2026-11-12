@@ -69,9 +69,10 @@ jobs:
           else os='["ubuntu-latest", "macos-latest"]'; fi
           echo "os=$os" >> "$GITHUB_OUTPUT"
           echo "operating systems: $os"
-          # and all but a pull request also run the whole suite once per OS, unsharded
-          if [ "$EVENT" = pull_request ]; then whole='[]'
-          else whole='[{"os": "ubuntu-latest", "shell": "dash", "shard": "all"}, {"os": "macos-latest", "shell": "sh", "shard": "all"}]'; fi
+          # and a manual run (the release workflow's call is one too) also runs the whole suite once per OS, as one shard
+          if [ "$EVENT" = workflow_dispatch ]; then
+            whole='[{"os": "ubuntu-latest", "shell": "dash", "shard": "1/1"}, {"os": "macos-latest", "shell": "sh", "shard": "1/1"}]'
+          else whole='[]'; fi
           echo "whole=$whole" >> "$GITHUB_OUTPUT"
           echo "unsharded runs: $whole"
 
@@ -82,7 +83,8 @@ jobs:
       fail-fast: false
       # one job per OS, shell and shard, so they run side by side: dash and bash on Linux (where sh is dash), and sh
       # (bash in POSIX mode) and bash on macOS, where the changes job includes it. Each shard runs a quarter of the
-      # suite's sections (test/run.sh --shard), and the changes job adds the unsharded runs (shard "all")
+      # suite's sections (test/run.sh --shard), and a manual run adds the whole suite as shard 1/1. A push to main runs
+      # the sections in an order of its own (--order with the run's number, printed first)
       matrix:
         os: ${{ fromJSON(needs.changes.outputs.os) }}
         shell: [sh, dash, bash]
@@ -101,9 +103,13 @@ jobs:
           git config --global user.name test
           git config --global user.email test@example.invalid
           git config --global init.defaultBranch main
-      - name: Install dash and zsh (Linux)
+      # (every shard needs dash, bats and ssh-keygen; only the first shard of each run does the parse and shard checks,
+      # which need zsh)
+      - name: Install dash, and zsh for the parse check (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get -o Acquire::Retries=3 update -q && sudo apt-get -o Acquire::Retries=3 install -y -q dash zsh
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update -q
+          sudo apt-get -o Acquire::Retries=3 install -y -q dash ${{ (matrix.shard == '1/4' || matrix.shard == '1/1') && 'zsh' || '' }}
       # bats-core runs test/*.bats; pinned to a commit, as the actions are
       - name: Install bats-core 1.14.0
         run: |
@@ -113,6 +119,7 @@ jobs:
           "$RUNNER_TEMP/bats-core/install.sh" "$RUNNER_TEMP/bats"
           echo "$RUNNER_TEMP/bats/bin" >> "$GITHUB_PATH"
       - name: Parse under every available shell
+        if: matrix.shard == '1/4' || matrix.shard == '1/1'
         run: |
           for s in sh dash bash zsh; do
             command -v "$s" >/dev/null || { echo "$s not installed"; exit 1; }
@@ -122,13 +129,12 @@ jobs:
             echo "$s ok"
           done
       - name: The shards run every section once
-        run: TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/shards-cover.sh
+        if: matrix.shard == '1/4' || matrix.shard == '1/1'
+        run: TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/shards-cover.sh 2 3 4 5
       - name: Test suite (${{ matrix.shell }}, shard ${{ matrix.shard }})
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          if [ "$SHARD" = all ]; then set --; else set -- --shard "$SHARD"; fi
-          REQUIRE_SSH=1 REQUIRE_BATS=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh "$@"
+        run: >-
+          REQUIRE_SSH=1 REQUIRE_BATS=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh --shard ${{ matrix.shard }}
+          ${{ github.event_name == 'push' && format('--order {0}', github.run_number) || '' }}
 
   # the one check a branch rule requires: it passes at once for a prose-only change, and otherwise only when every test
   # job passed
