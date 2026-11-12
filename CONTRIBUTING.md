@@ -12,7 +12,7 @@ the most care.
 - **Every behaviour has a test.** `test/run.sh` and the [bats-core](https://github.com/bats-core/bats-core) files
   `test/*.bats` drive the real CLI against real stores. A fix comes with a test that fails without it.
 - **Nothing waits forever.** A test that waits for something (mail, a file, a watcher, a hook) first checks that what
-  it waits for exists, and runs under a bound: `within <seconds> <command>` in `test/run.sh`, which stops the command
+  it waits for exists, and runs under a bound: `time_cap <seconds> <command>` in `test/run.sh`, which stops the command
   and everything it started and fails with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default) in bats. The whole run
   stops itself, failing, after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15).
   A hang then costs one failed check, never an unattended wait.

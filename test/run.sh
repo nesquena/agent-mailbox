@@ -25,9 +25,9 @@ done
 # background and missed, even one whose parent is gone), so no run leaves processes behind
 CCD=""; trap 'leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
-leftovers() { set -- $(for p in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v -e grep -e "^ *$$ " | awk '{ print $1 }') \
-    $(pgrep -P $$ 2>/dev/null); do tree "$p"; done); [ $# -gt 0 ] || return 0
-  kill -TERM "$@" 2>/dev/null; sleep 1; for p in "$@"; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done; return 0; }
+leftovers() { set -- $(for _lp in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v -e grep -e "^ *$$ " | awk '{ print $1 }') \
+    $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
+  kill -TERM "$@" 2>/dev/null; sleep 1; for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
 pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
 no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
@@ -36,21 +36,23 @@ sk() { skip=$((skip+1)); echo "  skip $1"; }
 # --- nothing waits forever. A step can lose what it waits for (a crashed shell, a send that never happened), so every
 # wait is bounded: a test fails, saying it timed out, instead of the run hanging until someone notices.
 # tree <pid>: that process and everything it started, deepest first
-tree() { for c in $(pgrep -P "$1" 2>/dev/null); do tree "$c"; done; echo "$1"; }
+tree() { for _tn in $(pgrep -P "$1" 2>/dev/null); do tree "$_tn"; done; echo "$1"; }
 # kill_tree <pid>: stop a process and everything it started: TERM, then KILL whatever is left 2 seconds later
 # (the pids are kept as arguments, so every shell splits them, zsh included)
 kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
-  kill -TERM "$@" 2>/dev/null; sleep 2; for p in "$@"; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done; return 0; }
-# within <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything it
-# started, and return 124, saying so on stderr; otherwise its own exit
-within() { wl=$1; shift
+  kill -TERM "$@" 2>/dev/null; sleep 2; for _kp in "$@"; do kill -0 "$_kp" 2>/dev/null && kill -KILL "$_kp" 2>/dev/null; done; return 0; }
+# time_cap <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything
+# it started, and return 124, saying so on stderr; otherwise its own exit. (Its names, and its variables' _t prefix, are
+# its own: the suite defines `within` and `bounded` for other jobs, and a function defined later replaces one of the
+# same name for the rest of the run)
+time_cap() { _tl=$1; shift
   # (an asynchronous command's stdin is /dev/null unless it's given one: fd 3 hands it the caller's)
-  { "$@" <&3 3<&- & } 3<&0; wc=$!
-  ( n=0; while [ "$n" -lt "$wl" ]; do sleep 1; kill -0 "$wc" 2>/dev/null || exit 0; n=$((n+1)); done
-    : > "$W/.within.$wc"; kill_tree "$wc" ) >/dev/null 2>&1 & ww=$!
-  wait "$wc"; wr=$?; kill "$ww" 2>/dev/null; wait "$ww" 2>/dev/null
-  if [ -f "$W/.within.$wc" ]; then rm -f "$W/.within.$wc"; echo "(timed out: stopped after ${wl} s)" >&2; return 124; fi
-  return "$wr"; }
+  { "$@" <&3 3<&- & } 3<&0; _tc=$!
+  ( n=0; while [ "$n" -lt "$_tl" ]; do sleep 1; kill -0 "$_tc" 2>/dev/null || exit 0; n=$((n+1)); done
+    : > "$W/.time_cap.$_tc"; kill_tree "$_tc" ) >/dev/null 2>&1 & _tw=$!
+  wait "$_tc"; _tr=$?; kill "$_tw" 2>/dev/null; wait "$_tw" 2>/dev/null
+  if [ -f "$W/.time_cap.$_tc" ]; then rm -f "$W/.time_cap.$_tc"; echo "(timed out: stopped after ${_tl} s)" >&2; return 124; fi
+  return "$_tr"; }
 # the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15):
 # past that, a watchdog stops the run and everything it started, and the run fails, saying so. The last "==" line
 # printed names the section it was in
@@ -100,14 +102,16 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
 }
 
 echo "== the suite's own safeguards: nothing waits forever"
-t0=$(date +%s); out=$(within 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date +%s)
+t0=$(date +%s); out=$(time_cap 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 8 ] && printf '%s\n' "$out" | grep -q 'timed out: stopped after 2 s' &&
-  ok "within stops a command that runs over its limit, saying so (exit 124)" || no "within didn't stop a command (exit $rc, $((t1 - t0)) s)" "$out"
-expect "and returns the command's own exit when it finishes in time" 3 - within 5 sh -c 'exit 3'
-[ "$(echo kept | within 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "within lost the command's stdin"
-( within 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
+  ok "time_cap stops a command that runs over its limit, saying so (exit 124)" || no "time_cap didn't stop a command (exit $rc, $((t1 - t0)) s)" "$out"
+expect "and returns the command's own exit when it finishes in time" 3 - time_cap 5 sh -c 'exit 3'
+[ "$(echo kept | time_cap 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "time_cap lost the command's stdin"
+# (the git section defines its own `within` and `bounded`: none of the names here is one of them)
+for f in tree kill_tree time_cap leftovers; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
+( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
 c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
-[ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "within left the command's child running" "pid $c"
+[ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "time_cap left the command's child running" "pid $c"
 kill "$c" 2>/dev/null
 # a run stopped by a signal (HUP here; INT the same, from a terminal) still stops what it started and removes its
 # folder; and a later run sweeps a folder an hour old that a killed run left, keeping a recent one
@@ -125,13 +129,13 @@ sd=$(sed -n 's/^dir //p' "$W/sig.out")
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 & )$/p' "$0" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
-t0=$(date +%s); out=$(within 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s)
+t0=$(date +%s); out=$(time_cap 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 0 ] && [ $((t1 - t0)) -le 10 ] && printf '%s\n' "$out" | grep -qx returned &&
   ok "a bare wait in a test doesn't wait for the run's watchdog" || no "a bare wait waited for the watchdog (exit $rc, $((t1 - t0)) s)" "$out"
 # the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 & )$/p' "$0" | sed 1d
   echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
-t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 within 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
+t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
 hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM): past its limit of 1 s' &&
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
@@ -1564,10 +1568,10 @@ woken() { find "$RS/rewake" \( -name woke -o -name pending \) -type f -exec cat 
 # The mail is there before the hook starts, so its run's limit is a minute, not the usual 2 s: on a loaded machine the
 # watcher's first check can take longer than 2 s, and the run ends as soon as it finds the mail anyway
 # The mail is checked first, so a send that failed before it (a crashed shell, say) fails the test at once, saying so,
-# rather than leaving the hook to wait out its limit; and the hook gets 120 s at most (within), whatever its limit
+# rather than leaving the hook to wait out its limit; and the hook gets 120 s at most (time_cap), whatever its limit
 wakes() { d=$1 f=$2; shift 2
   [ -n "$(find "$T" -path '*/mailbox/inbox/rw/*' -name "*$f" 2>/dev/null)" ] || { no "$d (the mail it waits for, $f, was never sent)"; return; }
-  out=$(RWMAX=60 within 120 "$@" 2>&1); rc=$?
+  out=$(RWMAX=60 time_cap 120 "$@" 2>&1); rc=$?
   if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^agent-mailbox: new mail for ' && woken "$f"; then ok "$d"
   else no "$d (exit $rc, or $f not recorded)" "$out"; fi; }
 # cc.sh <session JSON> [args...]: a stand-in Claude Code, started with <args> (what its command line shows), that runs
