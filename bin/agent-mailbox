@@ -25,6 +25,9 @@
 #   send <to> <topic> <body.md|-> [--context <c>] [--in-reply-to <file>] [--needs <text>] [--consume <file>]...
 #        [--hold|--release "<item> <version>"]
 #                                       deliver a message; --consume also removes mail you're answering
+#   reply <file> <body.md|-> [--needs <text>] [--context <c>] [--hold|--release "<item> <version>"] [--keep]
+#                                       answer a message in your inbox: send to its sender, on its topic and context,
+#                                       and consume it in the same change (--keep: leave it in your inbox)
 #   list                                your inbox, oldest first (exit 0: some, 3: none)
 #   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
@@ -51,11 +54,13 @@ VERSION=0.1.1
 AD_INIT=
 PROTOCOL=1
 NS=agent-mailbox
-# (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
-AD_LEFTOVER=
+# (set only by the git adapter, around its push of what an earlier command left, and around its sync's rebase of it:
+# never taken from the environment)
+AD_LEFTOVER= AD_UNSTICK=
 # (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
-# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new)
-AD_DIR= AD_PUBLISHED= AD_UNCHANGED=
+# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new; AD_HISTORY, set
+# when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 # a record's groups: up to 16 names, one space between each (PROTOCOL.md section 4)
 GROUPS_RE='^[a-z0-9][a-z0-9.-]{0,62}( [a-z0-9][a-z0-9.-]{0,62}){0,15}$'
@@ -498,6 +503,55 @@ own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); m
 
 # --- commands ------------------------------------------------------------------------------------------------------
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
+# reply answers a message in your inbox: it reads the addressee (the message's sender) and topic from the message, then
+# runs as send with --in-reply-to and --consume naming it, so the answer and the receipt are one change (PROTOCOL.md
+# section 5). The store is opened here, once, and send goes on from it (LOADED)
+LOADED=""
+if [ "$cmd" = reply ]; then
+  ru='usage: reply <file> <body.md|-> [--needs text] [--context c] [--hold|--release "<item> <version>"] [--keep]'
+  [ $# -ge 1 ] || die "$ru"
+  case "$1" in (-*) misplaced "$1"; matches "$MSG_RE" "$1" || die "$ru" ;; esac
+  rf=$(basename -- "$1"); shift; rbody="" keep="" seen=""
+  # what isn't reply's own is kept, in order, for send: each option with its value
+  n=$#; while [ "$n" -gt 0 ]; do a=$1; shift; n=$((n-1))
+    case "$a" in
+      (--keep) once "$a"; keep=1 ;;
+      (--needs|--context|--hold|--release) [ "$n" -ge 1 ] || die "$a needs a value"; set -- "$@" "$a" "$1"; shift; n=$((n-1)) ;;
+      (-) [ -z "$rbody" ] || die "reply takes one message and one body, not '$a' too"; rbody=- ;;
+      (-*) unknown "$a" ;;
+      (*) [ -z "$rbody" ] || die "reply takes one message and one body, not '$a' too"; rbody=$a ;;
+    esac
+  done
+  [ -n "$rbody" ] || die "$ru"
+  need_me; valid_msg "$rf"
+  load_adapter; ad_sync; need_store; LOADED=1
+  rp="$M/inbox/$ME/$rf"
+  # (a link isn't a message of your inbox's, as for read)
+  plain "$rp" || die "not in your inbox: $rf"
+  hdr_ok "$rp" || die "$rf has a header that isn't plain (verify reads it bad), so reply can't tell who sent it; answer with send if you mean to"
+  rfrom=$(field from "$rp") rtopic=$(field topic "$rp")
+  matches "$NAME_RE" "$rfrom" || die "$rf has no valid from: header, so reply can't tell who sent it"
+  matches "$NAME_RE" "$rtopic" || die "$rf has no valid topic: header to reply on"
+  # the header says who sent a message, and its file name (<stamp>-<from>-<topic>.md) must agree, as read checks
+  st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+  case "$rf" in ($st-"$rfrom-$rtopic".md) ;;
+    ($st-"$rfrom"-*) die "$rf: its topic: header ($rtopic) isn't the topic its file name names; answer with send if you mean to" ;;
+    (*) die "$rf: its from: header names $rfrom, but its file name doesn't name $rfrom as the sender; answer with send if you mean to" ;;
+  esac
+  # its signature, as read shows it. In a strict store only verified mail counts (as for holds), so reply answers only a
+  # message that verifies. Elsewhere a message that reads bad, changed or misrouted is refused too, since consuming it
+  # would remove the sign of tampering unseen; unsigned and nokey are answered, with the status said
+  v=$(verify_file "$rp" "$ME")
+  if require_sigs; then
+    [ "$v" = verified ] || die "this store requires signatures, and $rf doesn't verify ($v; see verify); answer with send if you mean to"
+  else case "$v" in
+    (verified) ;;
+    (unsigned|nokey) warn "$rf reads $v (see verify); answering it anyway, as this store doesn't require signatures" ;;
+    (*) die "$rf reads $v (see verify), so reply won't answer or consume it; answer with send if you mean to" ;;
+  esac; fi
+  [ -n "$keep" ] || set -- --consume "$rf" "$@"
+  set -- "$rfrom" "$rtopic" "$rbody" --in-reply-to "$rf" "$@"; cmd=send
+fi
 case "$cmd" in
 setup)
   store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}" human=$(cfg human) seen=""
@@ -516,7 +570,14 @@ setup)
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
 }${human:+human = $human
 }")"
-  printf 'wrote %s\n' "$CONFIG" ;;
+  printf 'wrote %s\n' "$CONFIG"
+  # pinned keys (and a strict store's pin) belong to the store's settings as written: new settings, even the same
+  # mailbox spelled another way, start with none, so say so when the old settings had some (setup can't tell a
+  # re-spelled address from another mailbox, so it carries nothing over)
+  if [ -n "$STORE" ] && [ "$STORE|$ROOT|$BRANCH" != "$store|${root:-mailbox}|${branch:-main}" ] &&
+    [ -n "$(ls -A "$STATE/pins/$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)" 2>/dev/null)" ]; then
+    warn "your pinned keys (and a strict store's pin) stay with the old store settings; for the same mailbox, keep its address as first written"
+  fi ;;
 init)
   req=false title="agent mailbox" seen=""
   while [ $# -gt 0 ]; do
@@ -752,7 +813,7 @@ send)
   [ -n "$text" ] || die "empty message body"
   ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" ||
     die "refusing to send: the body holds a private key's text (a line of its block; never put secrets in mail; to discuss a key, describe it, or send its public half)"
-  load_adapter; ad_sync; need_store
+  [ -n "$LOADED" ] || { load_adapter; ad_sync; need_store; }
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
   # sign only with the key your registry record names, so what you send verifies; a strict store refuses otherwise
@@ -782,6 +843,9 @@ send)
   used="$STATE/names/$STORE_ID/$ME"
   while { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ] &&
     grep -qxF -- "$to/$stamp-$ME-$topic.md" "$used"; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
+  # a name the store already has (another sender's whose name and topic join to it, or one this clone's leftover was
+  # moved to) gets the next second, once; a name taken then too stops the send, below
+  { [ -e "$M/inbox/$to/$stamp-$ME-$topic.md" ] || [ -L "$M/inbox/$to/$stamp-$ME-$topic.md" ]; } && { sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); }
   # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
   # or release waits for the next second after this sender's previous one in this store, so the two never tie.
   # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set
@@ -946,18 +1010,25 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
-      # every column of the row below is validated, so no header value can shift the others
-      matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
-        field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
-        basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
+      from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")
+      # every column of the row below is validated, so no header value can shift the others (PROTOCOL.md section 5). A
+      # sender that isn't a name can't be named as the signer, and an item whose first word isn't an item names none:
+      # neither counts. An item with more after its first word is read under that word, and a sent in another form
+      # (-) in delivery order (below); either is read like a header that isn't plain
+      matches "$NAME_RE" "$from" || continue
+      odd=""; matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || continue; rec="$i ?" odd=1; }
+      matches "$SENT_RE" "$sent" || { sent=- odd=1; }
+      # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
       # whose signature doesn't reads bad
       v=$(verify_sig "$tmpd/m" "$ME")
-      if ! hdr_ok "$tmpd/m"; then
+      if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
-          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
+        # (an item with more after it names no version, so it never counts as the hold or release it seems to be)
+        case "$rec" in (*" ?") kind=malformed ;; esac
       fi
       # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
       # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
@@ -965,21 +1036,29 @@ holds)
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
       [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
-        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
-      echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
+      echo "$sent $kind $rec $from $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
+  # an adapter that doesn't keep every version (or doesn't say) lists only current mail: say so, then decide as usual,
+  # since a store without history is a choice (adapters/README.md)
+  if [ "$AD_HISTORY" != full ]; then
+    if [ -z "$AD_HISTORY" ]; then h="doesn't say whether it keeps history"; else h="keeps no history"; fi
+    echo "holds: warning: the $ADAPTER adapter $h, so a hold or release that was consumed or deleted isn't seen; gate real actions with an adapter that keeps history (git)" >&2
+  fi
   # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
   # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
-  # blocks, and two releases naming different versions conflict (neither counts)
-  latest=$(echo "$records" | awk 'NF { k = $3 " " $5
-      if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
-      if ($1 < t[k] || kind[k] == "hold") next
+  # blocks, and two releases naming different versions conflict (neither counts). A record whose sent isn't in its
+  # one form (-) takes the time of the one before it from that sender for that item, in delivery order, so it counts
+  # as of then, until that sender's next record
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; s = $1; if (s == "-") s = (k in t) ? t[k] : ""
+      if (!(k in t) || s > t[k]) { t[k] = s; kind[k] = $2; v[k] = $4; last[k] = $0; next }
+      if (s < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
       if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
       if (kind[k] == "malformed") next

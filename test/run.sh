@@ -5,6 +5,8 @@
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
 set -u
+NL='
+'
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
@@ -50,7 +52,12 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
   if [ "$rc" != "$code" ]; then no "$d (exit $rc, wanted $code)" "$out"; return; fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
+  # (the check's grep step exiting above 1 crashed or failed, grep or the shell running it, which isn't the output not
+  # matching: it's reported as what it is)
+  if [ "$pat" != - ]; then printf '%s\n' "$out" | grep -Eq -- "$pat"; g=$?
+    [ "$g" -le 1 ] || { no "$d (the check's grep step failed, exit $g)" "$out"; return; }
+    [ "$g" = 0 ] || { no "$d (output didn't match /$pat/)" "$out"; return; }
+  fi
   ok "$d"
 }
 
@@ -1070,6 +1077,21 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "an AD_LEFTOVER in the environment doesn't change what a command says of its own change" 4 "written locally, not published" \
     env AD_LEFTOVER=1 PATH="$T/fast:$PATH" HOME="$W/home-xq1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
       CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send xq2 third "$T/m"
+  # nor does an exported AD_UNSTICK: a command whose own push meets a conflicting edit keeps its change and says
+  # don't resend, rather than setting it aside as an earlier command's. A fresh agent with nothing left over; the
+  # first retry's wait lets a writer edit the record the command is changing
+  rm -f "$T/store.git/hooks/pre-receive"; as xq9 setup --store "$T/store.git" --name xq9 >/dev/null
+  as xq9 register --kind t --about t --no-key >/dev/null
+  U="$T/unstick"; mkdir -p "$U"; git clone -q "$T/store.git" "$U/w"
+  git -C "$U/w" config user.email w@w; git -C "$U/w" config user.name w
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  printf '#!/bin/sh\n[ -e "%s/done" ] || { : > "%s/done"; rm -f "%s/store.git/hooks/pre-receive"\n' "$U" "$U" "$T" > "$U/sleep"
+  printf '  cd "%s/w" && git pull -q && sed -i.b "s/^about: .*/about: theirs/" mailbox/agents/xq9.md && rm -f mailbox/agents/xq9.md.b &&\n' "$U" >> "$U/sleep"
+  printf '    git commit -qam theirs && git push -q; } >/dev/null 2>&1\nexit 0\n' >> "$U/sleep"; chmod +x "$U/sleep"
+  expect "an AD_UNSTICK in the environment doesn't set a command's own change aside" 4 "written locally, not published" \
+    env AD_UNSTICK=1 PATH="$U:$PATH" HOME="$W/home-xq9" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+      CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
   # on a store with no mailbox branch yet: a first init the store won't take, then the next command
   T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
@@ -1099,6 +1121,144 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
 
+  echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
+  T="$W/stuck"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  nk=--no-key; [ -z "$SSH" ] || nk=""
+  as ga init >/dev/null; for a in ga ga-x gb; do as $a register --kind t --about t $nk >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  echo from-ga > "$T/a"; echo from-ga-x > "$T/b"
+  expect "(ga's send to gb, topic x-y1, the store won't take)" 4 "written locally, not published" fast ga send gb x-y1 "$T/a"
+  rm -f "$T/store.git/hooks/pre-receive"
+  ck=$(ls -d "$W/home-ga/.local/state/agent-mailbox/checkouts/"*-ga)
+  n=$(git -C "$ck" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-ga-x-y1\.md$')
+  # ga-x sends gb topic y1 in that same second: its message has the same file name (placed here by a store writer, as
+  # the two sends racing in one second would have it)
+  as ga-x send gb y1 "$T/b" >/dev/null
+  git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+    o=$(ls mailbox/inbox/gb/*-ga-x-y1.md) && { [ "$o" = "$n" ] || { git mv "$o" "$n" &&
+      { [ ! -f "$o.sig" ] || git mv "$o.sig" "$n.sig"; }; }; } && git commit -qm same-second && git push -q origin HEAD:main)
+  # (with an editor that fails in the environment, as one git would open: the CLI never opens one)
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "moved ${n##*/} to [0-9T]*Z-ga-x-y1\.md (published with this clone's next push): the store already had another message by that name" &&
+    ok "a leftover message whose name the store took meanwhile is published under a new one, saying so" ||
+    no "a leftover message whose name the store took wedged the clone, or wasn't renamed (exit $rc)" "$out"
+  out=$(as gb read 2>&1)
+  [ "$(printf '%s\n' "$out" | grep -c -e '^from-ga$' -e '^from-ga-x$')" = 2 ] &&
+    { [ -z "$SSH" ] || [ "$(printf '%s\n' "$out" | grep -c -e '\[verified: from ga\]$' -e '\[verified: from ga-x\]$')" = 2 ]; } &&
+    ok "and the recipient gets both messages${SSH:+, each verified}" || no "the recipient didn't get both messages" "$out"
+  out=$(as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && [ -z "$(printf '%s\n' "$out" | grep -e published -e 'set aside')" ] && ok "and the next command says nothing more" ||
+    no "the next command didn't work quietly (exit $rc)" "$out"
+  # any other conflicting leftover (here: an update to ga's record, which a store writer edited meanwhile) is set aside
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(ga's update the store won't take)" 4 "written locally, not published" fast ga update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && sed 's/^about: .*/about: theirs/' mailbox/agents/ga.md > ga.t &&
+    mv ga.t mailbox/agents/ga.md && git commit -qam edit && git push -q origin HEAD:main)
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
+    git -C "$ck" rev-parse -q --verify refs/agent-mailbox/stuck/1 >/dev/null &&
+    ok "a leftover that conflicts otherwise is set aside under refs/agent-mailbox/stuck/, saying so" ||
+    no "a conflicting leftover wedged the clone, or wasn't set aside (exit $rc)" "$out"
+  for c in list agents; do out=$(as ga $c 2>&1); rc=$?
+    { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep -e 'set aside' -e "can't update")" ] &&
+      ok "and every later command works ($c)" || no "a later command failed after a leftover was set aside ($c, exit $rc)" "$out"; done
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "and the store keeps its own version" || no "the set-aside commit reached the store" "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md)"
+  # a consume of a message the store then changed (a removal against an edit) is set aside, never moved to a new name:
+  # only a message the leftover added is
+  c1=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-x-y1\.md$' | head -n 1)")
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's consume the store won't take)" 4 "written locally, not published" fast gb consume "$c1"
+  # (as a run cut short after making the ref, before skipping the commit, would leave it)
+  git -C "$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)" update-ref refs/agent-mailbox/stuck/1 HEAD
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && printf 'edited\n' >> "mailbox/inbox/gb/$c1" && git commit -qam edit-msg && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-gb): consumed ${c1%.md}), which conflicts with the store: .*so run again the command that made it" &&
+    [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] && printf '%s\n' "$out" | grep -q -- "/$c1\$" &&
+    ok "a consume of a message the store changed is set aside, not renamed, and the message stays" ||
+    no "a consume of a message the store changed wasn't set aside, or was renamed (exit $rc)" "$out"
+  # a set-aside run cut short, before its skip, leaves a ref for the commit: a later run keeps it, adding none
+  ckb=$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)
+  [ "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/ | wc -l | tr -d ' ')" = 1 ] &&
+    ok "a run that finds a stuck ref for the commit already keeps it, adding none" ||
+    no "a set-aside commit has more than one stuck ref" "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/)"
+  # a reply quoting in full the message it consumes, left unpublished while the store loses that message (consumed from
+  # another clone, say): git takes the reply for the message renamed, and reports the conflict at the reply's path,
+  # which the store lacks. That's no name taken: the commit is set aside, never moved
+  awk 'BEGIN { for (i = 1; i <= 40; i++) print "line " i " of a message the reply quotes in full" }' > "$T/qtext"
+  as ga send gb q1 "$T/qtext" >/dev/null 2>&1
+  q=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-q1\.md$')")
+  git --git-dir="$T/store.git" show "main:mailbox/inbox/gb/$q" > "$T/qbody"
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's reply, consuming it, the store won't take)" 4 "written locally, not published" fast gb send ga re-q1 "$T/qbody" --consume "$q"
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && git rm -q "mailbox/inbox/gb/$q" "mailbox/inbox/gb/$q.sig" 2>/dev/null || git rm -q "mailbox/inbox/gb/$q"
+    git commit -qm drop-q && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] &&
+    printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-ga): re-q1)" &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/ga | grep -- '-gb-re-q1\.md$')" ] &&
+    ok "a reply quoting the message it consumes, which the store lost meanwhile, is set aside, not moved" ||
+    no "a reply quoting the message it consumes was moved, not set aside (exit $rc)" "$out"
+  # two registers of one name: the one left unpublished is set aside, never moved into agents/
+  as rr setup --store "$T/store.git" --name rr >/dev/null
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(rr's register the store won't take)" 4 "written locally, not published" fast rr register --kind t --about mine $nk
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && mkdir -p mailbox/inbox/rr && : > mailbox/inbox/rr/.keep &&
+    printf -- '---\nname: rr\nkind: t\nabout: theirs\nruns_on: \nwatch: \nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' > mailbox/agents/rr.md &&
+    git add -A && git commit -qm other-rr && git push -q origin HEAD:main)
+  out=$(as rr list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: rr registers)" &&
+    [ "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents | grep -c '^rr')" = 1 ] &&
+    [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/rr.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "a register that lost to another of the same name is set aside, not moved" ||
+    no "a register that lost to another of the same name wasn't set aside (exit $rc)" "$out$NL$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents)"
+  # an existing clone that meets a store path it can't check out (a name too long for the file system) fails, as
+  # before: it isn't taken for a clone that's up to date
+  long=$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "x"; print ".md" }')
+  echo hi | as ga send gb late - >/dev/null 2>&1
+  (cd "$T/w" && git pull -q --rebase origin main && b=$(git hash-object -w --stdin < /dev/null) &&
+    git update-index --add --cacheinfo "100644,$b,mailbox/inbox/gb/$long" && git commit -qm long && git push -q origin HEAD:main)
+  expect "a clone that can't check out the store's latest fails, rather than reading an old inbox" 1 "can't update from the store" as gb list
+  # a signed leftover moved past an unsigned message of the same name: its .sig goes with it, never staying beside the
+  # unsigned one
+  if [ -n "$SSH" ]; then
+    T="$W/stuckmix"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+    for a in gs gs-x gr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+    as gs init >/dev/null; as gs register --kind t --about t >/dev/null 2>&1
+    for a in gs-x gr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+    printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+    echo signed > "$T/a"; echo unsigned > "$T/b"
+    expect "(gs's signed send the store won't take)" 4 "written locally, not published" fast gs send gr x-z "$T/a"
+    rm -f "$T/store.git/hooks/pre-receive"
+    n=$(git -C "$(ls -d "$W/home-gs/.local/state/agent-mailbox/checkouts/"*-gs)" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-gs-x-z\.md$')
+    as gs-x send gr z "$T/b" >/dev/null 2>&1
+    git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+      o=$(ls mailbox/inbox/gr/*-gs-x-z.md) && { [ "$o" = "$n" ] || git mv "$o" "$n"; } && git commit -qm same-second && git push -q origin HEAD:main)
+    out=$(as gs list 2>&1)
+    out2=$(as gr read 2>&1)
+    printf '%s\n' "$out" | grep -q "moved ${n##*/} to " &&
+      ! git --git-dir="$T/store.git" cat-file -e "main:$n.sig" 2>/dev/null &&
+      printf '%s\n' "$out2" | grep -q "^===== $n \[unsigned\]$" && printf '%s\n' "$out2" | grep -q '\[verified: from gs\]$' &&
+      ok "a signed message moved past an unsigned one of its name takes its .sig with it" ||
+      no "a moved message's .sig stayed on the unsigned one, or didn't go with it" "$out$NL$out2$NL$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  fi
+  # a send whose file name the store already has in this second (another sender's whose name and topic join to it, or
+  # a message moved there) waits for the next second once, rather than failing (a dir store, where a file planted
+  # lands at once)
+  T="$W/taken"; mkdir -p "$T"
+  for a in da db; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+  as da init >/dev/null; for a in da db; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  s0=$(date -u +%Y%m%dT%H%M%SZ); while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.05; done
+  s1=$(date -u +%Y%m%dT%H%M%SZ); printf 'taken\n' > "$T/store/mailbox/inbox/db/$s1-da-t1.md"
+  out=$(echo hi | as da send db t1 - 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
+    [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
+    ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
@@ -1345,6 +1505,35 @@ exec "%s" "$@"
   fi ;;
 esac
 
+if [ -n "$SSH" ]; then
+echo "== setup says when pinned keys stay with the old store settings (dir)"
+T="$W/pinmove"; mkdir -p "$T"
+as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
+as pm1 register --kind t --about t >/dev/null
+as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
+echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
+expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
+  no "a re-run of setup with unchanged settings spoke of pins" "$out"
+P="$W/home-pm2/.local/state/agent-mailbox/pins"
+# the same folder, spelled with a trailing slash: other settings, which start with no pins
+expect "setup with the store written another way says the pins stay behind" 0 "pinned keys .*stay with the old store settings" \
+  as pm2 setup --store "$T/store/" --adapter dir --name pm2
+n=0; for d in "$P"/*; do [ -f "$d/pm1" ] && n=$((n+1)); done
+[ "$n" = 1 ] && ok "setup copies no pins to other settings" || no "setup copied pins to other settings" "$(ls -RA "$P")"
+out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the same settings says nothing of pins" ||
+  no "a re-run of setup with the same settings spoke of pins" "$out"
+# back to the address as first written: its pins are still there, so a key swapped in the store reads changed
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "moving from settings with no pins says nothing of pins" ||
+  no "setup spoke of pins when the old settings had none" "$out"
+ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
+  sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
+expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
+fi
+
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
@@ -1496,7 +1685,7 @@ R1="$RS/rewake/rw/r1@$(cut -d' ' -f1 "$RS/session-stores/r1")"
 mkdir -p "$RS/sessions/sub"; cp "$RS/sessions/r1" "$RS/sessions/sub/r1"
 expect "or for a session id holding a /" 0 '^$' rewake sub/r1
 expect "or for a session id of .." 0 '^$' rewake ..
-expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1
+expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 echo hi | as rx send rw rw-1 - >/dev/null 2>&1
 # a Claude Code older than 2.1.69 would run the hook as an ordinary Stop hook, so it exits at once there, mail or not
 rm -f "$R1/out"
@@ -1650,7 +1839,7 @@ a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$
     else sk "a slow version check doesn't make the guard ask for a re-arm (no jq)"; fi
   else sk "a native Claude Code is told by asking it (the stand-in didn't build)"; fi
 else sk "a native Claude Code is told by asking it (no C compiler)"; fi
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--as rw read") ok "new mail wakes the session with a count and the read command" ;;
   (*) no "new mail wakes the session with a count and the read command" "$rc $r" ;; esac
 # (the notice holds none of the store's text, file names included: they're read as mail)
@@ -1661,12 +1850,12 @@ expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd /
 # a plugin folder whose name holds a backslash sequence (\c ends echo's output in dash) still gets the whole command
 P3="$T/plug\\cache"; mkdir -p "$P3/hooks"; cp "$P/hooks/claude-rewake.sh" "$P3/hooks/"; ln -s "$ROOTDIR/bin" "$P3/bin"
 echo hi | as rx send rw rw-b - >/dev/null 2>&1
-r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh")
+r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh" AGENT_MAILBOX_REWAKE_MAX=60)
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
 expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
     no "new mail beside old wakes it with only the new" "$(cat "$R1/woke")" ;;
   (*) no "new mail beside old wakes it with only the new" "$rc $r" ;; esac
@@ -1758,7 +1947,7 @@ rm -f "$R1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session, naming the command that shows why" 2 \
-  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
+  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
 # the same error again doesn't wake it: the hook keeps retrying, quietly, and wakes for mail once it can go on
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error again doesn't wake it" ||
@@ -1778,7 +1967,7 @@ printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${
   'sed "s/{}/$n/g" "$FAKEERR" >&2; exit 1' > "$P2/bin/agent-mailbox"; chmod +x "$P2/bin/agent-mailbox"
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
 fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
-expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
+expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk AGENT_MAILBOX_REWAKE_MAX=60
 # (with a minute's limit, so the error is recorded however slow the machine: the run ends at the notice anyway)
 rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
@@ -1806,7 +1995,7 @@ case "$rc $(cat "$T/bg.out")" in (*"HTTP 404"*) no "but a different error does" 
   ("2 "*"can't go on"*) ok "but a different error does" ;; (*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;; esac
 rm -f "$R1/error"
 # a warning watch prints before its listing (a commit left from an earlier command, published) isn't counted as mail
-r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md); rc=$?
+r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20260101T000000Z-rx-fm.md &&
     ok "a warning watch prints before its listing isn't counted as mail" || no "a warning watch prints before its listing isn't counted as mail" "not recorded" ;;
   (*) no "a warning watch prints before its listing isn't counted as mail" "$rc $r" ;; esac
@@ -1942,11 +2131,11 @@ kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r6@$S6/pid" 2>/dev/null)" 2>/dev/null
 # later keeps it)
 mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r5"
 printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r5"
-rm -f "$RS/session-stores/r5"; rewake r5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
+rm -f "$RS/session-stores/r5"; rewake r5 AGENT_MAILBOX_REWAKE_MAX=5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
 expect "a session an older CLI registered keeps its store when another is added with --also" 0 - \
   test "$(grep -vc ' -$' "$RS/session-stores/r5" 2>/dev/null)" = 2
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
-reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
+reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
 expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
@@ -1955,7 +2144,7 @@ n=0 lost=""; while [ $n -lt 5 ]; do rm -f "$RS/session-stores/r8"
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--config "*second*" --as rw read")
   ok "mail on the second store wakes the session with that store's read command" ;;
   (*) no "mail on the second store wakes the session with that store's read command" "$rc $r" ;; esac
@@ -1964,7 +2153,7 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
 [ "$(printf '%s\n' "$r" | grep -c 'new mail')" = 1 ] && ok "mail it woke for on one store before adding another doesn't wake it again" ||
   no "mail it woke for on one store before adding another doesn't wake it again" "$r"
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail on the first store wakes it, and mail it woke for on the other doesn't" ||
@@ -1976,7 +2165,7 @@ op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null)
   no "and the other store's run is stopped with it" "$(ps -o pid=,args= -p "$op")"
 # mail on both at once: all of it is passed on, in this wake or, if one store's run was stopped first, the next
 echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9)"
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60)"
 [ "$rc" = 2 ] && woken rx-2.md && woken rz-2.md && ok "mail on both stores at once is all passed on" ||
   no "mail on both stores at once is all passed on" "$rc $r"
 expect "with no mail on either it wakes once at the day's limit" 2 "daily limit" rewake r9
@@ -2081,12 +2270,12 @@ if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2
   kill -TERM "$hp" 2>/dev/null; wait "$bg"; rc=$?
   if [ "$rc" = 2 ] && grep -q "new mail" "$T/bg.out" && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke"; then
     ok "mail found as the hook stops is passed on, or wakes the next run"
-  else r=$(rewake r9); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
+  else r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail found as the hook stops is passed on, or wakes the next run" || no "mail found as the hook stops is passed on, or wakes the next run" "$rc $r"; fi
 else no "mail found as the hook stops is passed on, or wakes the next run" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 # a store whose watcher can't go on says so once; the other store's mail still wakes the session after that
 mv "$C2" "$C2.off"
-expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9
+expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9 AGENT_MAILBOX_REWAKE_MAX=60
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >/dev/null 2>&1
   n=0; while [ $n -lt 20 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; wait "$bg"; rc=$?
@@ -2508,9 +2697,9 @@ echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
 for x in f1 f2 f3 g p; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 echo h | as k3 send k1 hh - --hold "h#1 v1" >/dev/null
 # sg <sender> <file name> <topic> <hold or release line> [<extra header lines>]: a message to k1, signed with that
-# sender's own key, placed in the store as a writer could
-sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
-  "$1" "$3" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
+# sender's own key, placed in the store as a writer could; sent is SGSENT, or a time far ahead
+sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: %s\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
+  "$1" "$3" "${SGSENT:-2999-01-01T00:01:00Z}" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
   ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-$1/.config/agent-mailbox/keys/$1" "$T/sg/$2" && wr cp "$T/sg/$2" "$T/sg/$2.sig" mailbox/inbox/k1/; }
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
@@ -2542,6 +2731,21 @@ sg k3 29990101T000100Z-k3-rq1.md rq1 "release: q#1 v1"
 sg k3 29990101T000100Z-k3-rq2.md rq2 "release: q#1 v1" "needs: none
 "
 expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a record from k3 whose header isn't plain" as k1 holds "q#1" --version v1
+# a signed hold whose sent, or item, doesn't parse blocks over the sender's older release, rather than being skipped
+for x in s t u w; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
+SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hs.md hs "hold: s#1 v1"
+expect "a signed hold whose sent has a fraction of a second blocks over an older release" 5 "s#1 has a record from k3" as k1 holds "s#1" --version v1
+sg k3 29990101T000100Z-k3-ht.md ht "hold: t#1 v1 "
+expect "a signed hold whose item doesn't parse (a trailing space) blocks" 5 "t#1 has a record from k3" as k1 holds "t#1" --version v1
+# it's placed in delivery order, so it counts until that sender's next record
+SGSENT=2999-01-02T00:00:00Z sg k3 29990102T000000Z-k3-rs2.md rs2 "release: s#1 v1"
+expect "a later release from the same sender clears an odd-sent hold" 0 "s#1 released by k3" as k1 holds "s#1" --version v1
+# one whose item has no valid first word names no item: it doesn't count, and doesn't block other items
+sg k3 29990101T000100Z-k3-hw.md hw "hold: %w#1 v1"
+expect "a record whose item has no valid first word doesn't block other items" 0 "w#1 released by k3" as k1 holds "w#1" --version v1
+# one whose signature doesn't check out reads bad, and doesn't count in a strict store
+wr sh -c "printf -- '---\nprotocol: 1\nfrom: k3\nto: k1\ntopic: hu\ncontext: general\nsent: 2026-11-12T23:59:59.5Z\nin_reply_to: none\nneeds: none\nhold: u#1 v1\n---\n\nx\n' > mailbox/inbox/k1/20261112T235959Z-k3-hu.md && echo junk > mailbox/inbox/k1/20261112T235959Z-k3-hu.md.sig"
+expect "an unparseable hold whose signature doesn't check out doesn't count" 0 "u#1 released by k3" as k1 holds "u#1" --version v1
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1

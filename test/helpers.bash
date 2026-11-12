@@ -26,7 +26,11 @@ expect() {
   if [ "$status" != "$code" ]; then
     printf 'exit %s, wanted %s\n%s\n' "$status" "$code" "$output" >&2; return 1
   fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$output" | grep -Eq -- "$pat"; then
-    printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1
+  # (the check's grep step exiting above 1 crashed or failed, grep or the shell running it, which isn't the output not
+  # matching: it's reported as what it is)
+  if [ "$pat" != - ]; then
+    local g=0; printf '%s\n' "$output" | grep -Eq -- "$pat" || g=$?
+    if [ "$g" -gt 1 ]; then printf "%s (the check's grep step failed, exit %s)\n%s\n" "${BATS_TEST_DESCRIPTION:-expect}" "$g" "$output" >&2; return 1; fi
+    if [ "$g" = 1 ]; then printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1; fi
   fi
 }
