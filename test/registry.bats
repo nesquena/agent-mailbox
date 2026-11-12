@@ -105,6 +105,26 @@ setup_file() {
   ! as m1 agents --names --human bob | grep -q m4 || fails "a retired agent was listed" "$(as m1 agents --names --human bob)"
 }
 
+@test "agents refuses a filter value that isn't one name, and an unknown option as such" {
+  mkdir -p "$T/globdir"; : > "$T/globdir/ops"; : > "$T/globdir/dev"
+  ( cd "$T/globdir" && expect 1 "--group takes one name" as m1 agents --names --group 'o*' )
+  expect 1 "--group takes one name" as m1 agents --names --group "ops dev"
+  expect 1 "--human takes one name" as m1 agents --human "Nes Q"
+  expect 1 "unknown option bogus" as m1 agents bogus
+}
+
+@test "setup drops a config's human that isn't a name, with a warning, rather than refusing a flag not given" {
+  as m7 setup --store "$T/store" --adapter dir --name m7 >/dev/null
+  printf 'human = Nathan Q\n' >> "$T/home-m7/.config/agent-mailbox/config"
+  expect 0 "dropping the config's human 'Nathan Q'" as m7 setup --store "$T/store" --adapter dir
+  ! grep -q '^human' "$T/home-m7/.config/agent-mailbox/config" || fails "the bad human was kept" "$(cat "$T/home-m7/.config/agent-mailbox/config")"
+}
+
+@test "--groups of only spaces is refused, not taken for clearing" {
+  expect 1 "--groups takes names separated by spaces" as m3 update --groups "   "
+  expect 0 "^groups: camanji$" cat "$RM/m3.md"
+}
+
 @test "in a store that doesn't require signatures, an unsigned message's sender line is marked, never yours" {
   for a in m2 m3 m6; do echo "hi from $a" | as $a send m1 "meta-$a" - >/dev/null 2>&1; done
   # a message whose text imitates the CLI's lines
@@ -152,6 +172,14 @@ setup_file() {
     block st-other <<< "$output" | grep -qx '==== sender: s3 says another human (bob)' || fails "a verified sender line is wrong" "$output"
 }
 
+@test "a reader with no human sees the sender's human plainly" {
+  need_sig
+  as s6 setup --store "$T/strict" --adapter dir --name s6 >/dev/null; as s6 register --kind t --about t >/dev/null
+  echo hi | as s2 send s6 st-plain - >/dev/null
+  run as s6 read
+  block st-plain <<< "$output" | grep -qx '==== sender: s2 says human nesq; env cloud' || fails "the line for a reader with no human is wrong" "$output"
+}
+
 @test "a bad message gets no sender line" {
   need_sig
   f=$(ls "$T/strict/mailbox/inbox/s1/"*-s2-st-bad.md); echo tampered >> "$f"
@@ -196,4 +224,26 @@ setup_file() {
   run as s1 read
   block st-ok <<< "$output" | grep -q '\[changed\]$' || fails "the message didn't read changed" "$output"
   ! block st-ok <<< "$output" | grep -q '^==== sender:' || fails "a changed message got a sender line" "$output"
+}
+
+@test "your own record edited by a store writer can't make a sender yours" {
+  need_sig
+  as s5 setup --store "$T/strict" --adapter dir --name s5 >/dev/null; as s5 register --kind t --about t --human bob >/dev/null
+  echo hi | as s5 send s1 st-s5 - >/dev/null
+  run as s1 read
+  block st-s5 <<< "$output" | grep -qx '==== sender: s5 says another human (bob)' || fails "before the edit the line is wrong" "$output"
+  r="$T/strict/mailbox/agents/s1.md"; sed 's/^human: nesq$/human: bob/' "$r" > "$r.t" && mv "$r.t" "$r"
+  run as s1 read
+  ! block st-s5 <<< "$output" | grep -q '(yours)' || fails "an edited own record made a sender yours" "$output"
+  block st-s5 <<< "$output" | grep -qx '==== sender: s5 says human bob' || fails "the line after the edit is wrong" "$output"
+}
+
+@test "a sender's record edited by a store writer shows no claims, and is never yours" {
+  need_sig
+  r="$T/strict/mailbox/agents/s5.md"; sed 's/^human: bob$/human: nesq/' "$r" > "$r.t" && mv "$r.t" "$r"
+  printf 'human = nesq\n' >> "$T/home-s1/.config/agent-mailbox/config"
+  run as s1 read
+  ! block st-s5 <<< "$output" | grep -q '(yours)' || fails "an edited sender record was shown as yours" "$output"
+  block st-s5 <<< "$output" | grep -qx "==== sender: s5's record isn't signed by its key, so its human, env and groups aren't shown" ||
+    fails "an edited sender record's claims were shown" "$output"
 }
