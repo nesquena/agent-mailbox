@@ -22,6 +22,8 @@
 #   names (GIT_DIR, as in a git hook), so every file is checked out exactly as stored and nothing the store names is
 #   contacted.
 
+# every version of every file is in the store's history, so holds sees consumed mail (adapters/README.md)
+AD_HISTORY=full
 AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 # git's own terminal prompt is off (GIT_TERMINAL_PROMPT=0), and so is Git Credential Manager's (GCM_INTERACTIVE=never),
 # so a credential that needs one fails at once with git's own message. An askpass program stays on (GIT_ASKPASS,

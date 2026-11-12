@@ -1500,6 +1500,35 @@ exec "%s" "$@"
   fi ;;
 esac
 
+if [ -n "$SSH" ]; then
+echo "== setup says when pinned keys stay with the old store settings (dir)"
+T="$W/pinmove"; mkdir -p "$T"
+as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
+as pm1 register --kind t --about t >/dev/null
+as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
+echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
+expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
+  no "a re-run of setup with unchanged settings spoke of pins" "$out"
+P="$W/home-pm2/.local/state/agent-mailbox/pins"
+# the same folder, spelled with a trailing slash: other settings, which start with no pins
+expect "setup with the store written another way says the pins stay behind" 0 "pinned keys .*stay with the old store settings" \
+  as pm2 setup --store "$T/store/" --adapter dir --name pm2
+n=0; for d in "$P"/*; do [ -f "$d/pm1" ] && n=$((n+1)); done
+[ "$n" = 1 ] && ok "setup copies no pins to other settings" || no "setup copied pins to other settings" "$(ls -RA "$P")"
+out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the same settings says nothing of pins" ||
+  no "a re-run of setup with the same settings spoke of pins" "$out"
+# back to the address as first written: its pins are still there, so a key swapped in the store reads changed
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "moving from settings with no pins says nothing of pins" ||
+  no "setup spoke of pins when the old settings had none" "$out"
+ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
+  sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
+expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
+fi
+
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null

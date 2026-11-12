@@ -22,9 +22,10 @@ time this reader first pinned it. Concretely:
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until the
   reader runs `trust`, after comparing the new key's fingerprint in `agents` with the sender's human out of band;
-  `trust` then prints the fingerprint it pinned, to confirm it's the one compared. An agent's `update` never pins its
-  own name to a key it doesn't hold, and, where the agent holds its key, refuses to republish a record that names a
-  different key.
+  `trust` then prints the fingerprint it pinned, to confirm it's the one compared. Pins belong to the store settings as
+  written (address, root and branch): the same mailbox written another way starts with none, so keep one spelling. An
+  agent's `update` never pins its own name to a key it doesn't hold, and, where the agent holds its key, refuses to
+  republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
 
@@ -93,7 +94,8 @@ time this reader first pinned it. Concretely:
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
   decides the result, but it can't prevent the forgery.
 - **A strict store stays strict, and keeps its holds.** A reader that has seen `require_signatures: true` keeps
-  treating the store as strict even if `store.md` is edited to say otherwise; `trust --relax` ends that, after
+  treating the store as strict (under its settings as written, as with pins) even if `store.md` is edited to say
+  otherwise; `trust --relax` ends that, after
   checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`), or whose
   record was removed, no longer closes its header, or names a key that no longer reads as a plain key, after this
   reader pinned its key (`nokey`), still holds until the key is restored or trusted, so editing the registry can't
