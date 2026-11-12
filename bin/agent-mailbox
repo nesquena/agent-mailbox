@@ -499,7 +499,17 @@ setup)
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
 }")"
-  printf 'wrote %s\n' "$CONFIG" ;;
+  printf 'wrote %s\n' "$CONFIG"
+  # pinned keys (and a strict store's pin) are kept under the store's id: when the store, root or branch changes, they
+  # go along to the new id, never replacing a pin already there
+  if [ -n "$STORE" ]; then old=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha); new=$(printf '%s' "$store|${root:-mailbox}|${branch:-main}" | sha)
+    if [ "$old" != "$new" ] && [ -d "$STATE/pins/$old" ]; then mkdir -p "$STATE/pins/$new" || die "can't create $STATE/pins/$new"
+      for f in "$STATE/pins/$old"/* "$STATE/pins/$old"/.strict; do
+        [ -f "$f" ] && [ ! -e "$STATE/pins/$new/${f##*/}" ] || continue; cp "$f" "$STATE/pins/$new/" || die "can't copy $f"
+      done
+      echo "kept your pinned keys for the new store settings"
+    fi
+  fi ;;
 init)
   req=false title="agent mailbox" seen=""
   while [ $# -gt 0 ]; do

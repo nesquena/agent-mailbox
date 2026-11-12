@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`setup` keeps your pinned keys when the store's address changes.** Re-running `setup` with another store, root
+  or branch now carries the keys you've pinned (and a strict store's pin) over to the new settings, and says so.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.

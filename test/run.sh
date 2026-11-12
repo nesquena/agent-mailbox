@@ -54,7 +54,10 @@ for AD in $ADAPTERS; do
   echo "== adapter: $AD (shell: $SH)"
   T="$W/$AD"; mkdir -p "$T"
   if [ "$AD" = git ]; then git init -q --bare "$T/store.git"; STORE="$T/store.git"; else STORE="$T/store"; fi
-  for a in alice bob carol; do as $a setup --store "$STORE" --adapter "$AD" --name $a >/dev/null; done
+  # (each pass is a new mailbox under the same names, and setup carries pinned keys along to a new store: each starts
+  # without the last pass's pins)
+  for a in alice bob carol; do rm -rf "$W/home-$a/.local/state/agent-mailbox/pins"
+    as $a setup --store "$STORE" --adapter "$AD" --name $a >/dev/null; done
 
   expect "a command before init explains what to do" 1 "init" as alice agents
   expect "init creates the mailbox" 0 "initialized" as alice init
@@ -1340,6 +1343,27 @@ exec "%s" "$@"
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
   fi ;;
 esac
+
+if [ -n "$SSH" ]; then
+echo "== setup keeps your pinned keys when the store's address changes (dir)"
+T="$W/pinmove"; mkdir -p "$T"
+as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
+as pm1 register --kind t --about t >/dev/null
+as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
+echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
+expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
+P="$W/home-pm2/.local/state/agent-mailbox/pins"
+# the same folder, spelled with a trailing slash: another store id
+expect "setup with the store spelled another way keeps the pins" 0 "^kept your pinned keys for the new store settings$" \
+  as pm2 setup --store "$T/store/" --adapter dir --name pm2
+n=0; for d in "$P"/*; do [ -f "$d/pm1" ] && [ -f "$d/.strict" ] && n=$((n+1)); done
+[ "$n" = 2 ] && ok "both store ids hold the sender's pin and the strict pin" || no "the pins weren't copied" "$(ls -RA "$P")"
+ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
+  sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
+expect "a sender's key swapped in the store still reads as changed" 6 "^changed$" as pm2 verify "$f"
+out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep kept)" ] && ok "a re-run of setup with the same settings says nothing of pins" || no "a re-run of setup copied pins" "$out"
+fi
 
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
