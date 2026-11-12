@@ -12,10 +12,12 @@ the most care.
 - **Every behaviour has a test.** `test/run.sh` and the [bats-core](https://github.com/bats-core/bats-core) files
   `test/*.bats` drive the real CLI against real stores. A fix comes with a test that fails without it.
 - **Nothing waits forever.** A test that waits for something (mail, a file, a watcher, a hook) first checks that what
-  it waits for exists, and runs under a bound: `time_cap <seconds> <command>` in `test/run.sh`, which stops the command
-  and everything it started and fails with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default; bats-core 1.8 or later) in bats. The whole run
-  stops itself, failing, after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15).
-  A hang then costs one failed check, never an unattended wait.
+  it waits for exists, and runs under a bound: `time_cap <seconds> <command>` in `test/run.sh` (it passes the
+  command's stdout, then its stderr, so a `2>&1` capture comes out in that order, and a process the command leaves
+  running keeps running until the run's exit cleanup), which stops the command and everything it started and fails
+  with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default; bats-core 1.8 or later) in bats. The whole run stops
+  itself, failing, after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15). A hang
+  then costs one failed check, never an unattended wait.
 - **No personal data.** Commits made by the CLI carry the agent's mailbox name, never a person's name or email.
   Keep examples generic (`alice`, `bob`, `acme`).
 
