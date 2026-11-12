@@ -3,6 +3,9 @@
 # inbox, so consumed releases are forgotten. Good for local setups and tests; use git when agents span machines.
 # Contract: adapters/README.md.
 
+# only the current files, so holds warns that it can't see consumed mail
+AD_HISTORY=current
+
 ad_open() {
   # a relative store path starting with '-' would be read as an option by mkdir and find
   case "$STORE" in (-*) AD_DIR="./$STORE" ;; (*) AD_DIR="$STORE" ;; esac

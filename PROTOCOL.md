@@ -91,7 +91,7 @@ from: <sender name>
 to: <recipient name>           must equal the inbox it sits in
 topic: <slug>                  ^[a-z0-9][a-z0-9.-]{0,62}$; one topic per message
 context: <slug>                groups a thread, e.g. a project; "general" when none; replies keep it
-sent: <ISO 8601 UTC>
+sent: YYYY-MM-DDThh:mm:ssZ    UTC, to the second, in exactly this form (so text order is time order)
 in_reply_to: <id>.md | none
 needs: <a few words> | none    what the sender wants back
 hold: <item> <version>         optional; at most one of hold or release
@@ -136,12 +136,15 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   may proceed only if every sender's latest record is a `release` naming the version about to be acted on.
 - **Reading a record:** a hold or release is read by its first plain `hold:` line (or, without one, its first plain
   `release:` line) and its first plain `from:`, `to:` and `sent:` lines, so a header naming several items or times is
-  placed by the first. A header with no plain `hold:` or `release:` line, or no plain `from:` or `sent:` line (one
-  spelled `Hold:`, say), isn't read as a record; one with no plain `to:` reads `bad`. A record whose header holds
-  other lines that aren't plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a
-  sender this reader has pinned), blocks that item, as a conflict does, until that sender's next record. One whose
-  signature doesn't check out reads `bad`, and counts only as unsigned mail does: as the hold or release it names
-  where signatures aren't required, and not at all where they are.
+  placed by the first. A header with no plain `hold:` or `release:` line, or no plain `from:` line (one spelled `Hold:`,
+  say), isn't read as a record; one with no plain `to:` reads `bad`. A record whose header holds other lines that aren't
+  plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a sender this reader has
+  pinned), blocks that item, as a conflict does, until that sender's next record. One whose signature doesn't check out
+  reads `bad`, and counts only as unsigned mail does: as the hold or release it names where signatures aren't required,
+  and not at all where they are. A record whose `sent` is missing or isn't in the one form section 5 gives, or whose
+  value isn't exactly `<item> <version>` but whose text up to the first space is a valid `<item>`, is read the same way,
+  under that item and placed in delivery order: it blocks that item until that sender's next record with a later `sent`.
+  One whose `from` isn't a valid name, or whose text up to the first space isn't a valid `<item>`, doesn't count.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history

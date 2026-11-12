@@ -49,8 +49,9 @@ NS=agent-mailbox
 # (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
 AD_LEFTOVER=
 # (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
-# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new)
-AD_DIR= AD_PUBLISHED= AD_UNCHANGED=
+# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new; AD_HISTORY, set
+# when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
@@ -499,7 +500,14 @@ setup)
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
 }")"
-  printf 'wrote %s\n' "$CONFIG" ;;
+  printf 'wrote %s\n' "$CONFIG"
+  # pinned keys (and a strict store's pin) belong to the store's settings as written: new settings, even the same
+  # mailbox spelled another way, start with none, so say so when the old settings had some (setup can't tell a
+  # re-spelled address from another mailbox, so it carries nothing over)
+  if [ -n "$STORE" ] && [ "$STORE|$ROOT|$BRANCH" != "$store|${root:-mailbox}|${branch:-main}" ] &&
+    [ -n "$(ls -A "$STATE/pins/$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)" 2>/dev/null)" ]; then
+    warn "your pinned keys (and a strict store's pin) stay with the old store settings; for the same mailbox, keep its address as first written"
+  fi ;;
 init)
   req=false title="agent mailbox" seen=""
   while [ $# -gt 0 ]; do
@@ -883,18 +891,25 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
-      # every column of the row below is validated, so no header value can shift the others
-      matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
-        field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
-        basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
+      from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")
+      # every column of the row below is validated, so no header value can shift the others (PROTOCOL.md section 5). A
+      # sender that isn't a name can't be named as the signer, and an item whose first word isn't an item names none:
+      # neither counts. An item with more after its first word is read under that word, and a sent in another form
+      # (-) in delivery order (below); either is read like a header that isn't plain
+      matches "$NAME_RE" "$from" || continue
+      odd=""; matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || continue; rec="$i ?" odd=1; }
+      matches "$SENT_RE" "$sent" || { sent=- odd=1; }
+      # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
       # whose signature doesn't reads bad
       v=$(verify_sig "$tmpd/m" "$ME")
-      if ! hdr_ok "$tmpd/m"; then
+      if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
-          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
+        # (an item with more after it names no version, so it never counts as the hold or release it seems to be)
+        case "$rec" in (*" ?") kind=malformed ;; esac
       fi
       # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
       # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
@@ -902,21 +917,29 @@ holds)
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
       [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
-        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
-      echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
+      echo "$sent $kind $rec $from $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
+  # an adapter that doesn't keep every version (or doesn't say) lists only current mail: say so, then decide as usual,
+  # since a store without history is a choice (adapters/README.md)
+  if [ "$AD_HISTORY" != full ]; then
+    if [ -z "$AD_HISTORY" ]; then h="doesn't say whether it keeps history"; else h="keeps no history"; fi
+    echo "holds: warning: the $ADAPTER adapter $h, so a hold or release that was consumed or deleted isn't seen; gate real actions with an adapter that keeps history (git)" >&2
+  fi
   # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
   # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
-  # blocks, and two releases naming different versions conflict (neither counts)
-  latest=$(echo "$records" | awk 'NF { k = $3 " " $5
-      if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
-      if ($1 < t[k] || kind[k] == "hold") next
+  # blocks, and two releases naming different versions conflict (neither counts). A record whose sent isn't in its
+  # one form (-) takes the time of the one before it from that sender for that item, in delivery order, so it counts
+  # as of then, until that sender's next record
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; s = $1; if (s == "-") s = (k in t) ? t[k] : ""
+      if (!(k in t) || s > t[k]) { t[k] = s; kind[k] = $2; v[k] = $4; last[k] = $0; next }
+      if (s < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
       if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
       if (kind[k] == "malformed") next
