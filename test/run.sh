@@ -1112,7 +1112,8 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
     o=$(ls mailbox/inbox/gb/*-ga-x-y1.md) && { [ "$o" = "$n" ] || { git mv "$o" "$n" &&
       { [ ! -f "$o.sig" ] || git mv "$o.sig" "$n.sig"; }; }; } && git commit -qm same-second && git push -q origin HEAD:main)
-  out=$(as ga list 2>&1); rc=$?
+  # (with an editor that fails in the environment, as one git would open: the CLI never opens one)
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
   [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "published ${n##*/} as [0-9T]*Z-ga-x-y1\.md: the store already had another message by that name" &&
     ok "a leftover message whose name the store took meanwhile is published under a new one, saying so" ||
     no "a leftover message whose name the store took wedged the clone, or wasn't renamed (exit $rc)" "$out"
@@ -1129,8 +1130,8 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   rm -f "$T/store.git/hooks/pre-receive"
   (cd "$T/w" && git pull -q --rebase origin main && sed 's/^about: .*/about: theirs/' mailbox/agents/ga.md > ga.t &&
     mv ga.t mailbox/agents/ga.md && git commit -qam edit && git push -q origin HEAD:main)
-  out=$(as ga list 2>&1); rc=$?
-  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: .*refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: what it held isn't published, so send again what it held (it's kept as refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
     git -C "$ck" rev-parse -q --verify refs/agent-mailbox/stuck/1 >/dev/null &&
     ok "a leftover that conflicts otherwise is set aside under refs/agent-mailbox/stuck/, saying so" ||
     no "a conflicting leftover wedged the clone, or wasn't set aside (exit $rc)" "$out"
@@ -1139,6 +1140,29 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
       ok "and every later command works ($c)" || no "a later command failed after a leftover was set aside ($c, exit $rc)" "$out"; done
   [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md | sed -n 's/^about: //p')" = theirs ] &&
     ok "and the store keeps its own version" || no "the set-aside commit reached the store" "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md)"
+  # a consume of a message the store then changed (a removal against an edit) is set aside, never moved to a new name:
+  # only a message the leftover added is
+  c1=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-x-y1\.md$' | head -n 1)")
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's consume the store won't take)" 4 "written locally, not published" fast gb consume "$c1"
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && printf 'edited\n' >> "mailbox/inbox/gb/$c1" && git commit -qam edit-msg && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-gb): consumed ${c1%.md}), which conflicts with the store: .*so send again what it held" &&
+    [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] && printf '%s\n' "$out" | grep -q -- "/$c1\$" &&
+    ok "a consume of a message the store changed is set aside, not renamed, and the message stays" ||
+    no "a consume of a message the store changed wasn't set aside, or was renamed (exit $rc)" "$out"
+  # a set-aside run cut short, before its skip, leaves a ref for the commit: a later run keeps it, adding none
+  ckb=$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)
+  [ "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/ | wc -l | tr -d ' ')" = 1 ] &&
+    ok "(one stuck ref for it)" || no "a set-aside commit has more than one stuck ref" "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/)"
+  # an existing clone that meets a store path it can't check out (a name too long for the file system) fails, as
+  # before: it isn't taken for a clone that's up to date
+  long=$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "x"; print ".md" }')
+  echo hi | as ga send gb late - >/dev/null 2>&1
+  (cd "$T/w" && git pull -q --rebase origin main && b=$(git hash-object -w --stdin < /dev/null) &&
+    git update-index --add --cacheinfo "100644,$b,mailbox/inbox/gb/$long" && git commit -qm long && git push -q origin HEAD:main)
+  expect "a clone that can't check out the store's latest fails, rather than reading an old inbox" 1 "can't update from the store" as gb list
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

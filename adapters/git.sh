@@ -30,7 +30,7 @@ AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 # ceiling: other prompts still wait until someone answers: an askpass program that opens a dialog; a credential helper
 # that prompts on its own (after a git upgrade, macOS's git-credential-osxkeychain can make Keychain ask once to let the
 # new helper in); and, for an SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
-ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -c submodule.recurse=false -c core.hooksPath=/dev/null \
+ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_EDITOR=: git -c submodule.recurse=false -c core.hooksPath=/dev/null \
   -c core.fsmonitor= "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
@@ -193,19 +193,25 @@ ad_pull() {
 # can't wedge the clone. A message such a commit added, whose name the store now has for another message (two senders
 # whose name and topic join to one file name, in one second), is moved to a new stamp, with its .sig: a signature
 # covers the bytes, not the name. Any other conflicting commit is set aside under refs/agent-mailbox/stuck/<n> in the
-# clone, and skipped. Each says so, once. Status 1 leaves the rebase to be aborted, as before
-ad_unstick() { k=0 rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
+# clone (one ref per commit, kept if a run cut short made it already), and skipped. What it did is said once the rebase
+# is done, and only then. Status 1 (a rebase that failed without stopping, or that didn't end on the store) leaves it
+# to be aborted, as before
+ad_unstick() { k=0 said="" rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
+  [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ] || return 1
   while [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; do
     k=$((k+1)); [ $k -le 50 ] || return 1
     c=$(ad_git rev-parse -q --verify REBASE_HEAD) || return 1
     u=$(ad_git -c core.quotePath=false diff --name-only --diff-filter=U); [ -n "$u" ] || return 1
-    if ad_restamp; then ad_git -c core.editor=: rebase --continue >/dev/null 2>&1 || :
-    else n=1; while ad_git rev-parse -q --verify "refs/agent-mailbox/stuck/$n" >/dev/null; do n=$((n+1)); done
-      ad_git update-ref "refs/agent-mailbox/stuck/$n" "$c" || return 1
-      warn "set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published (it's kept as refs/agent-mailbox/stuck/$n in $AD_DIR); this clone goes on from the store"
+    if ad_restamp; then ad_git rebase --continue >/dev/null 2>&1 || :
+    else ref=$(ad_git for-each-ref --format='%(objectname) %(refname)' refs/agent-mailbox/stuck/ | awk -v c="$c" '$1 == c { print $2; exit }')
+      if [ -z "$ref" ]; then n=1; while ad_git rev-parse -q --verify "refs/agent-mailbox/stuck/$n" >/dev/null; do n=$((n+1)); done
+        ref="refs/agent-mailbox/stuck/$n"; ad_git update-ref "$ref" "$c" || return 1; fi
+      said="$said${NL}set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published, so send again what it held (it's kept as $ref in $AD_DIR); this clone goes on from the store"
       ad_git rebase --skip >/dev/null 2>&1 || :
     fi
-  done; }
+  done
+  ad_git merge-base --is-ancestor "origin/$BRANCH" HEAD || return 1
+  printf '%s\n' "$said" | while IFS= read -r w; do [ -z "$w" ] || warn "$w"; done; }
 # ad_restamp: (for ad_unstick) resolve the stopped commit's conflicts when each is a message that commit added, under a
 # name the store took meanwhile, by moving it (and its .sig) to the next free stamp; status 1 when any isn't
 ad_restamp() { ms=""
@@ -230,7 +236,7 @@ EOF
       else ad_git rm -q -f --cached --ignore-unmatch -- "$f" >/dev/null || return 1; rm -f "$AD_DIR/$f"; fi
     done
     ad_git add -f -- "$@" || return 1
-    warn "published ${m##*/} as ${nm##*/}: the store already had another message by that name"
+    said="$said${NL}published ${m##*/} as ${nm##*/}: the store already had another message by that name"
   done
   [ -z "$(ad_git diff --name-only --diff-filter=U)" ]; }
 
