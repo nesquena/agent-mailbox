@@ -17,10 +17,12 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+# (every cleanup below stops what names this folder, so a run that couldn't make it stops here, before any of them)
+[ -n "$W" ] && [ -d "$W" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
-procs_naming() { ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
+procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
@@ -219,6 +221,13 @@ TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" >/dev/null 2>&1
 [ -d "$W/grep3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
   no "the sweep removed a folder a live process names"
 kill_tree "$lp"; wait "$lp" 2>/dev/null
+# a run that can't make its folder (TMPDIR missing) stops at once, before anything that stops processes; and an empty
+# name matches no process, so no cleanup can reach beyond the run
+{ sed -n '1,/^# (end of the run.s watchdog/p' "$0"; echo 'echo started'; } > "$W/nodir.sh"
+out=$(TMPDIR="$W/missing" time_cap 30 "$SH" "$W/nodir.sh" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL can't make the run's folder" && ! printf '%s\n' "$out" | grep -qx started &&
+  ok "a run that can't make its folder stops before it starts" || no "a run without its folder went on (exit $rc)" "$out"
+[ -z "$(procs_naming "")" ] && ok "an empty name matches no process" || no "procs_naming \"\" matched processes" "$(procs_naming "" | head -3)"
 # time_cap with no stdin (fd 0 closed) still runs the command
 out=$(time_cap 5 sh -c 'echo ran' <&- 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = ran ] && ok "time_cap runs a command when its own stdin is closed" || no "time_cap failed with stdin closed (exit $rc)" "$out"
@@ -1950,7 +1959,7 @@ expect "a hook Claude Code waited for at this prompt steps aside the next time" 
 expect "leaving the guard a note" 0 - grep -qx p-7 "$R1/declined"
 if command -v node >/dev/null 2>&1; then
   # an npm install runs under node, and renames its process to claude, so without AI_AGENT nothing tells its version
-  CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc"
+  CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; mkdir -p "$CCD/cc"
   printf '%s\n' "process.title = 'claude'; if (process.argv.includes('--version')) { console.log('2.1.80 (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
@@ -1963,7 +1972,8 @@ if command -v node >/dev/null 2>&1; then
 else sk "an npm install that doesn't say its version is left to the guard (no node)"; fi
 CC=$(command -v cc || command -v gcc || command -v clang)
 if [ -n "$CC" ]; then
-  [ -n "$CCD" ] || CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc" "$CCD/claude/versions"
+  [ -n "$CCD" ] || { CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; }
+  mkdir -p "$CCD/cc" "$CCD/claude/versions"
   # (with this stop's prompt id, PRID, when set)
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
     'printf '"'"'{"session_id":"r1","prompt_id":"%s"}'"'"' "${PRID:-}" | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' \
