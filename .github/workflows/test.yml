@@ -85,6 +85,14 @@ jobs:
       - name: Install dash and zsh (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get -o Acquire::Retries=3 update -q && sudo apt-get -o Acquire::Retries=3 install -y -q dash zsh
+      # bats-core runs test/*.bats; pinned to a commit, as the actions are
+      - name: Install bats-core 1.14.0
+        run: |
+          git init -q "$RUNNER_TEMP/bats-core"
+          git -C "$RUNNER_TEMP/bats-core" fetch -q --depth 1 https://github.com/bats-core/bats-core.git eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
+          git -C "$RUNNER_TEMP/bats-core" checkout -q FETCH_HEAD
+          "$RUNNER_TEMP/bats-core/install.sh" "$RUNNER_TEMP/bats"
+          echo "$RUNNER_TEMP/bats/bin" >> "$GITHUB_PATH"
       - name: Parse under every available shell
         run: |
           for s in sh dash bash zsh; do
@@ -95,7 +103,7 @@ jobs:
             echo "$s ok"
           done
       - name: Test suite (${{ matrix.shell }})
-        run: REQUIRE_SSH=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh
+        run: REQUIRE_SSH=1 REQUIRE_BATS=1 TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/run.sh
 
   # the one check a branch rule requires: it passes at once for a prose-only change, and otherwise only when every test
   # job passed
