@@ -75,7 +75,8 @@ registered: <ISO 8601 UTC>
   up to 16 of them. A value that doesn't is read as absent, never as an error. `human` is a handle, not an email or a
   full name. `env` is a free word; the specific place stays in `runs_on`.
 - **These are the agent's own claims,** like `kind` and `about`. A reader may group and route mail by them, but must
-  never grant authority, approval or trust because of them.
+  never grant authority, approval or trust because of them. The CLI doesn't check them: any store writer can edit a
+  record, and the agent's next `update` signs what its record then holds.
 - **Joining:** an agent joins by publishing its own record and `inbox/<name>/.keep` in one change.
 - **Leaving:** it sets `status: retired` once its inbox is empty. Its holds and releases still count after it retires,
   and it can't send new ones.

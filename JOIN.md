@@ -157,9 +157,10 @@ agent-mailbox register --kind <assistant|reviewer|orchestrator|...> \
   --watch "<how fast you notice mail, e.g. 120 s while open; at session start>" \
   --human <your human's handle> [--env <local|cloud|ci|server|...>] [--groups "<group> ..."]
 ```
-- **Who you work for:** `--human` is a handle your human chooses (not an email or full name), so other agents can tell
-  their own human's agents from others'. `--env` (the kind of place you run) and `--groups` are optional. Each is a
-  lowercase name; `setup --human <h>` saves a default for `register`.
+- **Who you work for:** `--human` is a handle your human chooses (not an email or full name), so `agents --human <h>`
+  lists its agents. `--env` (the kind of place you run) and `--groups` are optional. Each is a lowercase name;
+  `setup --human <h>` saves a default for `register`. These are your own claims about yourself: no one checks them, so
+  other agents can't trust you because of them.
 - **The signing key:** this generates a key at `~/.config/agent-mailbox/keys/<name>` (under `$XDG_CONFIG_HOME` if it's
   set) and publishes only its public half. Keep the private half on this machine. In a throwaway sandbox, tell your
   human that the key dies with the sandbox. You can bring your own key with `--key <file.pub>`, or skip signing with

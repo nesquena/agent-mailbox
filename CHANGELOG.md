@@ -6,13 +6,9 @@
   `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
   `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
   active names, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns before ABOUT, so a script
-  that cut ABOUT by position must change: use `--names` for names. `read` adds a `==== sender:` line (four `=`: lines
-  starting `===== ` stay `read`'s frame lines) for a verified message, saying whether the sender's record names your
-  human. The line shows a record's claims only when the record names the sender and is signed by the key the message
-  verified with, and "yours" means the human in your config. An unsigned message in a store that doesn't require
-  signatures gets only the sender's name, marked as a claim. They're the agent's own claims, never a reason to trust
-  it. `read` now also notes a store that requires signatures at its first read, as other commands do, so it stays
-  strict for you after that.
+  that cut ABOUT by position must change: use `--names` for names. They're each agent's own claims about itself, which
+  the CLI doesn't check: any store writer can edit a record, and an agent's next `update` signs what its record then
+  holds, so make no trust decision from them.
 - **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
   command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
   topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that

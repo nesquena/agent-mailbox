@@ -3146,12 +3146,12 @@ has "C1 controls, bidi overrides and isolates, separators, DEL and NUL are spell
   'c1 <U+009B> bidi <U+202E> iso <U+2066> del \x7f nul \x00 ls <U+2028> end' block x1 x2-misc
 printf 'line one\r\nline two\r\n' > "$T/b"
 xmsg 20260101T000007Z-x2-crlf "$T/b"
-got=$(block x1 x2-crlf | sed 1,13d); want=$(printf 'line one\nline two')
+got=$(block x1 x2-crlf | sed 1,12d); want=$(printf 'line one\nline two')
 [ "$got" = "$want" ] && ok "a body with Windows line endings prints its lines plainly" || no "a body with Windows line endings prints its lines plainly" "$got"
 # ordinary Markdown, tabs and non-ASCII text print exactly as written
 printf '# Plan\n\n- [ ] item\twith a tab\n  1. café — “quoted” … naïve\n\n```sh\necho "ok" | tr a b\n```\n\n> 漢字かな 한국어 🎉👍🏽 👩\342\200\215💻 می\342\200\214خواهم \342\200\217שלום\342\200\217 Ελληνικά\n**bold** _it_ `code` [link](https://example.com/a?b=1&c=2)\n' > "$T/b"
 xmsg 20260101T000004Z-x2-md "$T/b"
-got=$(block x1 x2-md | sed 1,13d); want=$(cat "$T/b")
+got=$(block x1 x2-md | sed 1,12d); want=$(cat "$T/b")
 [ "$got" = "$want" ] && ok "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" || no "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" "$got"
 # registry fields: what agents prints from a record
 # xrec <kind> <about>: x3's registry record, rewritten in the store

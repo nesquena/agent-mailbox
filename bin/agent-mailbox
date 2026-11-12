@@ -18,7 +18,8 @@
 #                                       clears it)
 #   agents [--human <h>] [--env <e>] [--group <g>]... [--names]
 #                                       list registered agents, those matching every filter given; --names prints
-#                                       only the names of the active ones, one per line
+#                                       only the names of the active ones, one per line (human, env and groups are
+#                                       each agent's own claims, which nothing checks)
 #   trust <name>                        accept <name>'s current key after it changed (re-pins it)
 #   trust --relax                       stop treating this store as strict after its store.md stopped requiring
 #                                       signatures (a store seen strict stays strict for you until then)
@@ -32,9 +33,7 @@
 #   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
 #                                       names and from: headers, not signatures
-#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3); each starts
-#                                       "===== <file> [<status>]" and ends "===== end <file>"; a "==== sender:"
-#                                       line about the sender may follow the first
+#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
@@ -444,22 +443,11 @@ verify_sig() {
   fp=$(printf '%s\n' "$pub" | sha)
   if [ -f "$pins/$from" ]; then [ "$(cat "$pins/$from")" = "$fp" ] || { echo changed; return; }
   else echo "$fp" > "$pins/$from"; fi
-  if sig_ok "$f" "$from" "$pub"; then echo verified; else echo bad; fi
+  allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE"
+  printf '%s %s\n' "$from" "$pub" > "$allowed"
+  if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
+  rm -f "$allowed"; echo "$r"
 }
-# sig_ok <file> <name> <public key>: <file>.sig is <name>'s signature of <file>, by that key (namespace NS)
-sig_ok() { allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE"; printf '%s %s\n' "$2" "$3" > "$allowed"
-  ssh-keygen -Y verify -f "$allowed" -I "$2" -n "$NS" -s "$1.sig" < "$1" >/dev/null 2>&1; so=$?; rm -f "$allowed"; return "$so"; }
-# signed_record <name> <copy>: copy <name>'s record (and its .sig, never one that's a link) to <copy>, and succeed only
-# when that copy names <name> and is signed by the key this reader pinned for <name>: the key a verified message from
-# <name> was checked against. A record a store writer edited, one signed by another key, and another agent's record
-# copied over this one (two agents sharing a key) all fail
-signed_record() { sr=$(record "$1"); [ -f "$sr" ] && [ ! -L "$sr" ] && [ -f "$sr.sig" ] && [ ! -L "$sr.sig" ] || return 1
-  cat -- "$sr" > "$2" 2>/dev/null && cat -- "$sr.sig" > "$2.sig" 2>/dev/null || return 1
-  [ "$(field name "$2")" = "$1" ] && sk=$(reg_key "$2") || return 1
-  # ceiling: verify_file pinned the key in the record it read; the copy's key must match that pin too, which guards a
-  # record swapped between verify_file and this copy. No test reproduces that race
-  [ -f "$STATE/pins/$STORE_ID/$1" ] && [ "$(cat "$STATE/pins/$STORE_ID/$1")" = "$(printf '%s\n' "$sk" | sha)" ] &&
-    have_ssh && sig_ok "$2" "$1" "$sk"; }
 # sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
 sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
   else (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null; fi || die "signing failed with $KEY"; }
@@ -944,24 +932,11 @@ read)
   # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
   # file swapped in the store meanwhile can't be shown under another's status
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
-  # "yours" compares with the human your config names (setup --human), which no store writer can change; without one,
-  # with your own record's, only when that record names you and is signed by your own key. A config human that isn't a
-  # name is ignored, with a warning, and then nothing is "yours"
-  mine=$(cfg human)
-  if [ -n "$mine" ] && ! matches "$NAME_RE" "$mine"; then
-    warn "your config's human isn't a name, so no sender is shown as yours (set one with setup --human)"; mine=""
-  elif [ -z "$mine" ] && can_sign; then mk=$(own_pub); mr=$(record "$ME")
-    if [ -n "$mk" ] && [ -f "$mr" ] && [ ! -L "$mr" ] && [ -f "$mr.sig" ] && [ ! -L "$mr.sig" ] && cat -- "$mr" > "$rt/own" 2>/dev/null &&
-      cat -- "$mr.sig" > "$rt/own.sig" 2>/dev/null && [ "$(field name "$rt/own")" = "$ME" ] && [ "$(reg_key "$rt/own")" = "$mk" ] &&
-      sig_ok "$rt/own" "$ME" "$mk"; then
-      mine=$(claim human "$rt/own"); fi
-  fi
-  strict=""; require_sigs && strict=1
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     cat -- "$p" > "$rt/m" 2>/dev/null || continue
     if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
-    v=$(verify_file "$rt/m" "$ME"); vs=$v
+    v=$(verify_file "$rt/m" "$ME")
     # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
     # name that doesn't name that sender (<stamp>-<from>-<topic>.md) is pointed out
     fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); b=${p##*/}
@@ -972,25 +947,6 @@ read)
       else case "$b" in ($st-"$fr"-*) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac; fi
     fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
-    # what the sender's record says of it (human, env, groups: its own claims), on a line of the CLI's own, which a
-    # message's text can't draw, since a body line starting with = is indented below. It starts "==== ": "===== "
-    # starts only read's frame lines (a message's first and end lines), so a script splitting on them sees nothing
-    # else. Its claims are read in one place only: under a verified message, from a copy of the sender's record that
-    # names the sender and is signed by the key the message verified with (any other record shows no claims, and never
-    # "yours"); "yours" when it names your human. Under an unsigned message where the store doesn't require
-    # signatures, only the sender's name, marked as a claim: no record is read. None for any other status, or for a
-    # verified sender with no record (a record that's a link counts as one, and shows no claims)
-    if matches "$NAME_RE" "$fr" && [ "$vs" = unsigned ] && [ -z "$strict" ]; then
-      printf '==== sender: %s (unsigned: from: is only a claim)\n' "$fr"
-    elif matches "$NAME_RE" "$fr" && [ "$vs" = verified ] && { [ -f "$(record "$fr")" ] || [ -L "$(record "$fr")" ]; }; then
-      if ! signed_record "$fr" "$rt/r"; then
-        printf "==== sender: %s's record isn't signed by its key, so its human, env and groups aren't shown\n" "$fr"
-      else sh_=$(claim human "$rt/r"); se=$(claim env "$rt/r"); sg=$(claim groups "$rt/r")
-        if [ -z "$sh_" ]; then who="no human"; elif [ -n "$mine" ] && [ "$sh_" = "$mine" ]; then who="human $sh_ (yours)"
-        elif [ -n "$mine" ]; then who="another human ($sh_)"; else who="human $sh_"; fi
-        printf '==== sender: %s says %s%s%s\n' "$fr" "$who" "${se:+; env $se}" "${sg:+; groups $sg}" | clean
-      fi; rm -f "$rt/r" "$rt/r.sig"
-    fi
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
     # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes
     # first) is indented; a last line without its newline gets one, and each message ends with its own marker
