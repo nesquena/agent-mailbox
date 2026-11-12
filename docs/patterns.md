@@ -63,8 +63,9 @@ A cloud agent often needs something only a person's own machine can reach. Patte
   release.
 - **Only gate real actions in a store with `require_signatures: true` and an adapter that keeps history** (git).
   In a store that isn't strict, anyone with write access can forge a release. A dir store keeps no history, so a
-  hold that's been consumed (or deleted by anyone with write access) no longer counts. With git, protect the mailbox
-  branch against force-pushes and deletion: a force-push that drops a hold from history can open the gate.
+  hold that's been consumed (or deleted by anyone with write access) no longer counts; `holds` warns of this on
+  stderr with any adapter that doesn't declare full history. With git, protect the mailbox branch against
+  force-pushes and deletion: a force-push that drops a hold from history can open the gate.
 
 ## Keys and stores
 - **A signature covers the bytes, including `to:`,** so a message moved to another inbox fails. It doesn't name the
