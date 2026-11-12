@@ -15,6 +15,12 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+# folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
+# old with nothing running out of it is removed, since no run outlasts its 40-minute limit
+for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
+  [ -d "$d" ] && [ "$d" != "$W" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+    [ -z "$(ps -eo args= 2>/dev/null | grep -F -- "$d" | grep -v grep)" ] && rm -rf "$d"
+done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
 CCD=""; trap 'leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
@@ -51,6 +57,8 @@ within() { wl=$1; shift
 TL=${AGENT_MAILBOX_TEST_LIMIT:-2400}
 case $TL in ''|*[!0-9]*) echo "FAIL AGENT_MAILBOX_TEST_LIMIT must be a number of seconds, not '$TL'"; exit 1 ;; esac
 trap 'echo "  FAIL the run went over its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT): stopped; see the last section above"; exit 124' TERM
+# (stopped by hand, or its terminal gone: the exit trap still stops what it started and removes its folder)
+trap 'echo "  stopped (interrupted)"; exit 130' INT HUP
 SUITE=$$
 ( wd=$(sh -c 'echo $PPID'); n=0; while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+5)); done
   for p in $(tree "$SUITE"); do [ "$p" = "$SUITE" ] || [ "$p" = "$wd" ] || kill -TERM "$p" 2>/dev/null; done
