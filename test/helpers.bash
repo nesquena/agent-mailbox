@@ -14,7 +14,7 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
 
 # workdir: make and print a folder for this file's fixtures, with a space in its path, as in a macOS home folder like
 # "/Users/Jo Smith". bats removes it after the file's last test.
-workdir() { mkdir -p "$BATS_FILE_TMPDIR/agent mailbox test" && printf '%s\n' "$BATS_FILE_TMPDIR/agent mailbox test"; }
+workdir() { : "${BATS_FILE_TMPDIR:?test/*.bats needs bats-core 1.4 or later}"; mkdir -p "$BATS_FILE_TMPDIR/agent mailbox test" && printf '%s\n' "$BATS_FILE_TMPDIR/agent mailbox test"; }
 
 # expect <exit code> <grep -E pattern or -> <command...>: run the command, stdout and stderr together, and fail
 # unless it exits with that code and some line of its output matches the pattern. The same check as test/run.sh's

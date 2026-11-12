@@ -38,6 +38,7 @@ setup_file() {
   echo "# a local change" >> "$C/adapters/dir.sh"
   run "$SH" "$U" --version
   git -C "$C" checkout -q -- adapters/dir.sh
+  [ "$status" -eq 0 ] || { printf 'exit %s, wanted 0\n%s\n' "$status" "$output" >&2; return 1; }
   expect 0 "\(protocol [0-9]+, $sha\+changes\)$" printf '%s\n' "$output"
 }
 
@@ -57,6 +58,7 @@ setup_file() {
   mkdir -p "$C/extra"; cp "$U" "$C/extra/"
   run "$SH" "$C/extra/agent-mailbox" --version
   rm -rf "$C/extra"
+  [ "$status" -eq 0 ] || { printf 'exit %s, wanted 0\n%s\n' "$status" "$output" >&2; return 1; }
   expect 0 "$plain" printf '%s\n' "$output"
 }
 

@@ -3388,6 +3388,7 @@ expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(Ope
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"
+elif ! [ "$(bats --count "$ROOTDIR/test" 2>/dev/null)" -gt 0 ] 2>/dev/null; then no "test/*.bats (bats found no tests)"
 elif TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"
 else no "test/*.bats (its failures are above)"; fi
 echo "passed $pass, failed $fail, skipped $skip"
