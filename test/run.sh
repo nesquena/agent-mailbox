@@ -56,13 +56,15 @@ within() { wl=$1; shift
 # printed names the section it was in
 TL=${AGENT_MAILBOX_TEST_LIMIT:-2400}
 case $TL in ''|*[!0-9]*) echo "FAIL AGENT_MAILBOX_TEST_LIMIT must be a number of seconds, not '$TL'"; exit 1 ;; esac
-trap 'echo "  FAIL the run went over its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT): stopped; see the last section above"; exit 124' TERM
+trap 'echo "  FAIL the run was stopped (TERM): past its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT), or killed; see the last section above"; exit 124' TERM
 # (stopped by hand, or its terminal gone: the exit trap still stops what it started and removes its folder)
 trap 'echo "  stopped (interrupted)"; exit 130' INT HUP
 SUITE=$$
-( wd=$(sh -c 'echo $PPID'); n=0; while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+5)); done
+# (started detached, a grandchild that isn't one of the run's jobs, so a test's bare `wait` never waits for it; it ends
+# on its own once the run is gone)
+( ( wd=$(sh -c 'echo $PPID'); n=0; while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+5)); done
   for p in $(tree "$SUITE"); do [ "$p" = "$SUITE" ] || [ "$p" = "$wd" ] || kill -TERM "$p" 2>/dev/null; done
-  kill -TERM "$SUITE" 2>/dev/null ) >/dev/null 2>&1 &
+  kill -TERM "$SUITE" 2>/dev/null ) >/dev/null 2>&1 & )
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
 [ -n "$SSH" ] || [ -z "${REQUIRE_SSH:-}" ] || { echo "FAIL ssh-keygen -Y isn't available, and REQUIRE_SSH is set"; exit 1; }
@@ -107,12 +109,31 @@ expect "and returns the command's own exit when it finishes in time" 3 - within 
 c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
 [ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "within left the command's child running" "pid $c"
 kill "$c" 2>/dev/null
+# a run stopped by a signal (HUP here; INT the same, from a terminal) still stops what it started and removes its
+# folder; and a later run sweeps a folder an hour old that a killed run left, keeping a recent one
+mkdir -p "$W/tmp2/agent mailbox test.OLDxxx" "$W/tmp2/agent mailbox test.NEWxxx"; touch -t 202001010000 "$W/tmp2/agent mailbox test.OLDxxx"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 & )$/p' "$0" | sed 1d
+  echo 'echo "dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/sig.sh"
+TMPDIR="$W/tmp2" "$SH" "$W/sig.sh" > "$W/sig.out" 2>&1 & sp=$!
+i=0; while [ -z "$(sed -n 's/^dir //p' "$W/sig.out")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; sleep 1
+kill -HUP "$sp"; i=0; while kill -0 "$sp" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; wait "$sp"; rc=$?
+sd=$(sed -n 's/^dir //p' "$W/sig.out")
+[ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(ps -eo args= | grep -F -- "$sd" | grep -v grep)" ] &&
+  ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
+[ ! -d "$W/tmp2/agent mailbox test.OLDxxx" ] && [ -d "$W/tmp2/agent mailbox test.NEWxxx" ] &&
+  ok "a run sweeps an hour-old folder a killed run left, and keeps a recent one" || no "the sweep removed the wrong folders" "$(ls "$W/tmp2")"
+# a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 & )$/p' "$0" | sed 1d
+  echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
+t0=$(date +%s); out=$(within 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 0 ] && [ $((t1 - t0)) -le 10 ] && printf '%s\n' "$out" | grep -qx returned &&
+  ok "a bare wait in a test doesn't wait for the run's watchdog" || no "a bare wait waited for the watchdog (exit $rc, $((t1 - t0)) s)" "$out"
 # the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 &$/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 & )$/p' "$0" | sed 1d
   echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
 t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 within 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
 hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
-[ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run went over its limit of 1 s' &&
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM): past its limit of 1 s' &&
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
 sleep 1; [ -n "$hw" ] && [ -z "$(ps -eo args= | grep -F -- "$hw/orphan" | grep -v grep)" ] && [ ! -d "$hw" ] &&
   ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
