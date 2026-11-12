@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- **`setup` keeps your pinned keys when the store's address changes.** Re-running `setup` with another store, root
-  or branch now carries the keys you've pinned (and a strict store's pin) over to the new settings, and says so.
+- **`setup` says when your pinned keys stay behind.** Pinned keys belong to the store settings as written, so new
+  settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
+  Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
+  first written.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.

@@ -22,9 +22,10 @@ time this reader first pinned it. Concretely:
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each key the first time they verify mail signed with it, so a later swap reads `changed` until the
   reader runs `trust`, after comparing the new key's fingerprint in `agents` with the sender's human out of band;
-  `trust` then prints the fingerprint it pinned, to confirm it's the one compared. An agent's `update` never pins its
-  own name to a key it doesn't hold, and, where the agent holds its key, refuses to republish a record that names a
-  different key.
+  `trust` then prints the fingerprint it pinned, to confirm it's the one compared. Pins belong to the store settings as
+  written (address, root and branch): the same mailbox written another way starts with none, so keep one spelling. An
+  agent's `update` never pins its own name to a key it doesn't hold, and, where the agent holds its key, refuses to
+  republish a record that names a different key.
 - **Key values:** a registry `key` must be a plain `<type> <base64>` public key. Any other value, such as one with
   options before the key, reads as no key (`nokey`).
 
