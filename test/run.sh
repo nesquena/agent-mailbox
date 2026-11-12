@@ -2542,10 +2542,10 @@ expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a recor
 for x in s t u w; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hs.md hs "hold: s#1 v1"
 expect "a signed hold whose sent has a fraction of a second blocks over an older release" 5 "s#1 has a record from k3" as k1 holds "s#1" --version v1
-SGSENT=2026-11-12T23:59:59Z sg k3 20261112T235959Z-k3-ht.md ht "hold: t#1 v1 "
+sg k3 29990101T000100Z-k3-ht.md ht "hold: t#1 v1 "
 expect "a signed hold whose item doesn't parse (a trailing space) blocks" 5 "t#1 has a record from k3" as k1 holds "t#1" --version v1
 # it's placed in delivery order, so it counts until that sender's next record
-SGSENT=2026-11-13T00:00:00Z sg k3 20261113T000000Z-k3-rs2.md rs2 "release: s#1 v1"
+SGSENT=2999-01-02T00:00:00Z sg k3 29990102T000000Z-k3-rs2.md rs2 "release: s#1 v1"
 expect "a later release from the same sender clears an odd-sent hold" 0 "s#1 released by k3" as k1 holds "s#1" --version v1
 # one whose item has no valid first word names no item: it doesn't count, and doesn't block other items
 sg k3 29990101T000100Z-k3-hw.md hw "hold: %w#1 v1"
