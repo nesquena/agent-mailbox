@@ -232,13 +232,6 @@ have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep 
 field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { closed = 1; exit }
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
-# utc_second <sent>: a sent time spelled another way that's still UTC (a fraction of a second, +00:00, or the basic
-# form 20261112T235959Z), cut to the second as SENT_RE takes it; status 1 when there's none
-utc_second() { t=$(printf '%s\n' "$1" | sed -n \
-    -e 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}Z$/\1Z/p' \
-    -e 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}+00:\{0,1\}00$/\1Z/p' \
-    -e 's/^\([0-9]\{4\}\)\([0-9][0-9]\)\([0-9][0-9]\)T\([0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}Z$/\1-\2-\3T\4:\5:\6Z/p')
-  matches "$SENT_RE" "$t" && echo "$t"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
 # temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
@@ -892,24 +885,23 @@ holds)
       [ -n "$rec" ] || continue
       basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")
-      # every column of the row below is validated, so no header value can shift the others. A record whose sent,
-      # from or item doesn't parse (PROTOCOL.md section 5) is malformed, placed as near as it can be: at its time to
-      # the second when that's still UTC (else after every other, so it blocks), under its item when the first word
-      # is one (else under every item), and under "?" for a sender it can't name
-      odd=""
-      if ! matches "$ITEM_RE" "$rec" || ! matches "$NAME_RE" "$from" || ! matches "$SENT_RE" "$sent"; then odd=1
-        matches "$NAME_RE" "$from" || from="?"; matches "$SENT_RE" "$sent" || sent=$(utc_second "$sent") || sent="~"
-        matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || i='*'; rec="$i ?"; }
-      fi
+      # every column of the row below is validated, so no header value can shift the others (PROTOCOL.md section 5). A
+      # sender that isn't a name can't be named as the signer, and an item whose first word isn't an item names none:
+      # neither counts. An item with more after its first word is read under that word, and a sent in another form
+      # (-) in delivery order (below); either is read like a header that isn't plain
+      matches "$NAME_RE" "$from" || continue
+      odd=""; matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || continue; rec="$i ?" odd=1; }
+      matches "$SENT_RE" "$sent" || { sent=- odd=1; }
       # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
-      # whose signature doesn't reads bad, and one that doesn't parse still can't count as a hold or release
+      # whose signature doesn't reads bad
       v=$(verify_sig "$tmpd/m" "$ME")
       if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
           (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
-        [ -z "$odd" ] || kind=malformed
+        # (an item with more after it names no version, so it never counts as the hold or release it seems to be)
+        case "$rec" in (*" ?") kind=malformed ;; esac
       fi
       # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
       # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
@@ -924,14 +916,16 @@ holds)
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
   # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
   # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
-  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "") || $3 == "*"')
+  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
-  # blocks, and two releases naming different versions conflict (neither counts)
-  latest=$(echo "$records" | awk 'NF { k = $3 " " $5
-      if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
-      if ($1 < t[k] || kind[k] == "hold") next
+  # blocks, and two releases naming different versions conflict (neither counts). A record whose sent isn't in its
+  # one form (-) takes the time of the one before it from that sender for that item, in delivery order, so it counts
+  # as of then, until that sender's next record
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; s = $1; if (s == "-") s = (k in t) ? t[k] : ""
+      if (!(k in t) || s > t[k]) { t[k] = s; kind[k] = $2; v[k] = $4; last[k] = $0; next }
+      if (s < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
       if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
       if (kind[k] == "malformed") next

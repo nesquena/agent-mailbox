@@ -141,10 +141,10 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   other lines that aren't plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a
   sender this reader has pinned), blocks that item, as a conflict does, until that sender's next record. One whose
   signature doesn't check out reads `bad`, and counts only as unsigned mail does: as the hold or release it names
-  where signatures aren't required, and not at all where they are. A record whose `sent`, `from` or item doesn't parse
-  (`sent` in another form, say) is read the same way, except that it never counts as a hold or release: it blocks when
-  its signature checks out as above, or where signatures aren't required, and reads `bad` otherwise. It's placed at
-  its time to the second where that's still UTC, and otherwise after every other record.
+  where signatures aren't required, and not at all where they are. A record whose `sent` isn't in the one form section
+  5 gives, or whose item has more after a valid `<item>`, is read the same way, placed in delivery order: it blocks
+  that item until that sender's next record. One whose `from` isn't a valid name, or whose item doesn't start with a
+  valid `<item>`, doesn't count.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history
