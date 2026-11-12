@@ -501,11 +501,12 @@ setup)
 }")"
   printf 'wrote %s\n' "$CONFIG"
   # pinned keys (and a strict store's pin) are kept under the store's id: when the store, root or branch changes, they
-  # go along to the new id, never replacing a pin already there
+  # go along to the new id, but only to one this reader has no pins for yet (a store it already reads keeps its own)
   if [ -n "$STORE" ]; then old=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha); new=$(printf '%s' "$store|${root:-mailbox}|${branch:-main}" | sha)
-    if [ "$old" != "$new" ] && [ -d "$STATE/pins/$old" ]; then mkdir -p "$STATE/pins/$new" || die "can't create $STATE/pins/$new"
+    if [ "$old" != "$new" ] && [ -d "$STATE/pins/$old" ] && [ ! -e "$STATE/pins/$new" ]; then
+      mkdir -p "$STATE/pins/$new" || die "can't create $STATE/pins/$new"
       for f in "$STATE/pins/$old"/* "$STATE/pins/$old"/.strict; do
-        [ -f "$f" ] && [ ! -e "$STATE/pins/$new/${f##*/}" ] || continue; cp "$f" "$STATE/pins/$new/" || die "can't copy $f"
+        [ -f "$f" ] || continue; cp "$f" "$STATE/pins/$new/" || die "can't copy $f"
       done
       echo "kept your pinned keys for the new store settings"
     fi

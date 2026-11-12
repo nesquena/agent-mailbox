@@ -1363,6 +1363,9 @@ ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
 expect "a sender's key swapped in the store still reads as changed" 6 "^changed$" as pm2 verify "$f"
 out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep kept)" ] && ok "a re-run of setup with the same settings says nothing of pins" || no "a re-run of setup copied pins" "$out"
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep kept)" ] && ok "setup back to a store it already has pins for leaves them as they are" ||
+  no "setup copied pins into a store that had its own" "$out"
 fi
 
 echo "== watcher lifecycle and keys (dir)"
