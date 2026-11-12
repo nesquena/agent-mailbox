@@ -5,15 +5,21 @@
 #
 # Usage: agent-mailbox [--as <name>] [--config <file>] <command> [args]
 #
-#   setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]
+#   setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>] [--human <h>]
 #                                       write this machine's config (see "Configuration" in README.md)
 #   init [--require-signatures] [--title <text>]
 #                                       create the mailbox layout in an empty store (once per store)
 #   register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]
+#            [--human <h>] [--env <e>] [--groups "<g> ..."]
 #                                       add yourself to the registry; generates a signing key unless --no-key
-#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--status active|retired [--force]]
-#                                       change your own registry record
-#   agents                              list registered agents
+#   update [--kind ...] [--about ...] [--runs-on ...] [--watch ...] [--human ...] [--env ...] [--groups ...]
+#          [--status active|retired [--force]]
+#                                       change your own registry record (an empty --human, --env or --groups
+#                                       clears it)
+#   agents [--human <h>] [--env <e>] [--group <g>]... [--names]
+#                                       list registered agents, those matching every filter given; --names prints
+#                                       only the names of the active ones, one per line (human, env and groups are
+#                                       each agent's own claims, which nothing checks)
 #   trust <name>                        accept <name>'s current key after it changed (re-pins it)
 #   trust --relax                       stop treating this store as strict after its store.md stopped requiring
 #                                       signatures (a store seen strict stays strict for you until then)
@@ -57,6 +63,8 @@ AD_LEFTOVER= AD_UNSTICK=
 # when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
 AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
+# a record's groups: up to 16 names, one space between each (PROTOCOL.md section 4)
+GROUPS_RE='^[a-z0-9][a-z0-9.-]{0,62}( [a-z0-9][a-z0-9.-]{0,62}){0,15}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
 MSG_RE='^[A-Za-z0-9._-]+\.md$'
@@ -237,6 +245,14 @@ have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep 
 field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { closed = 1; exit }
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
+# claim <human|env|groups> <record>: that field of an agent's record when it's well formed (a name, or for groups up
+# to 16 names), else nothing: a value that isn't counts as absent (PROTOCOL.md section 4)
+claim() { cv=$(field "$1" "$2" 2>/dev/null); case "$1" in (groups) matches "$GROUPS_RE" "$cv" ;; (*) matches "$NAME_RE" "$cv" ;; esac &&
+  printf '%s\n' "$cv"; }
+# valid_claim <option> <value>: refuse a --human, --env or --groups value that isn't well formed (empty clears it)
+valid_claim() { [ -n "$2" ] || return 0
+  case "$1" in (--groups) matches "$GROUPS_RE" "$2" || die "--groups takes up to 16 names (lowercase a-z, 0-9, '.', '-'; up to 63 each), separated by spaces, not '$2'" ;;
+    (*) matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'" ;; esac; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
 # temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
@@ -539,19 +555,23 @@ if [ "$cmd" = reply ]; then
 fi
 case "$cmd" in
 setup)
-  store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}" seen=""
+  store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}" human=$(cfg human) hset="" seen=""
   while [ $# -gt 0 ]; do
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"; once "$1"
     case "$1" in --store) store=$2 ;; --adapter) adapter=$2 ;; --root) root=$2 ;; --branch) branch=$2 ;;
-                 --name) name=$2 ;; *) unknown "$1" ;; esac; shift 2
+                 --name) name=$2 ;; --human) human=$2 hset=1 ;; *) unknown "$1" ;; esac; shift 2
   done
-  [ -n "$store" ] || die "usage: setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>]"
+  [ -n "$store" ] || die "usage: setup --store <url|path> [--adapter git|dir] [--root <dir>] [--branch <b>] [--name <me>] [--human <h>]"
   [ -z "$name" ] || valid_name "$name"
+  # (only a --human given is refused; a config's own that isn't a name is dropped, saying so)
+  if [ -n "${hset:-}" ]; then valid_claim --human "$human"
+  elif [ -n "$human" ] && ! matches "$NAME_RE" "$human"; then warn "dropping the config's human '$human': it isn't a name (set one with --human)"; human=""; fi
   for v in store:"$store" adapter:"$adapter" root:"$root" branch:"$branch"; do one_line "${v%%:*}" "${v#*:}"; done
   [ -z "$branch" ] || branch_ok "$branch" || die "bad branch name '$branch': pass --branch <name>"
   mkdir -p "$(dirname "$CONFIG")" || die "can't create $(dirname "$CONFIG")"
   put "$CONFIG" "$(printf '# agent-mailbox config (one key = value per line)\nstore = %s\nadapter = %s\nroot = %s\nbranch = %s\n%s' \
     "$store" "$adapter" "$root" "$branch" "${name:+name = $name
+}${human:+human = $human
 }")"
   printf 'wrote %s\n' "$CONFIG"
   # pinned keys (and a strict store's pin) belong to the store's settings as written: new settings, even the same
@@ -584,22 +604,34 @@ init)
 register|update)
   need_me; load_adapter; ad_sync; need_store
   rec=$(record "$ME"); kind="" about="" runs="" watchv="" status="" keyfile="" nokey="" force="" seen=""
+  human="" envw="" groups="" hset="" eset="" gset=""
   while [ $# -gt 0 ]; do
     case "$1" in --no-key) nokey=1; shift; continue ;; --force) [ "$cmd" = update ] || unknown "$1"; force=1; shift; continue ;; esac
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"; once "$1"
     case "$1" in --kind) kind=$2 ;; --about) about=$2 ;; --runs-on) runs=$2 ;; --watch) watchv=$2 ;;
-                 --status) status=$2 ;; --key) keyfile=$2 ;; *) unknown "$1" ;; esac; shift 2
+                 --status) status=$2 ;; --key) keyfile=$2 ;;
+                 --human) human=$2 hset=1 ;; --env) envw=$2 eset=1 ;;
+                 --groups) groups=$(printf '%s\n' "$2" | tr '\t' ' ' | tr -s ' ' | sed 's/^ //; s/ $//') gset=1
+                   [ -n "$groups" ] || [ -z "$2" ] || die "--groups takes names separated by spaces, or \"\" to clear them" ;;
+                 *) unknown "$1" ;; esac; shift 2
   done
+  valid_claim --human "$human"; valid_claim --env "$envw"; valid_claim --groups "$groups"
   [ "$cmd" = register ] || [ -z "$keyfile$nokey" ] || die "update can't change a key; see JOIN.md's \"Replacing your key\""
   [ -z "$keyfile" ] || [ -z "$nokey" ] || die "register takes --key <pub> or --no-key, not both"
   if [ "$cmd" = register ]; then
     [ -f "$rec" ] && die "'$ME' is already registered (names are unique; use 'update' to change your record)"
-    [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key]"
+    [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key] [--human <h>] [--env <e>] [--groups \"<g> ...\"]"
     status=active
+    # (the config's human, from setup --human, unless --human was given)
+    [ -n "$hset" ] || { human=$(cfg human)
+      [ -z "$human" ] || matches "$NAME_RE" "$human" || { warn "your config's human isn't a name, so none is recorded (set one with setup --human)"; human=""; }; }
   else
     [ -f "$rec" ] || die "'$ME' isn't registered yet (use 'register')"
     kind="${kind:-$(field kind "$rec")}"; about="${about:-$(field about "$rec")}"; runs="${runs:-$(field runs_on "$rec")}"
     watchv="${watchv:-$(field watch "$rec")}"; status="${status:-$(field status "$rec")}"
+    # (one not passed keeps its value, as it is; an empty one passed clears it)
+    [ -n "$hset" ] || human=$(field human "$rec"); [ -n "$eset" ] || envw=$(field env "$rec")
+    [ -n "$gset" ] || groups=$(field groups "$rec")
   fi
   case "$status" in active|retired) ;; *) die "status is active or retired" ;; esac
   # an agent retires once its inbox is empty (PROTOCOL.md section 4): mail still waiting would no longer wake it.
@@ -611,7 +643,8 @@ register|update)
       die "your inbox still holds $nl message(s): $shown- read and consume them first (sending on to another agent, as new mail, any that are its job), or pass --force to retire with them unread"
     fi
   fi
-  for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv"; do one_line "${v%%:*}" "${v#*:}"; done
+  for v in kind:"$kind" about:"$about" runs_on:"$runs" watch:"$watchv" human:"$human" env:"$envw" groups:"$groups"; do
+    one_line "${v%%:*}" "${v#*:}"; done
   pub="" own="" newkey=""
   if [ "$cmd" = update ]; then
     # an agent holding its key never re-signs a record whose key someone else changed; without it (a machine that
@@ -651,19 +684,26 @@ register|update)
   when=$(field registered "$rec" 2>/dev/null); [ -n "$when" ] || when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   no_link "$rec"; no_link "$M/inbox/$ME/.keep"
   mkdir -p "$M/agents"
-  record_text=$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\nstatus: %s\nkey: %s\nregistered: %s\n---\n' \
-    "$ME" "$kind" "$about" "$runs" "$watchv" "$status" "$pub" "$when")
+  # (human, env and groups are written only when set)
+  record_text=$(printf -- '---\nname: %s\nkind: %s\nabout: %s\nruns_on: %s\nwatch: %s\n%s%s%sstatus: %s\nkey: %s\nregistered: %s\n---\n' \
+    "$ME" "$kind" "$about" "$runs" "$watchv" "${human:+human: $human
+}" "${envw:+env: $envw
+}" "${groups:+groups: $groups
+}" "$status" "$pub" "$when")
   # update keeps what it doesn't manage (PROTOCOL.md section 2): every other header line, and the text below the
   # header. A field it manages appears once, with its value: a second copy (a key: planted after the agent's own) is
   # dropped, never signed. A record whose header doesn't open and close is written new, as register does
+  # (human, env and groups appear only while set: clearing one removes its line)
   if [ "$cmd" = update ] && kept=$(F_name=$ME F_kind=$kind F_about=$about F_runs_on=$runs F_watch=$watchv \
-      F_status=$status F_key=$pub F_registered=$when awk '
-      BEGIN { split("name kind about runs_on watch status key registered", k, " "); for (i in k) known[k[i]] = 1 }
+      F_status=$status F_key=$pub F_registered=$when F_human=$human F_env=$envw F_groups=$groups awk '
+      BEGIN { split("name kind about runs_on watch status key registered human env groups", k, " ")
+              for (i in k) known[k[i]] = 1; opt["human"] = opt["env"] = opt["groups"] = 1 }
+      function out(f) { if (!(f in opt) || ENVIRON["F_" f] != "") print f ": " ENVIRON["F_" f] }
       NR == 1 { if ($0 != "---") exit 2; print; next }
-      !closed && $0 == "---" { for (i = 1; i <= 8; i++) if (!(k[i] in done)) print k[i] ": " ENVIRON["F_" k[i]]
+      !closed && $0 == "---" { for (i = 1; i <= 11; i++) if (!(k[i] in done)) out(k[i])
                                closed = 1; print; next }
       !closed { f = $0; sub(/:.*/, "", f)
-                if ((f in known) && index($0, ":")) { if (!(f in done)) print f ": " ENVIRON["F_" f]; done[f] = 1; next } }
+                if ((f in known) && index($0, ":")) { if (!(f in done)) out(f); done[f] = 1; next } }
       { print }
       END { if (!closed) exit 2 }' "$rec"); then record_text=$kept; fi
   paths="$ROOT/agents/$ME.md"
@@ -690,19 +730,36 @@ register|update)
   elif [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
   else echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}"; fi ;;
 agents)
-  [ $# -eq 0 ] || unknown "$1"
+  # filters: each given must match (a --group each, for several); a field that isn't well formed matches none
+  fh="" fe="" fg="" names="" seen=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --names) names=1; shift; continue ;; --human|--env|--group) ;; *) misplaced "$1"; unknown "$1" ;; esac
+    [ $# -ge 2 ] || die "$1 needs a value"
+    # (each value is one name: one with spaces or a pattern would be split or expanded below)
+    matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'"
+    case "$1" in --human) once "$1"; fh=$2 ;; --env) once "$1"; fe=$2 ;; --group) fg="$fg $2" ;; esac; shift 2
+  done
   load_adapter; ad_sync; need_store
-  printf '%-24s %-8s %-10s %-4s %s\n' NAME STATUS KIND KEY ABOUT; fps=
+  [ -n "$names" ] || printf '%-24s %-8s %-10s %-4s %-16s %-8s %-24s %s\n' NAME STATUS KIND KEY HUMAN ENV GROUPS ABOUT; fps=
   for r in "$M"/agents/*.md; do
     [ -f "$r" ] || continue
-    k=no; rk=$(reg_key "$r") && k=yes
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
+    h=$(claim human "$r"); e=$(claim env "$r"); g=$(claim groups "$r")
+    [ -z "$fh" ] || [ "$h" = "$fh" ] || continue
+    [ -z "$fe" ] || [ "$e" = "$fe" ] || continue
+    miss=""; for x in $fg; do case " $g " in (*" $x "*) ;; (*) miss=1 ;; esac; done; [ -z "$miss" ] || continue
+    # (--names: each active agent whose record names it, one per line, ready for a loop that sends to each)
+    if [ -n "$names" ]; then [ "$(field name "$r")" = "$n" ] && [ "$(field status "$r")" = active ] && echo "$n"; continue; fi
+    k=no; rk=$(reg_key "$r") && k=yes
     [ "$(field name "$r")" = "$n" ] || n="$n(!name)"
     [ -z "$rk" ] || { fp=$(fpnote "$rk"); [ -z "$fp" ] || fps="$fps$(printf '%-24s %s' "$n" "$fp")$NL"; }
-    # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows
+    # the record's status, kind and about are escaped and cut to 200 bytes each, so no record can draw rows; human, env
+    # and groups are names only (or -)
     printf '%s\n%s\n%s\n' "$(field status "$r")" "$(field kind "$r")" "$(field about "$r")" | clean "$CAP" |
-      { IFS= read -r s; IFS= read -r kd; IFS= read -r ab; printf '%-24s %-8s %-10s %-4s %s\n' "$n" "$s" "$kd" "$k" "$ab"; }
+      { IFS= read -r s; IFS= read -r kd; IFS= read -r ab
+        printf '%-24s %-8s %-10s %-4s %-16s %-8s %-24s %s\n' "$n" "$s" "$kd" "$k" "${h:--}" "${e:--}" "$(printf '%s' "${g:--}" | tr ' ' ,)" "$ab"; }
   done
+  [ -z "$names" ] || exit 0
   # each key's fingerprint, to compare with its agent's human out of band (`trust` prints the one it pins)
   [ -z "$fps" ] || printf '\nkey fingerprints:\n%s' "$fps" ;;
 trust)
