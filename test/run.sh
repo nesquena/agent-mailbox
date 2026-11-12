@@ -15,7 +15,13 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
-CCD=""; trap 'rm -rf "$W" ${CCD:+"$CCD"}' EXIT
+# at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
+# background and missed, even one whose parent is gone), so no run leaves processes behind
+CCD=""; trap 'leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
+# (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
+leftovers() { set -- $(for p in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v -e grep -e "^ *$$ " | awk '{ print $1 }') \
+    $(pgrep -P $$ 2>/dev/null); do tree "$p"; done); [ $# -gt 0 ] || return 0
+  kill -TERM "$@" 2>/dev/null; sleep 1; for p in "$@"; do kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null; done; return 0; }
 pass=0 fail=0 skip=0
 ok() { pass=$((pass+1)); echo "  ok   $1"; }
 no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
@@ -95,10 +101,14 @@ c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/n
 kill "$c" 2>/dev/null
 # the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^  kill -TERM "\$SUITE" 2>\/dev\/null ) >\/dev\/null 2>&1 &$/p' "$0" | sed 1d
-  echo 'sleep 600 & wait'; } > "$W/hang.sh"
+  echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
 t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 within 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
+hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run went over its limit of 1 s' &&
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
+sleep 1; [ -n "$hw" ] && [ -z "$(ps -eo args= | grep -F -- "$hw/orphan" | grep -v grep)" ] && [ ! -d "$hw" ] &&
+  ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
+  no "a stopped run left a process or its folder behind" "$(ps -eo pid=,args= | grep -F -- "${hw:-?}" | grep -v grep)"
 
 for AD in $ADAPTERS; do
   echo "== adapter: $AD (shell: $SH)"
