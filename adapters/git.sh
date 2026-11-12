@@ -206,7 +206,7 @@ ad_unstick() { k=0 said="" rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/
     else ref=$(ad_git for-each-ref --format='%(objectname) %(refname)' refs/agent-mailbox/stuck/ | awk -v c="$c" '$1 == c { print $2; exit }')
       if [ -z "$ref" ]; then n=1; while ad_git rev-parse -q --verify "refs/agent-mailbox/stuck/$n" >/dev/null; do n=$((n+1)); done
         ref="refs/agent-mailbox/stuck/$n"; ad_git update-ref "$ref" "$c" || return 1; fi
-      said="$said${NL}set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published, so send again what it held (it's kept as $ref in $AD_DIR); this clone goes on from the store"
+      said="$said${NL}set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as $ref in $AD_DIR); this clone goes on from the store"
       ad_git rebase --skip >/dev/null 2>&1 || :
     fi
   done

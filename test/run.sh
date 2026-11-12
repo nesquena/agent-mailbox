@@ -5,6 +5,8 @@
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
 set -u
+NL='
+'
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
@@ -1070,6 +1072,21 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "an AD_LEFTOVER in the environment doesn't change what a command says of its own change" 4 "written locally, not published" \
     env AD_LEFTOVER=1 PATH="$T/fast:$PATH" HOME="$W/home-xq1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
       CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send xq2 third "$T/m"
+  # nor does an exported AD_UNSTICK: a command whose own push meets a conflicting edit keeps its change and says
+  # don't resend, rather than setting it aside as an earlier command's. A fresh agent with nothing left over; the
+  # first retry's wait lets a writer edit the record the command is changing
+  rm -f "$T/store.git/hooks/pre-receive"; as xq9 setup --store "$T/store.git" --name xq9 >/dev/null
+  as xq9 register --kind t --about t --no-key >/dev/null
+  U="$T/unstick"; mkdir -p "$U"; git clone -q "$T/store.git" "$U/w"
+  git -C "$U/w" config user.email w@w; git -C "$U/w" config user.name w
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  printf '#!/bin/sh\n[ -e "%s/done" ] || { : > "%s/done"; rm -f "%s/store.git/hooks/pre-receive"\n' "$U" "$U" "$T" > "$U/sleep"
+  printf '  cd "%s/w" && git pull -q && sed -i.b "s/^about: .*/about: theirs/" mailbox/agents/xq9.md && rm -f mailbox/agents/xq9.md.b &&\n' "$U" >> "$U/sleep"
+  printf '    git commit -qam theirs && git push -q; } >/dev/null 2>&1\nexit 0\n' >> "$U/sleep"; chmod +x "$U/sleep"
+  expect "an AD_UNSTICK in the environment doesn't set a command's own change aside" 4 "written locally, not published" \
+    env AD_UNSTICK=1 PATH="$U:$PATH" HOME="$W/home-xq9" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+      CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
   # on a store with no mailbox branch yet: a first init the store won't take, then the next command
   T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
@@ -1135,7 +1152,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   (cd "$T/w" && git pull -q --rebase origin main && sed 's/^about: .*/about: theirs/' mailbox/agents/ga.md > ga.t &&
     mv ga.t mailbox/agents/ga.md && git commit -qam edit && git push -q origin HEAD:main)
   out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
-  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: what it held isn't published, so send again what it held (it's kept as refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
     git -C "$ck" rev-parse -q --verify refs/agent-mailbox/stuck/1 >/dev/null &&
     ok "a leftover that conflicts otherwise is set aside under refs/agent-mailbox/stuck/, saying so" ||
     no "a conflicting leftover wedged the clone, or wasn't set aside (exit $rc)" "$out"
@@ -1154,7 +1171,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   rm -f "$T/store.git/hooks/pre-receive"
   (cd "$T/w" && git pull -q --rebase origin main && printf 'edited\n' >> "mailbox/inbox/gb/$c1" && git commit -qam edit-msg && git push -q origin HEAD:main)
   out=$(as gb list 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-gb): consumed ${c1%.md}), which conflicts with the store: .*so send again what it held" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-gb): consumed ${c1%.md}), which conflicts with the store: .*so run again the command that made it" &&
     [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] && printf '%s\n' "$out" | grep -q -- "/$c1\$" &&
     ok "a consume of a message the store changed is set aside, not renamed, and the message stays" ||
     no "a consume of a message the store changed wasn't set aside, or was renamed (exit $rc)" "$out"
