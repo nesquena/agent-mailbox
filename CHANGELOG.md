@@ -6,6 +6,13 @@
   settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
   Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
   first written.
+- **`doctor` says when the Claude Code plugin's hooks can't run, and whether a watcher is up.** Inside Claude Code it
+  warns when `jq` is missing: the plugin's Stop guard needs it, and without it lets every turn end with no watcher
+  running, silently. Outside Claude Code it says nothing about `jq`, which the CLI itself never uses. It also says
+  whether a watcher for the name is running on the store (with its pid), and warns when this session ran `watch` for
+  the name and none is running now, adding when the plugin's hook declined to start one at the last turn end. These
+  lines never make `doctor` fail. The watcher line is a new kind, `info`, printed alongside `ok`, `warn` and `FAIL`:
+  a script that reads doctor's output by its first word should expect it.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
