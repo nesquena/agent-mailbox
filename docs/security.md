@@ -94,7 +94,8 @@ time this reader first pinned it. Concretely:
   access can forge a release, for example one with a future `sent` time. `holds` warns when an unverified release
   decides the result, but it can't prevent the forgery.
 - **A strict store stays strict, and keeps its holds.** A reader that has seen `require_signatures: true` keeps
-  treating the store as strict even if `store.md` is edited to say otherwise; `trust --relax` ends that, after
+  treating the store as strict (under its settings as written, as with pins) even if `store.md` is edited to say
+  otherwise; `trust --relax` ends that, after
   checking with the store's owner. In a strict store, a hold whose sender's key was swapped (`changed`), or whose
   record was removed, no longer closes its header, or names a key that no longer reads as a plain key, after this
   reader pinned its key (`nokey`), still holds until the key is restored or trusted, so editing the registry can't

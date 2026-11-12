@@ -505,7 +505,7 @@ setup)
   # re-spelled address from another mailbox, so it carries nothing over)
   if [ -n "$STORE" ] && [ "$STORE|$ROOT|$BRANCH" != "$store|${root:-mailbox}|${branch:-main}" ] &&
     [ -n "$(ls -A "$STATE/pins/$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)" 2>/dev/null)" ]; then
-    warn "your pinned keys stay with the old store settings; for the same mailbox, keep its address as first written"
+    warn "your pinned keys (and a strict store's pin) stay with the old store settings; for the same mailbox, keep its address as first written"
   fi ;;
 init)
   req=false title="agent mailbox" seen=""
