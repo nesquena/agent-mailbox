@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
+  command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
+  topic join to one name, in one second), is now published under a new name, saying so. Any other leftover that
+  conflicts is set aside under `refs/agent-mailbox/stuck/<n>` in the clone, with a warning, and the clone goes on from
+  the store.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.

@@ -1095,6 +1095,50 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
 
+  echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
+  T="$W/stuck"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  nk=--no-key; [ -z "$SSH" ] || nk=""
+  as ga init >/dev/null; for a in ga ga-x gb; do as $a register --kind t --about t $nk >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  echo from-ga > "$T/a"; echo from-ga-x > "$T/b"
+  expect "(ga's send to gb, topic x-y1, the store won't take)" 4 "written locally, not published" fast ga send gb x-y1 "$T/a"
+  rm -f "$T/store.git/hooks/pre-receive"
+  ck=$(ls -d "$W/home-ga/.local/state/agent-mailbox/checkouts/"*-ga)
+  n=$(git -C "$ck" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-ga-x-y1\.md$')
+  # ga-x sends gb topic y1 in that same second: its message has the same file name (placed here by a store writer, as
+  # the two sends racing in one second would have it)
+  as ga-x send gb y1 "$T/b" >/dev/null
+  git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+    o=$(ls mailbox/inbox/gb/*-ga-x-y1.md) && { [ "$o" = "$n" ] || { git mv "$o" "$n" &&
+      { [ ! -f "$o.sig" ] || git mv "$o.sig" "$n.sig"; }; }; } && git commit -qm same-second && git push -q origin HEAD:main)
+  out=$(as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "published ${n##*/} as [0-9T]*Z-ga-x-y1\.md: the store already had another message by that name" &&
+    ok "a leftover message whose name the store took meanwhile is published under a new one, saying so" ||
+    no "a leftover message whose name the store took wedged the clone, or wasn't renamed (exit $rc)" "$out"
+  out=$(as gb read 2>&1)
+  [ "$(printf '%s\n' "$out" | grep -c -e '^from-ga$' -e '^from-ga-x$')" = 2 ] &&
+    { [ -z "$SSH" ] || [ "$(printf '%s\n' "$out" | grep -c -e '\[verified: from ga\]$' -e '\[verified: from ga-x\]$')" = 2 ]; } &&
+    ok "and the recipient gets both messages${SSH:+, each verified}" || no "the recipient didn't get both messages" "$out"
+  out=$(as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && [ -z "$(printf '%s\n' "$out" | grep -e published -e 'set aside')" ] && ok "and the next command says nothing more" ||
+    no "the next command didn't work quietly (exit $rc)" "$out"
+  # any other conflicting leftover (here: an update to ga's record, which a store writer edited meanwhile) is set aside
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(ga's update the store won't take)" 4 "written locally, not published" fast ga update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && sed 's/^about: .*/about: theirs/' mailbox/agents/ga.md > ga.t &&
+    mv ga.t mailbox/agents/ga.md && git commit -qam edit && git push -q origin HEAD:main)
+  out=$(as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: .*refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
+    git -C "$ck" rev-parse -q --verify refs/agent-mailbox/stuck/1 >/dev/null &&
+    ok "a leftover that conflicts otherwise is set aside under refs/agent-mailbox/stuck/, saying so" ||
+    no "a conflicting leftover wedged the clone, or wasn't set aside (exit $rc)" "$out"
+  for c in list agents; do out=$(as ga $c 2>&1); rc=$?
+    { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep -e 'set aside' -e "can't update")" ] &&
+      ok "and every later command works ($c)" || no "a later command failed after a leftover was set aside ($c, exit $rc)" "$out"; done
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "and the store keeps its own version" || no "the set-aside commit reached the store" "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md)"
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

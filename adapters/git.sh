@@ -7,7 +7,8 @@
 #   into origin/<branch> explicitly, then rebase onto that ref.
 # - A rejected push (someone pushed first) fetches, rebases and retries, with a random pause.
 # - A commit left unpublished by an earlier failure is published by the next command; nothing is resent.
-# - A rebase that stops part-way is aborted, so the clone is never left mid-rebase.
+# - A rebase that stops part-way is aborted, so the clone is never left mid-rebase. One that publishes what an earlier
+#   command left, stopped by a conflict with the store, goes on instead (ad_unstick): that commit can't wedge the clone.
 # - The watcher's peek fetch and holds' history fetch write only their own refs (`--refmap=`): git updates a ref only
 #   from the value it read, so a peek that also moved origin/<branch> made a send's fetch or push in this clone fail;
 #   and origin/<branch> is the clone's record of where it last synced, which tells it what it has published.
@@ -181,11 +182,57 @@ ad_pull() {
     fi
   fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
-    ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null || { ad_git rebase --abort >/dev/null 2>&1; return 1; }
+    rb=$(ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null) ||
+      { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
   else
     rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
   fi
 }
+
+# ad_unstick: finish a rebase of commits an earlier command left that stopped on a conflict with the store, so they
+# can't wedge the clone. A message such a commit added, whose name the store now has for another message (two senders
+# whose name and topic join to one file name, in one second), is moved to a new stamp, with its .sig: a signature
+# covers the bytes, not the name. Any other conflicting commit is set aside under refs/agent-mailbox/stuck/<n> in the
+# clone, and skipped. Each says so, once. Status 1 leaves the rebase to be aborted, as before
+ad_unstick() { k=0 rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
+  while [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; do
+    k=$((k+1)); [ $k -le 50 ] || return 1
+    c=$(ad_git rev-parse -q --verify REBASE_HEAD) || return 1
+    u=$(ad_git -c core.quotePath=false diff --name-only --diff-filter=U); [ -n "$u" ] || return 1
+    if ad_restamp; then ad_git -c core.editor=: rebase --continue >/dev/null 2>&1 || :
+    else n=1; while ad_git rev-parse -q --verify "refs/agent-mailbox/stuck/$n" >/dev/null; do n=$((n+1)); done
+      ad_git update-ref "refs/agent-mailbox/stuck/$n" "$c" || return 1
+      warn "set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published (it's kept as refs/agent-mailbox/stuck/$n in $AD_DIR); this clone goes on from the store"
+      ad_git rebase --skip >/dev/null 2>&1 || :
+    fi
+  done; }
+# ad_restamp: (for ad_unstick) resolve the stopped commit's conflicts when each is a message that commit added, under a
+# name the store took meanwhile, by moving it (and its .sig) to the next free stamp; status 1 when any isn't
+ad_restamp() { ms=""
+  # (a line at a time, so a path the store chose is never expanded as a pattern)
+  while IFS= read -r f; do m=${f%.sig}
+    printf '%s\n' "$m" | grep -Eq "^${rr:+$rr/}inbox/[a-z0-9][a-z0-9.-]{0,62}/[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]+\\.md\$" || return 1
+    [ "$(ad_git diff-tree --root -r --no-commit-id --name-status "$c" -- "$m" | cut -f1)" = A ] || return 1
+    case " $ms " in (*" $m "*) ;; (*) ms="$ms $m" ;; esac
+  done <<EOF
+$u
+EOF
+  for m in $ms; do d=${m%/*} b=${m##*/}; rest=${b#*Z-} i=0
+    st=$(date -u +%Y%m%dT%H%M%SZ)
+    while ad_git cat-file -e "HEAD:$d/$st-$rest" 2>/dev/null || [ -e "$AD_DIR/$d/$st-$rest" ]; do
+      i=$((i+1)); [ $i -le 10 ] || return 1; sleep 1; st=$(date -u +%Y%m%dT%H%M%SZ); done
+    nm="$d/$st-$rest"
+    ad_git show "$c:$m" > "$AD_DIR/$nm" || return 1; set -- "$nm"
+    if ad_git cat-file -e "$c:$m.sig" 2>/dev/null; then ad_git show "$c:$m.sig" > "$AD_DIR/$nm.sig" || return 1; set -- "$nm" "$nm.sig"; fi
+    # the store's own message keeps its name, as the store has it
+    for f in "$m" "$m.sig"; do
+      if ad_git cat-file -e "HEAD:$f" 2>/dev/null; then ad_git checkout -q HEAD -- "$f" || return 1
+      else ad_git rm -q -f --cached --ignore-unmatch -- "$f" >/dev/null || return 1; rm -f "$AD_DIR/$f"; fi
+    done
+    ad_git add -f -- "$@" || return 1
+    warn "published ${m##*/} as ${nm##*/}: the store already had another message by that name"
+  done
+  [ -z "$(ad_git diff --name-only --diff-filter=U)" ]; }
 
 # ad_unpublished <why>: say what's saved locally but not published. A command publishing what an earlier one left
 # (AD_LEFTOVER, from ad_sync) has written nothing of its own yet, so it says so: that one is to be run again
@@ -301,7 +348,7 @@ ad_sync() {
   if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
   # (-x: files the store's own .gitignore names are debris too)
   ad_git clean -fdqx -- "$ROOT" 2>/dev/null
-  err=$(ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
+  err=$(AD_UNSTICK=1; ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)
   if ad_remote_has_branch; then
