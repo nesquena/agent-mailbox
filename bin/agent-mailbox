@@ -49,8 +49,9 @@ VERSION=0.1.1
 AD_INIT=
 PROTOCOL=1
 NS=agent-mailbox
-# (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
-AD_LEFTOVER=
+# (set only by the git adapter, around its push of what an earlier command left, and around its sync's rebase of it:
+# never taken from the environment)
+AD_LEFTOVER= AD_UNSTICK=
 # (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
 # command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new; AD_HISTORY, set
 # when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
@@ -792,6 +793,9 @@ send)
   used="$STATE/names/$STORE_ID/$ME"
   while { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ] &&
     grep -qxF -- "$to/$stamp-$ME-$topic.md" "$used"; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
+  # a name the store already has (another sender's whose name and topic join to it, or one this clone's leftover was
+  # moved to) gets the next second, once; a name taken then too stops the send, below
+  { [ -e "$M/inbox/$to/$stamp-$ME-$topic.md" ] || [ -L "$M/inbox/$to/$stamp-$ME-$topic.md" ]; } && { sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); }
   # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
   # or release waits for the next second after this sender's previous one in this store, so the two never tie.
   # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set
