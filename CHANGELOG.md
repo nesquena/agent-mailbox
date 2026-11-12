@@ -6,6 +6,13 @@
   settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
   Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
   first written.
+- **`reply <file> <body>` answers a message and consumes it in one command.** It sends to the message's sender, on its
+  topic, with `in_reply_to` naming it and its context kept, and removes it from your inbox in the same change, as
+  `send … --in-reply-to <file> --consume <file>` does. `--keep` leaves it in your inbox, and `--needs`, `--context`,
+  `--hold` and `--release` pass through to `send`. It refuses a message that isn't in your inbox, one whose `from:`
+  header and file name name different senders (or whose header isn't plain), and one that reads `bad`, `changed` or
+  `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
+  refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
