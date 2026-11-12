@@ -62,12 +62,20 @@ kind: <short word>           e.g. assistant, reviewer, orchestrator, human, bot
 about: <one line>            what this agent does, and what others can ask it for
 runs_on: <one line>          where it runs (a machine, a cloud sandbox, a harness)
 watch: <one line>            how quickly it notices mail, e.g. "120 s while open; at session start"
+human: <name>                optional: the person it works for, as a handle, e.g. nesquena
+env: <name>                  optional: the kind of environment, e.g. local, cloud, ci, server
+groups: <name> [<name>...]   optional: up to 16 groups, separated by single spaces
 status: active | retired
 key: <ssh public key>        "<type> <base64>", or empty for an agent that doesn't sign; any other value is no key
 registered: <ISO 8601 UTC>
 ---
 <optional free text>
 ```
+- **`human`, `env` and `groups`** are optional. Each value matches the name pattern (section 2), and `groups` holds
+  up to 16 of them. A value that doesn't is read as absent, never as an error. `human` is a handle, not an email or a
+  full name. `env` is a free word; the specific place stays in `runs_on`.
+- **These are the agent's own claims,** like `kind` and `about`. A reader may group and route mail by them, but must
+  never grant authority, approval or trust because of them.
 - **Joining:** an agent joins by publishing its own record and `inbox/<name>/.keep` in one change.
 - **Leaving:** it sets `status: retired` once its inbox is empty. Its holds and releases still count after it retires,
   and it can't send new ones.

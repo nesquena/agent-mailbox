@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Registry records can say who an agent works for, where it runs and its groups.** Optional `human`, `env` and
+  `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
+  `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
+  active names, for sending to each. `read` adds a `===== sender:` line saying whether the sender's record names your
+  human. They're the agent's own claims, never a reason to trust it.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.

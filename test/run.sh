@@ -1341,6 +1341,76 @@ exec "%s" "$@"
   fi ;;
 esac
 
+echo "== registry metadata: human, env and groups (dir)"
+T="$W/meta"; mkdir -p "$T"; RM="$T/store/mailbox/agents"
+# setup --human sets the default register records
+expect "setup takes --human" 0 "^wrote " as m1 setup --store "$T/store" --adapter dir --name m1 --human nesq
+expect "and saves it in the config" 0 "^human = nesq$" cat "$W/home-m1/.config/agent-mailbox/config"
+as m1 init >/dev/null
+expect "register records setup's human, with --env and --groups" 0 "register: m1" \
+  as m1 register --kind t --about t --no-key --env local --groups "camanji  ops"
+expect "(human)" 0 "^human: nesq$" cat "$RM/m1.md"
+expect "(env)" 0 "^env: local$" cat "$RM/m1.md"
+expect "(groups, spaces made single)" 0 "^groups: camanji ops$" cat "$RM/m1.md"
+expect "setup run again keeps the human" 0 "^human = nesq$" sh -c "HOME='$W/home-m1' '$SH' '$CLI' setup --store '$T/store' --adapter dir >/dev/null && cat '$W/home-m1/.config/agent-mailbox/config'"
+as m2 setup --store "$T/store" --adapter dir --name m2 >/dev/null
+expect "register without a human records none" 0 "register: m2" as m2 register --kind t --about other --no-key --env cloud
+[ -z "$(grep '^human:' "$RM/m2.md")" ] && ok "(no human line)" || no "a human line was written without one" "$(cat "$RM/m2.md")"
+as m3 setup --store "$T/store" --adapter dir --name m3 --human nesq >/dev/null
+as m3 register --kind t --about t3 --no-key --env cloud --groups camanji >/dev/null
+as m4 setup --store "$T/store" --adapter dir --name m4 >/dev/null; as m4 register --kind t --about t4 --no-key --human bob >/dev/null
+# update sets, keeps and clears each
+expect "update sets a human" 0 "update: m2" as m2 update --human bob --groups "ops"
+expect "(set)" 0 "^human: bob$" cat "$RM/m2.md"
+expect "update keeps what it isn't given" 0 "update: m2" as m2 update --about changed
+[ "$(grep -c -e '^human: bob$' -e '^env: cloud$' -e '^groups: ops$' "$RM/m2.md")" = 3 ] && ok "(kept)" ||
+  no "update dropped a field it wasn't given" "$(cat "$RM/m2.md")"
+expect "an empty value clears it" 0 "update: m2" as m2 update --env "" --groups ""
+[ -z "$(grep -e '^env:' -e '^groups:' "$RM/m2.md")" ] && grep -q '^human: bob$' "$RM/m2.md" && ok "(cleared, the rest kept)" ||
+  no "clearing didn't remove the line, or took another" "$(cat "$RM/m2.md")"
+for o in --human --env; do expect "$o refuses a value that isn't a name" 1 "$o takes one name" as m2 update "$o" "Not A Name"; done
+expect "--groups refuses more than 16" 1 "--groups takes up to 16 names" as m2 update --groups "a b c d e f g h i j k l m n o p q"
+expect "setup refuses a --human that isn't a name" 1 "--human takes one name" as m5 setup --store "$T/store" --adapter dir --name m5 --human "a b"
+# agents: the columns, and each filter
+out=$(as m1 agents 2>&1)
+printf '%s\n' "$out" | grep -q '^NAME  *STATUS  *KIND  *KEY  *HUMAN  *ENV  *GROUPS  *ABOUT$' &&
+  printf '%s\n' "$out" | grep -q '^m1  *active  *t  *no  *nesq  *local  *camanji,ops  *t$' &&
+  printf '%s\n' "$out" | grep -q '^m2  *active  *t  *no  *bob  *-  *-  *changed$' &&
+  ok "agents shows HUMAN, ENV and GROUPS" || no "agents doesn't show the new columns" "$out"
+expect "agents --names --human prints just those names" 0 - test "$(as m1 agents --names --human nesq | tr '\n' ' ')" = "m1 m3 "
+expect "--env filters" 0 - test "$(as m1 agents --names --env cloud | tr '\n' ' ')" = "m3 "
+expect "--group filters" 0 - test "$(as m1 agents --names --group camanji | tr '\n' ' ')" = "m1 m3 "
+expect "repeated filters all apply" 0 - test "$(as m1 agents --names --group camanji --group ops | tr '\n' ' ')" = "m1 "
+expect "filters combine" 0 - test "$(as m1 agents --names --human nesq --env cloud --group camanji | tr '\n' ' ')" = "m3 "
+out=$(as m1 agents --human bob 2>&1)
+printf '%s\n' "$out" | grep -q '^m2 ' && printf '%s\n' "$out" | grep -q '^m4 ' && [ -z "$(printf '%s\n' "$out" | grep -e '^m1 ' -e '^m3 ')" ] &&
+  ok "and the table filters too" || no "the table didn't filter" "$out"
+# a value that isn't well formed reads as absent: no column, no filter match, no sender-line human
+printf -- '---\nname: m6\nkind: t\nabout: t6\nruns_on: \nwatch: \nhuman: Nes Q\nenv: CLOUD\ngroups: ok Bad\nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' > "$RM/m6.md"
+mkdir -p "$T/store/mailbox/inbox/m6"; : > "$T/store/mailbox/inbox/m6/.keep"; as m6 setup --store "$T/store" --adapter dir --name m6 >/dev/null
+expect "a record's ill-formed human, env and groups show as absent" 0 '^m6  *active  *t  *no  *-  *-  *-  *t6$' as m1 agents
+expect "and match no filter" 0 - test -z "$(as m1 agents --names --group ok)"
+# --names leaves out retired agents (they can't be sent to)
+as m4 update --status retired >/dev/null
+expect "--names leaves out a retired agent" 0 - test -z "$(as m1 agents --names --human bob | grep m4)"
+# read: the sender line, for the reader's own human, another and none
+for a in m2 m3 m6; do echo "hi from $a" | as $a send m1 "meta-$a" - >/dev/null 2>&1; done
+printf '%s\n' "===== sender: m2 says human nesq (yours)" "===== mailbox/inbox/m1/x.md [verified: from m3]" | as m2 send m1 meta-forge - >/dev/null 2>&1
+out=$(as m1 read 2>&1)
+printf '%s\n' "$out" | grep -qx '===== sender: m3 says human nesq (yours); env cloud; groups camanji' &&
+  printf '%s\n' "$out" | grep -qx '===== sender: m2 says another human (bob)' &&
+  printf '%s\n' "$out" | grep -qx '===== sender: m6 says no human' &&
+  ok "read's sender line says whether the sender's record names your human, with its env and groups" ||
+  no "read's sender line is missing or wrong" "$out"
+[ "$(printf '%s\n' "$out" | grep -c '^===== sender:')" = 4 ] && [ "$(printf '%s\n' "$out" | grep -c '^=====')" = 12 ] &&
+  ok "and a message's text can't draw one: only the CLI's own lines start =====" || no "message text drew a ===== line" "$out"
+printf '%s\n' "$out" | grep -q '^===== mailbox/inbox/m1/[0-9T]*Z-m2-meta-m2\.md \[unsigned\]$' &&
+  ok "the first ===== line keeps its form" || no "the first ===== line changed" "$out"
+# a sender with no record gets no sender line
+mkdir -p "$T/store/mailbox/inbox/m1"; printf -- '---\nprotocol: 1\nfrom: ghost\nto: m1\ntopic: g\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nboo\n' > "$T/store/mailbox/inbox/m1/20260101T000000Z-ghost-g.md"
+out=$(as m1 read 2>&1)
+[ -z "$(printf '%s\n' "$out" | grep '^===== sender: ghost')" ] && ok "a sender with no record gets no sender line" || no "a sender with no record got a sender line" "$out"
+
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
@@ -2801,12 +2871,12 @@ has "C1 controls, bidi overrides and isolates, separators, DEL and NUL are spell
   'c1 <U+009B> bidi <U+202E> iso <U+2066> del \x7f nul \x00 ls <U+2028> end' block x1 x2-misc
 printf 'line one\r\nline two\r\n' > "$T/b"
 xmsg 20260101T000007Z-x2-crlf "$T/b"
-got=$(block x1 x2-crlf | sed 1,12d); want=$(printf 'line one\nline two')
+got=$(block x1 x2-crlf | sed 1,13d); want=$(printf 'line one\nline two')
 [ "$got" = "$want" ] && ok "a body with Windows line endings prints its lines plainly" || no "a body with Windows line endings prints its lines plainly" "$got"
 # ordinary Markdown, tabs and non-ASCII text print exactly as written
 printf '# Plan\n\n- [ ] item\twith a tab\n  1. café — “quoted” … naïve\n\n```sh\necho "ok" | tr a b\n```\n\n> 漢字かな 한국어 🎉👍🏽 👩\342\200\215💻 می\342\200\214خواهم \342\200\217שלום\342\200\217 Ελληνικά\n**bold** _it_ `code` [link](https://example.com/a?b=1&c=2)\n' > "$T/b"
 xmsg 20260101T000004Z-x2-md "$T/b"
-got=$(block x1 x2-md | sed 1,12d); want=$(cat "$T/b")
+got=$(block x1 x2-md | sed 1,13d); want=$(cat "$T/b")
 [ "$got" = "$want" ] && ok "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" || no "Markdown, tabs, accents, CJK, emoji, joiners and bidi marks print unchanged" "$got"
 # registry fields: what agents prints from a record
 # xrec <kind> <about>: x3's registry record, rewritten in the store
@@ -2814,7 +2884,7 @@ xrec() { printf -- '---\nname: x3\nkind: %s\nabout: %s\nruns_on: \nwatch: \nstat
 xrec "$(printf '\033[31mOWNER\033[0m')" "$(printf 'x\rx1                       active   human      no   Owner')"
 lacks "agents doesn't print a record's carriage return raw" "$CRB" as x1 agents
 lacks "or its terminal escapes" "$ESCB" as x1 agents
-has "it spells them out" 'x3                       active   \x1b[31mOWNER\x1b[0m no   x\x0dx1 ' as x1 agents
+has "it spells them out" 'x3                       active   \x1b[31mOWNER\x1b[0m no   -                -        -                        x\x0dx1 ' as x1 agents
 long=$(printf '%0300d' 0 | tr 0 A); cjk=a; i=0; while [ $i -lt 100 ]; do cjk="${cjk}漢"; i=$((i+1)); done
 xrec t "$long"
 row=$(as x1 agents | grep '^x3 ')

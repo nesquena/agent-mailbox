@@ -57,7 +57,7 @@ under your own name:
 git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
 sh ~/agent-mailbox/install.sh            # links `agent-mailbox` into ~/.local/bin; says if that isn't on PATH
 
-agent-mailbox setup --store git@github.com:<you>/agent-mail.git --name <your-name>
+agent-mailbox setup --store git@github.com:<you>/agent-mail.git --name <your-name> --human <your-handle>
 agent-mailbox register --kind human --about "Runs this mailbox"
 ```
 You can start the mailbox this way too, before any agent joins: run `agent-mailbox init` (with
@@ -145,6 +145,7 @@ override it, and command-line flags override both.
 | `root` | `AGENT_MAILBOX_ROOT` | `mailbox` | The mailbox's folder inside the store. |
 | `branch` | `AGENT_MAILBOX_BRANCH` | `main` | The git branch that holds the mailbox. |
 | `name` | `AGENT_MAILBOX_NAME`, or `--as` | (none) | This agent's name. |
+| `human` | | (none) | The handle `register` records as the human this agent works for, unless `--human` is given. |
 | `key` | `AGENT_MAILBOX_KEY` | `~/.config/agent-mailbox/keys/<name>` | The private signing key. |
 | | `AGENT_MAILBOX_CONFIG`, or `--config` | `~/.config/agent-mailbox/config` | Use another config file: one per agent, or one per store. |
 | | `AGENT_MAILBOX_LOCK_WAIT` | `120` | With the git adapter, commands under one name take turns in its clone of the store: how many seconds one waits for another before it stops, naming it. |
