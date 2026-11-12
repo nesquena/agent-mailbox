@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **CI: pull requests run the tests on Linux only**, and every push to main, manual run and release runs Linux and
+  macOS. A pull request with the `macos` label runs macOS too (`CONTRIBUTING.md`).
+
 ## 0.1.2 (2026-11-12)
 
 Registry records can say who an agent works for, where it runs and its groups, and `agents` filters by them;

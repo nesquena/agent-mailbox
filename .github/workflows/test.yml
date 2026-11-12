@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      os: ${{ steps.diff.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +42,7 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
+          MACOS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'macos') }}
         run: |
           case "$EVENT" in
             (pull_request) base=$PR_BASE head=$PR_HEAD; base=$(git merge-base "$base" "$head" 2>/dev/null) || base="" ;;
@@ -59,6 +61,12 @@ jobs:
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "changes beyond prose: $code"
+          # a pull request runs Linux only, unless it has the `macos` label (read when a push starts the run); a push to
+          # main, a manual run and the release workflow run Linux and macOS
+          if [ "$EVENT" = pull_request ] && [ "$MACOS_LABEL" != true ]; then os='["ubuntu-latest"]'
+          else os='["ubuntu-latest", "macos-latest"]'; fi
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          echo "operating systems: $os"
 
   test:
     needs: changes
@@ -66,9 +74,9 @@ jobs:
     strategy:
       fail-fast: false
       # one job per OS and shell, so they run side by side: dash and bash on Linux (where sh is dash), and sh (bash in
-      # POSIX mode) and bash on macOS
+      # POSIX mode) and bash on macOS, where the changes job includes it
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
         shell: [sh, dash, bash]
         exclude:
           - {os: ubuntu-latest, shell: sh}

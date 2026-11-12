@@ -35,8 +35,10 @@ time, from `test/run.sh` to bats-core files under `test/` (bats-core 1.4 or late
 `brew install bats-core`, or your package manager's `bats`). `test/run.sh` runs them last, and skips them without bats.
 To run them alone, `bats test/`, or `TEST_SHELL=dash bats test/` for the CLI under dash: the test files are bash, and
 the CLI they drive runs under `TEST_SHELL` (default `sh`). A new test goes in a `.bats` file; its shared setup is in
-`test/helpers.bash`. CI runs the suite on Linux and macOS for every pull request, every push to main and every manual
-run (Actions, "test", "Run workflow", on your branch). A change only to Markdown files, `docs/` or `LICENSE` runs no
+`test/helpers.bash`. CI runs the suite on Linux for every pull request, and on Linux and macOS for every push to main,
+every manual run (Actions, "test", "Run workflow", on your branch) and every release. A pull request with the `macos`
+label runs macOS too, from its next push; for a change macOS's tools may treat differently (`find`, `sed`, `ps`, process
+handling), add the label or start a manual run. A change only to Markdown files, `docs/` or `LICENSE` runs no
 tests, and a newer push to a pull request, or a newer manual run on the same branch, cancels the run it supersedes. The
 `gate` job reports on every run: it passes at once for a prose-only change, and otherwise only when every test job
 passed, so it's the one check a branch rule needs to require. After retargeting a pull request to another base branch,
