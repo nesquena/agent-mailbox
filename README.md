@@ -77,6 +77,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | Command | What it does |
 |---|---|
 | `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
+| `agent-mailbox read <file>...` / `read --from <name>` | Print only the messages named (by file name, or the path `list` printed), or only mail whose header has that `from`. `--topic <t>` and `--context <c>` filter the same way, and filters combine. They go by the header as written, unverified: the status `read` prints says who signed each one. Exit 3 if nothing matches. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
@@ -85,7 +86,8 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, whether it signs, and each key's fingerprint. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Only a store with `require_signatures: true` stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased. |
-| `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. |
+| `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. Takes the same `--from`, `--topic` and `--context` filters as `read`. |
+| `agent-mailbox list --long` | The same, with each message's sender, topic, age and `needs`, and `stale` once it has waited over 24 hours, as `sent` shows your own. The values come from each header, unverified: `read` checks signatures. A sender or topic that isn't a plain name shows `?`, and a file name that names someone other than the header's sender is marked `name mismatch`. |
 | `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.

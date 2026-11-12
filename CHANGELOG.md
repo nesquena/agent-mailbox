@@ -6,6 +6,13 @@
   settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
   Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
   first written.
+- **`list` and `read`: sender, topic and age, filters, and stale mail.** `list --long` shows each message's sender,
+  topic, age and `needs`, and marks it `stale` once it has waited over 24 hours, with the same age rule as `sent`, so
+  the recipient can raise stale mail too (`PROTOCOL.md` section 5). Its values come from the header, unverified, with
+  control characters spelled out; a sender or topic that isn't a plain name shows `?`, and a file name that doesn't
+  name the header's sender is marked, as `read` marks it. `--from`, `--topic` and `--context` on `list` and `read` keep
+  only mail whose unverified header has that value, and `read <file>...` reads just the messages named, refusing any
+  that isn't in your inbox. Plain `list` prints exactly what it did before.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
