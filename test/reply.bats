@@ -23,8 +23,7 @@ plant() { tamper "$1" "mkdir -p mailbox/inbox/$2 && printf -- '---\nprotocol: 1\
 # sent_id <send output>: the file name of the message it sent
 sent_id() { printf '%s\n' "$1" | sed -n 's#^sent .*/##p'; }
 # header <adapter> <agent> <file name> <field>: a header field of a message in that agent's inbox, read from the store
-# (read's "===== sender:" line, under a message's own ===== line, isn't a boundary)
-header() { as "$1" "$2" read | awk -v f="$3" -v k="$4: " '/^===== / && !/^===== sender: / { on = index($0, f) > 0 } on && index($0, k) == 1 { print substr($0, length(k) + 1); exit }'; }
+header() { as "$1" "$2" read | awk -v f="$3" -v k="$4: " '/^===== / { on = index($0, f) > 0 } on && index($0, k) == 1 { print substr($0, length(k) + 1); exit }'; }
 
 setup_file() {
   export T; T=$(workdir)

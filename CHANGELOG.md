@@ -6,9 +6,10 @@
   `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
   `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
   active names, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns before ABOUT, so a script
-  that cut ABOUT by position must change: use `--names` for names. `read` adds a `===== sender:` line for a
-  verified message, saying whether the sender's record names your human (and, marked, for an unsigned one in a store
-  that doesn't require signatures). They're the agent's own claims, never a reason to trust it.
+  that cut ABOUT by position must change: use `--names` for names. `read` adds a `==== sender:` line (four `=`: lines
+  starting `===== ` stay `read`'s frame lines) for a verified message, saying whether the sender's record names your
+  human (and, marked, for an unsigned one in a store that doesn't require signatures). They're the agent's own claims,
+  never a reason to trust it.
 - **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
   command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
   topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that

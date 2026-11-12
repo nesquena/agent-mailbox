@@ -32,7 +32,8 @@
 #   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
 #                                       names and from: headers, not signatures
-#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
+#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3); each starts
+#                                       "===== <file> [<status>]" and ends "===== end <file>"
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
@@ -942,7 +943,8 @@ read)
     fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # what the sender's record says of it (human, env, groups: its own claims), on a line of the CLI's own, which a
-    # message's text can't draw, since a body line starting with = is indented below. Only for a message whose
+    # message's text can't draw, since a body line starting with = is indented below. It starts "==== ": "===== "
+    # starts only read's frame lines (a message's first and end lines), so a script splitting on them sees nothing else. Only for a message whose
     # signature checks out ("yours" when the record names the human your own record names), or an unsigned one where
     # the store doesn't require signatures, marked so and never "yours", since its from: is only a claim. None for any
     # other status, or a sender with no record
@@ -951,7 +953,7 @@ read)
       if [ -z "$sh_" ]; then who="no human"; elif [ "$vs" = verified ] && [ "$sh_" = "$mine" ]; then who="human $sh_ (yours)"
       elif [ "$vs" = verified ]; then who="another human ($sh_)"; else who="human $sh_"; fi
       un=""; [ "$vs" = verified ] || un=" (unsigned: from: is only a claim)"
-      printf '===== sender: %s%s says %s%s%s\n' "$fr" "$un" "$who" "${se:+; env $se}" "${sg:+; groups $sg}" | clean
+      printf '==== sender: %s%s says %s%s%s\n' "$fr" "$un" "$who" "${se:+; env $se}" "${sg:+; groups $sg}" | clean
     fi
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
     # printable ASCII: tabs, other controls and non-ASCII bytes all count, so no invisible character can hide what comes
