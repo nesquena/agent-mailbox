@@ -29,20 +29,35 @@ the most care.
 sh test/run.sh                 # every adapter, with your default sh
 TEST_SHELL=dash dash test/run.sh git   # the CLI under dash, git adapter only
 TEST_SHELL=bash bash test/run.sh       # the CLI under bash
+sh test/run.sh --list                  # the ids of the suite's sections
+sh test/run.sh --only stop-hook,bats   # just those sections
+sh test/run.sh --shard 2/4             # shard 2 of 4, as CI runs it
 ```
 The suite needs git. Its signature tests need `ssh-keygen`, and are skipped without it. Tests are moving, a section at a
 time, from `test/run.sh` to bats-core files under `test/` (bats-core 1.4 or later, which runs on bash 3.2 and later:
 `brew install bats-core`, or your package manager's `bats`). `test/run.sh` runs them last, and skips them without bats.
 To run them alone, `bats test/`, or `TEST_SHELL=dash bats test/` for the CLI under dash: the test files are bash, and
 the CLI they drive runs under `TEST_SHELL` (default `sh`). A new test goes in a `.bats` file; its shared setup is in
-`test/helpers.bash`. CI runs the suite on Linux for every pull request, and on Linux and macOS for every push to main,
-every manual run (Actions, "test", "Run workflow", on your branch) and every release. A pull request with the `macos`
-label runs macOS too, from its next push; for a change macOS's tools may treat differently (`find`, `sed`, `ps`, process
-handling), add the label or start a manual run. A change only to Markdown files, `docs/` or `LICENSE` runs no
-tests, and a newer push to a pull request, or a newer manual run on the same branch, cancels the run it supersedes. The
-`gate` job reports on every run: it passes at once for a prose-only change, and otherwise only when every test job
-passed, so it's the one check a branch rule needs to require. After retargeting a pull request to another base branch,
-push a commit, or close and reopen the pull request, so the gate checks the new base (a re-run checks the old one).
+`test/helpers.bash`.
+
+`test/run.sh` is a list of sections, each opening with its `==` line. Each makes what it needs itself (its own store,
+homes and helper files), so any of them runs alone or in any order: `--order <seed>` shuffles them, to check that
+none leans on what another left behind. `--shard i/n` runs shard i of n, the sections split so the shards take about
+as long: by the seconds each takes alone, in `test/section-costs`. A new section needs a line there (time
+`test/run.sh --only <id>`). `sh test/shards-cover.sh` checks that the shards of 4, and of 3, run every section once
+between them, and that `test/section-costs` names each section, and nothing else.
+
+CI runs the suite on Linux for every pull request, and on Linux and macOS for every push to main, every manual run
+(Actions, "test", "Run workflow", on your branch) and every release, in four shards per shell, side by side. A push to
+main, a manual run and a release also run it once per OS unsharded, start to end. A pull request with the `macos`
+label runs macOS too, from its next push. A re-run doesn't pick up the label (it reuses the labels the run started
+with): push a commit, or, for a branch you can't push to, close and reopen the pull request. For a change macOS's
+tools may treat differently (`find`, `sed`, `ps`, process handling), add the label or start a manual run. A change
+only to Markdown files, `docs/` or `LICENSE` runs no tests, and a newer push to a pull request, or a newer manual run
+on the same branch, cancels the run it supersedes. The `gate` job reports on every run: it passes at once for a
+prose-only change, and otherwise only when every test job (every shard, and each unsharded run) passed, so it's the
+one check a branch rule needs to require. After retargeting a pull request to another base branch, push a commit, or
+close and reopen the pull request, so the gate checks the new base (a re-run checks the old one).
 
 `sh test/bench.sh [messages] [senders]` prints rough timings (sends, concurrent senders, `holds`) against a throwaway
 local store. It isn't part of the suite; use it when a change could affect speed.
