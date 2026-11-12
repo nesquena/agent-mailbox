@@ -732,6 +732,9 @@ send)
   used="$STATE/names/$STORE_ID/$ME"
   while { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ] &&
     grep -qxF -- "$to/$stamp-$ME-$topic.md" "$used"; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
+  # a name the store already has (another sender's whose name and topic join to it, or one this clone's leftover was
+  # moved to) gets the next second, once; a name taken then too stops the send, below
+  { [ -e "$M/inbox/$to/$stamp-$ME-$topic.md" ] || [ -L "$M/inbox/$to/$stamp-$ME-$topic.md" ]; } && { sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); }
   # holds orders one sender's records by their sent time, to the second, and on a tie a hold beats a release: a hold
   # or release waits for the next second after this sender's previous one in this store, so the two never tie.
   # ceiling: it knows only this machine's sends (a name has one live session) and an equal second, not a clock set

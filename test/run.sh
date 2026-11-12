@@ -1118,7 +1118,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
       { [ ! -f "$o.sig" ] || git mv "$o.sig" "$n.sig"; }; }; } && git commit -qm same-second && git push -q origin HEAD:main)
   # (with an editor that fails in the environment, as one git would open: the CLI never opens one)
   out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
-  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "published ${n##*/} as [0-9T]*Z-ga-x-y1\.md: the store already had another message by that name" &&
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "moved ${n##*/} to [0-9T]*Z-ga-x-y1\.md (published with this clone's next push): the store already had another message by that name" &&
     ok "a leftover message whose name the store took meanwhile is published under a new one, saying so" ||
     no "a leftover message whose name the store took wedged the clone, or wasn't renamed (exit $rc)" "$out"
   out=$(as gb read 2>&1)
@@ -1149,6 +1149,8 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   c1=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-x-y1\.md$' | head -n 1)")
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "(gb's consume the store won't take)" 4 "written locally, not published" fast gb consume "$c1"
+  # (as a run cut short after making the ref, before skipping the commit, would leave it)
+  git -C "$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)" update-ref refs/agent-mailbox/stuck/1 HEAD
   rm -f "$T/store.git/hooks/pre-receive"
   (cd "$T/w" && git pull -q --rebase origin main && printf 'edited\n' >> "mailbox/inbox/gb/$c1" && git commit -qam edit-msg && git push -q origin HEAD:main)
   out=$(as gb list 2>&1); rc=$?
@@ -1159,7 +1161,40 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   # a set-aside run cut short, before its skip, leaves a ref for the commit: a later run keeps it, adding none
   ckb=$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)
   [ "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/ | wc -l | tr -d ' ')" = 1 ] &&
-    ok "(one stuck ref for it)" || no "a set-aside commit has more than one stuck ref" "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/)"
+    ok "a run that finds a stuck ref for the commit already keeps it, adding none" ||
+    no "a set-aside commit has more than one stuck ref" "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/)"
+  # a reply quoting in full the message it consumes, left unpublished while the store loses that message (consumed from
+  # another clone, say): git takes the reply for the message renamed, and reports the conflict at the reply's path,
+  # which the store lacks. That's no name taken: the commit is set aside, never moved
+  awk 'BEGIN { for (i = 1; i <= 40; i++) print "line " i " of a message the reply quotes in full" }' > "$T/qtext"
+  as ga send gb q1 "$T/qtext" >/dev/null 2>&1
+  q=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-q1\.md$')")
+  git --git-dir="$T/store.git" show "main:mailbox/inbox/gb/$q" > "$T/qbody"
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's reply, consuming it, the store won't take)" 4 "written locally, not published" fast gb send ga re-q1 "$T/qbody" --consume "$q"
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && git rm -q "mailbox/inbox/gb/$q" "mailbox/inbox/gb/$q.sig" 2>/dev/null || git rm -q "mailbox/inbox/gb/$q"
+    git commit -qm drop-q && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] &&
+    printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-ga): re-q1)" &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/ga | grep -- '-gb-re-q1\.md$')" ] &&
+    ok "a reply quoting the message it consumes, which the store lost meanwhile, is set aside, not moved" ||
+    no "a reply quoting the message it consumes was moved, not set aside (exit $rc)" "$out"
+  # two registers of one name: the one left unpublished is set aside, never moved into agents/
+  as rr setup --store "$T/store.git" --name rr >/dev/null
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(rr's register the store won't take)" 4 "written locally, not published" fast rr register --kind t --about mine $nk
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && mkdir -p mailbox/inbox/rr && : > mailbox/inbox/rr/.keep &&
+    printf -- '---\nname: rr\nkind: t\nabout: theirs\nruns_on: \nwatch: \nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' > mailbox/agents/rr.md &&
+    git add -A && git commit -qm other-rr && git push -q origin HEAD:main)
+  out=$(as rr list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: rr registers)" &&
+    [ "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents | grep -c '^rr')" = 1 ] &&
+    [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/rr.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "a register that lost to another of the same name is set aside, not moved" ||
+    no "a register that lost to another of the same name wasn't set aside (exit $rc)" "$out$NL$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents)"
   # an existing clone that meets a store path it can't check out (a name too long for the file system) fails, as
   # before: it isn't taken for a clone that's up to date
   long=$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "x"; print ".md" }')
@@ -1167,6 +1202,41 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   (cd "$T/w" && git pull -q --rebase origin main && b=$(git hash-object -w --stdin < /dev/null) &&
     git update-index --add --cacheinfo "100644,$b,mailbox/inbox/gb/$long" && git commit -qm long && git push -q origin HEAD:main)
   expect "a clone that can't check out the store's latest fails, rather than reading an old inbox" 1 "can't update from the store" as gb list
+  # a signed leftover moved past an unsigned message of the same name: its .sig goes with it, never staying beside the
+  # unsigned one
+  if [ -n "$SSH" ]; then
+    T="$W/stuckmix"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+    for a in gs gs-x gr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+    as gs init >/dev/null; as gs register --kind t --about t >/dev/null 2>&1
+    for a in gs-x gr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+    printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+    echo signed > "$T/a"; echo unsigned > "$T/b"
+    expect "(gs's signed send the store won't take)" 4 "written locally, not published" fast gs send gr x-z "$T/a"
+    rm -f "$T/store.git/hooks/pre-receive"
+    n=$(git -C "$(ls -d "$W/home-gs/.local/state/agent-mailbox/checkouts/"*-gs)" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-gs-x-z\.md$')
+    as gs-x send gr z "$T/b" >/dev/null 2>&1
+    git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+      o=$(ls mailbox/inbox/gr/*-gs-x-z.md) && { [ "$o" = "$n" ] || git mv "$o" "$n"; } && git commit -qm same-second && git push -q origin HEAD:main)
+    out=$(as gs list 2>&1)
+    out2=$(as gr read 2>&1)
+    printf '%s\n' "$out" | grep -q "moved ${n##*/} to " &&
+      ! git --git-dir="$T/store.git" cat-file -e "main:$n.sig" 2>/dev/null &&
+      printf '%s\n' "$out2" | grep -q "^===== $n \[unsigned\]$" && printf '%s\n' "$out2" | grep -q '\[verified: from gs\]$' &&
+      ok "a signed message moved past an unsigned one of its name takes its .sig with it" ||
+      no "a moved message's .sig stayed on the unsigned one, or didn't go with it" "$out$NL$out2$NL$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  fi
+  # a send whose file name the store already has in this second (another sender's whose name and topic join to it, or
+  # a message moved there) waits for the next second once, rather than failing (a dir store, where a file planted
+  # lands at once)
+  T="$W/taken"; mkdir -p "$T"
+  for a in da db; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+  as da init >/dev/null; for a in da db; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  s0=$(date -u +%Y%m%dT%H%M%SZ); while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.05; done
+  s1=$(date -u +%Y%m%dT%H%M%SZ); printf 'taken\n' > "$T/store/mailbox/inbox/db/$s1-da-t1.md"
+  out=$(echo hi | as da send db t1 - 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
+    [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
+    ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done

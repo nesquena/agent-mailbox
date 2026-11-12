@@ -219,6 +219,9 @@ ad_restamp() { ms=""
   while IFS= read -r f; do m=${f%.sig}
     printf '%s\n' "$m" | grep -Eq "^${rr:+$rr/}inbox/[a-z0-9][a-z0-9.-]{0,62}/[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]+\\.md\$" || return 1
     [ "$(ad_git diff-tree --root -r --no-commit-id --name-status "$c" -- "$m" | cut -f1)" = A ] || return 1
+    # (and the store has a message of that name: a conflict git reports at a path the store lacks, as a reply quoting a
+    # message it consumes, against an edit to that message, is no name taken)
+    ad_git cat-file -e "HEAD:$m" 2>/dev/null || return 1
     case " $ms " in (*" $m "*) ;; (*) ms="$ms $m" ;; esac
   done <<EOF
 $u
@@ -236,7 +239,7 @@ EOF
       else ad_git rm -q -f --cached --ignore-unmatch -- "$f" >/dev/null || return 1; rm -f "$AD_DIR/$f"; fi
     done
     ad_git add -f -- "$@" || return 1
-    said="$said${NL}published ${m##*/} as ${nm##*/}: the store already had another message by that name"
+    said="$said${NL}moved ${m##*/} to ${nm##*/} (published with this clone's next push): the store already had another message by that name"
   done
   [ -z "$(ad_git diff --name-only --diff-filter=U)" ]; }
 
