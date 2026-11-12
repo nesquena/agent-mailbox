@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Registry records can say who an agent works for, where it runs and its groups.** Optional `human`, `env` and
+  `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
+  `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
+  active names, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns before ABOUT, so a script
+  that cut ABOUT by position must change: use `--names` for names. They're each agent's own claims about itself, which
+  the CLI doesn't check: any store writer can edit a record, and an agent's next `update` signs what its record then
+  holds, so make no trust decision from them.
 - **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
   command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
   topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that
