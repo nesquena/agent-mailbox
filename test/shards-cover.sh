@@ -46,10 +46,10 @@ for n in "$@"; do
   same "$n shards run each of the $(count "$full") sections once" "$n shards don't run each section once" "$full" "${all%?}"
 done
 # (a time is a line "<id> <whole seconds>", the rule run.sh reads them by; any other line but a blank or # one is wrong)
-f="$ROOTDIR/test/section-costs"
-odd=$(awk 'NF && !/^#/ && !/^[a-z0-9][a-z0-9-]* [0-9]+$/' "$f")
+f="$ROOTDIR/test/section-costs" rule='^[a-z0-9][a-z0-9-]* [0-9]+$'
+odd=$(awk -v r="$rule" 'NF && !/^#/ && $0 !~ r' "$f")
 [ -z "$odd" ] || fail "test/section-costs has lines that aren't \"<id> <seconds>\"" "$odd"
 same "test/section-costs has a time for each section, and nothing else" \
   "test/section-costs doesn't match the sections (-: no time, +: no such section)" "$full" \
-  "$(awk '/^[a-z0-9][a-z0-9-]* [0-9]+$/ { print $1 }' "$f")"
+  "$(awk -v r="$rule" '$0 ~ r { print $1 }' "$f")"
 exit $bad

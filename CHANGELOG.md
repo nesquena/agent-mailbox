@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests take about a third as long.
+- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
   section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed

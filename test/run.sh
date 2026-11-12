@@ -1496,7 +1496,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   # a signed leftover moved past an unsigned message of the same name: its .sig goes with it, never staying beside the
   # unsigned one
   if [ -n "$SSH" ]; then
-    T="$W/stuckmix"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+    T="$W/stuckmix"; mkdir -p "$T"; fast_sleep; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
     for a in gs gs-x gr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
     as gs init >/dev/null; as gs register --kind t --about t >/dev/null 2>&1
     for a in gs-x gr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
@@ -3954,6 +3954,7 @@ if [ -n "$ONLY" ]; then
     printf '%s\n' "$PLAN" | grep -qxF -- "$_sid" || { echo "test/run.sh: no section '$_sid' (see --list)" >&2; exit 64; }
   done
   PLAN=$(printf '%s\n' "$PLAN" | awk -v o=",$ONLY," 'index(o, "," $1 ",")')
+  [ -n "$PLAN" ] || { echo "test/run.sh: --only names no section (see --list)" >&2; exit 64; }
 elif [ -n "$SHARD" ]; then
   # (the longest first, each to the shard with the least so far, the first of them on a tie: every shard of n runs
   # the same split. A section with no time there counts 1 s)

@@ -109,7 +109,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get -o Acquire::Retries=3 update -q
-          sudo apt-get -o Acquire::Retries=3 install -y -q dash ${{ (matrix.shard == '1/4' || matrix.shard == '1/1') && 'zsh' || '' }}
+          sudo apt-get -o Acquire::Retries=3 install -y -q dash ${{ matrix.shard == '1/4' && 'zsh' || '' }}
       # bats-core runs test/*.bats; pinned to a commit, as the actions are
       - name: Install bats-core 1.14.0
         run: |
@@ -119,7 +119,7 @@ jobs:
           "$RUNNER_TEMP/bats-core/install.sh" "$RUNNER_TEMP/bats"
           echo "$RUNNER_TEMP/bats/bin" >> "$GITHUB_PATH"
       - name: Parse under every available shell
-        if: matrix.shard == '1/4' || matrix.shard == '1/1'
+        if: matrix.shard == '1/4'
         run: |
           for s in sh dash bash zsh; do
             command -v "$s" >/dev/null || { echo "$s not installed"; exit 1; }
@@ -129,7 +129,7 @@ jobs:
             echo "$s ok"
           done
       - name: The shards run every section once
-        if: matrix.shard == '1/4' || matrix.shard == '1/1'
+        if: matrix.shard == '1/4'
         run: TEST_SHELL=${{ matrix.shell }} ${{ matrix.shell }} test/shards-cover.sh 2 3 4 5
       - name: Test suite (${{ matrix.shell }}, shard ${{ matrix.shard }})
         run: >-
