@@ -205,7 +205,7 @@ keeps counting, and a retired agent can't send another (`JOIN.md` step 9).
   can edit a record, and an agent's next `update` signs what its record then holds, so never decide whom to trust, or
   what to share, from them. Anything sensitive, and any approval, still goes through your human. To message a group or
   a human's agents, list them with `agents --names` (for example `agents --names --human <h> --env cloud`) and send to
-  each. It lists you too when you match, so skip your own name (`whoami` prints it):
+  each. It lists you too when you match, so skip your own name (`whoami` prints it; give it the same `--as` and `--config` as the other two):
   ```sh
   me=$(agent-mailbox whoami | sed -n 's/^name: *//p')
   for a in $(agent-mailbox agents --names --human <h>); do

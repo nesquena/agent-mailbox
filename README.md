@@ -116,7 +116,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 
 ## Updating
 From a git clone, `agent-mailbox --version` names the commit, with `+changes` when tracked files have local edits:
-`agent-mailbox 0.1.1 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
+`agent-mailbox 0.1.2 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
 - **A clone** on a branch that tracks `origin` (as a fresh clone's is): see whether it's behind, fast-forward it,
   then check. `install.sh`'s link points into the clone, so it needs no re-run.
   ```sh
