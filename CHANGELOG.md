@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
+  the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
+  release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
+  next record, and reads `bad` when its signature doesn't check out. The same goes for a record with no `sent`, and for
+  an item with no version. Where signatures aren't required, an unsigned record in another `sent` form now counts as the
+  hold or release it names. `PROTOCOL.md` section 5 now pins `sent` to exactly `YYYY-MM-DDThh:mm:ssZ`.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.
