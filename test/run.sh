@@ -177,7 +177,9 @@ for p in $(ps -eo pid=,args= | grep -F -- "${sd:-/nonexistent}/late" | grep -v g
 # then KILL, within the limit plus about 15 s
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo "x=\$( ( sleep 40 & echo \$! > \"$W/esc.pid\" ); echo started )"; } > "$W/esc.sh"
-rm -f "$W/esc.pid"; t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 90 "$SH" "$W/esc.sh" 2>&1); rc=$?; t1=$(date +%s)
+# (its own temp folder inside this run's: a KILLed run leaves its folder, which goes with this run's)
+rm -f "$W/esc.pid"; mkdir -p "$W/tmpb"; t0=$(date +%s)
+out=$(TMPDIR="$W/tmpb" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 90 "$SH" "$W/esc.sh" 2>&1); rc=$?; t1=$(date +%s)
 { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ $((t1 - t0)) -le 25 ] && ok "a run held by an escaped process naming nothing of it still ends (exit $rc)" ||
   no "a run held by an escaped process didn't end in time (exit $rc, $((t1 - t0)) s)" "$out"
 [ ! -s "$W/esc.pid" ] || kill_tree "$(cat "$W/esc.pid")"
