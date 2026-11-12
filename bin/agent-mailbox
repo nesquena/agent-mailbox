@@ -883,18 +883,25 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
-      # every column of the row below is validated, so no header value can shift the others
-      matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
-        field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
-        basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
+      from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")
+      # every column of the row below is validated, so no header value can shift the others (PROTOCOL.md section 5). A
+      # sender that isn't a name can't be named as the signer, and an item whose first word isn't an item names none:
+      # neither counts. An item with more after its first word is read under that word, and a sent in another form
+      # (-) in delivery order (below); either is read like a header that isn't plain
+      matches "$NAME_RE" "$from" || continue
+      odd=""; matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || continue; rec="$i ?" odd=1; }
+      matches "$SENT_RE" "$sent" || { sent=- odd=1; }
+      # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
       # whose signature doesn't reads bad
       v=$(verify_sig "$tmpd/m" "$ME")
-      if ! hdr_ok "$tmpd/m"; then
+      if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
-          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
+        # (an item with more after it names no version, so it never counts as the hold or release it seems to be)
+        case "$rec" in (*" ?") kind=malformed ;; esac
       fi
       # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
       # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
@@ -902,8 +909,8 @@ holds)
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
       [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
-        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
-      echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
+      echo "$sent $kind $rec $from $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
@@ -913,10 +920,12 @@ holds)
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
-  # blocks, and two releases naming different versions conflict (neither counts)
-  latest=$(echo "$records" | awk 'NF { k = $3 " " $5
-      if (!(k in t) || $1 > t[k]) { t[k] = $1; kind[k] = $2; v[k] = $4; last[k] = $0; next }
-      if ($1 < t[k] || kind[k] == "hold") next
+  # blocks, and two releases naming different versions conflict (neither counts). A record whose sent isn't in its
+  # one form (-) takes the time of the one before it from that sender for that item, in delivery order, so it counts
+  # as of then, until that sender's next record
+  latest=$(echo "$records" | awk 'NF { k = $3 " " $5; s = $1; if (s == "-") s = (k in t) ? t[k] : ""
+      if (!(k in t) || s > t[k]) { t[k] = s; kind[k] = $2; v[k] = $4; last[k] = $0; next }
+      if (s < t[k] || kind[k] == "hold") next
       if ($2 == "hold") { kind[k] = "hold"; v[k] = $4; last[k] = $0; next }
       if ($2 == "malformed") { kind[k] = "malformed"; last[k] = $0; next }
       if (kind[k] == "malformed") next

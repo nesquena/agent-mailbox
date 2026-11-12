@@ -2576,9 +2576,9 @@ echo r | as k3 send k1 re - --release "e#1 v1" >/dev/null
 for x in f1 f2 f3 g p; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 echo h | as k3 send k1 hh - --hold "h#1 v1" >/dev/null
 # sg <sender> <file name> <topic> <hold or release line> [<extra header lines>]: a message to k1, signed with that
-# sender's own key, placed in the store as a writer could
-sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: 2999-01-01T00:01:00Z\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
-  "$1" "$3" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
+# sender's own key, placed in the store as a writer could; sent is SGSENT, or a time far ahead
+sg() { mkdir -p "$T/sg"; printf -- '---\nprotocol: 1\nfrom: %s\nto: k1\ntopic: %s\ncontext: general\nsent: %s\nin_reply_to: none\nneeds: none\n%s\n%s---\n\nx\n' \
+  "$1" "$3" "${SGSENT:-2999-01-01T00:01:00Z}" "$4" "${5:-}" > "$T/sg/$2"; rm -f "$T/sg/$2.sig"
   ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-$1/.config/agent-mailbox/keys/$1" "$T/sg/$2" && wr cp "$T/sg/$2" "$T/sg/$2.sig" mailbox/inbox/k1/; }
 expect "a signed hold holds" 5 "a#1 is held by k2" as k1 holds "a#1" --version v1
 as k1 holds "b#1" --version v1 >/dev/null 2>&1
@@ -2610,6 +2610,21 @@ sg k3 29990101T000100Z-k3-rq1.md rq1 "release: q#1 v1"
 sg k3 29990101T000100Z-k3-rq2.md rq2 "release: q#1 v1" "needs: none
 "
 expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a record from k3 whose header isn't plain" as k1 holds "q#1" --version v1
+# a signed hold whose sent, or item, doesn't parse blocks over the sender's older release, rather than being skipped
+for x in s t u w; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
+SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hs.md hs "hold: s#1 v1"
+expect "a signed hold whose sent has a fraction of a second blocks over an older release" 5 "s#1 has a record from k3" as k1 holds "s#1" --version v1
+sg k3 29990101T000100Z-k3-ht.md ht "hold: t#1 v1 "
+expect "a signed hold whose item doesn't parse (a trailing space) blocks" 5 "t#1 has a record from k3" as k1 holds "t#1" --version v1
+# it's placed in delivery order, so it counts until that sender's next record
+SGSENT=2999-01-02T00:00:00Z sg k3 29990102T000000Z-k3-rs2.md rs2 "release: s#1 v1"
+expect "a later release from the same sender clears an odd-sent hold" 0 "s#1 released by k3" as k1 holds "s#1" --version v1
+# one whose item has no valid first word names no item: it doesn't count, and doesn't block other items
+sg k3 29990101T000100Z-k3-hw.md hw "hold: %w#1 v1"
+expect "a record whose item has no valid first word doesn't block other items" 0 "w#1 released by k3" as k1 holds "w#1" --version v1
+# one whose signature doesn't check out reads bad, and doesn't count in a strict store
+wr sh -c "printf -- '---\nprotocol: 1\nfrom: k3\nto: k1\ntopic: hu\ncontext: general\nsent: 2026-11-12T23:59:59.5Z\nin_reply_to: none\nneeds: none\nhold: u#1 v1\n---\n\nx\n' > mailbox/inbox/k1/20261112T235959Z-k3-hu.md && echo junk > mailbox/inbox/k1/20261112T235959Z-k3-hu.md.sig"
+expect "an unparseable hold whose signature doesn't check out doesn't count" 0 "u#1 released by k3" as k1 holds "u#1" --version v1
 # ... or deletes k2's record: its hold reads nokey, and must still hold
 wr git rm -q mailbox/agents/k2.md mailbox/agents/k2.md.sig
 expect "a hold whose sender's record was removed still holds" 5 "b#1 is held by k2 .*nokey" as k1 holds "b#1" --version v1

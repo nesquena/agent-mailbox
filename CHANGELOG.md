@@ -4,9 +4,17 @@
 
 - **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
   command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
-  topic join to one name, in one second), is now published under a new name, saying so. Any other leftover that
+  topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that
   conflicts is set aside under `refs/agent-mailbox/stuck/<n>` in the clone, with a warning, and the clone goes on from
-  the store.
+  the store: what it held isn't published, so send that mail again, or for an `update` or `register`, run the command
+  again. This needs git 2.17 or later; with an older git, such a leftover fails every command as before. A `send`
+  whose file name is already taken in that second now waits for the next second once, instead of failing.
+- **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
+  the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
+  release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
+  next record, and reads `bad` when its signature doesn't check out. The same goes for a record with no `sent`, and for
+  an item with no version. Where signatures aren't required, an unsigned record in another `sent` form now counts as the
+  hold or release it names. `PROTOCOL.md` section 5 now pins `sent` to exactly `YYYY-MM-DDThh:mm:ssZ`.
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.
