@@ -15,9 +15,12 @@ the most care.
   it waits for exists, and runs under a bound: `time_cap <seconds> <command>` in `test/run.sh` (it passes the
   command's stdout, then its stderr, so a `2>&1` capture comes out in that order, and a process the command leaves
   running keeps running until the run's exit cleanup), which stops the command and everything it started and fails
-  with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default; bats-core 1.8 or later) in bats. The whole run stops
-  itself, failing, after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15). A hang
-  then costs one failed check, never an unattended wait.
+  with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default; bats-core 1.13 or later stops the processes under `run`
+  too) in bats. `time_cap` stops the command and everything it started; something that escapes it (its parent gone) is
+  stopped at the run's end only when its command line names the run's folder. The whole run stops itself, failing,
+  after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15). The run is always
+  ended: TERM first, then KILL a few seconds later if it's still there. A hang then costs one failed check, never an
+  unattended wait.
 - **No personal data.** Commits made by the CLI carry the agent's mailbox name, never a person's name or email.
   Keep examples generic (`alice`, `bob`, `acme`).
 
