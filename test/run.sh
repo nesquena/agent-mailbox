@@ -1783,7 +1783,7 @@ printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${
   'sed "s/{}/$n/g" "$FAKEERR" >&2; exit 1' > "$P2/bin/agent-mailbox"; chmod +x "$P2/bin/agent-mailbox"
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
 fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
-expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
+expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk AGENT_MAILBOX_REWAKE_MAX=60
 # (with a minute's limit, so the error is recorded however slow the machine: the run ends at the notice anyway)
 rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
@@ -1811,7 +1811,7 @@ case "$rc $(cat "$T/bg.out")" in (*"HTTP 404"*) no "but a different error does" 
   ("2 "*"can't go on"*) ok "but a different error does" ;; (*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;; esac
 rm -f "$R1/error"
 # a warning watch prints before its listing (a commit left from an earlier command, published) isn't counted as mail
-r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md); rc=$?
+r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20260101T000000Z-rx-fm.md &&
     ok "a warning watch prints before its listing isn't counted as mail" || no "a warning watch prints before its listing isn't counted as mail" "not recorded" ;;
   (*) no "a warning watch prints before its listing isn't counted as mail" "$rc $r" ;; esac

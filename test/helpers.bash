@@ -30,7 +30,7 @@ expect() {
   # matching: it's reported as what it is)
   if [ "$pat" != - ]; then
     local g=0; printf '%s\n' "$output" | grep -Eq -- "$pat" || g=$?
-    if [ "$g" -gt 1 ]; then printf "the check's grep step failed (exit %s)\n%s\n" "$g" "$output" >&2; return 1; fi
+    if [ "$g" -gt 1 ]; then printf "%s (the check's grep step failed, exit %s)\n%s\n" "${BATS_TEST_DESCRIPTION:-expect}" "$g" "$output" >&2; return 1; fi
     if [ "$g" = 1 ]; then printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1; fi
   fi
 }
