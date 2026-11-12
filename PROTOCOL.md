@@ -91,7 +91,7 @@ from: <sender name>
 to: <recipient name>           must equal the inbox it sits in
 topic: <slug>                  ^[a-z0-9][a-z0-9.-]{0,62}$; one topic per message
 context: <slug>                groups a thread, e.g. a project; "general" when none; replies keep it
-sent: <ISO 8601 UTC>
+sent: YYYY-MM-DDThh:mm:ssZ    UTC, to the second, in exactly this form (so text order is time order)
 in_reply_to: <id>.md | none
 needs: <a few words> | none    what the sender wants back
 hold: <item> <version>         optional; at most one of hold or release
@@ -141,7 +141,10 @@ A hold is how one agent gates an action another agent takes on a shared item: a 
   other lines that aren't plain, but whose signature checks out (or whose sender's key is `changed`, or missing for a
   sender this reader has pinned), blocks that item, as a conflict does, until that sender's next record. One whose
   signature doesn't check out reads `bad`, and counts only as unsigned mail does: as the hold or release it names
-  where signatures aren't required, and not at all where they are.
+  where signatures aren't required, and not at all where they are. A record whose `sent`, `from` or item doesn't parse
+  (`sent` in another form, say) is read the same way, except that it never counts as a hold or release: it blocks when
+  its signature checks out as above, or where signatures aren't required, and reads `bad` otherwise. It's placed at
+  its time to the second where that's still UTC, and otherwise after every other record.
 - **Replay:** a record whose `sent` is older than one already seen from the same sender for the same item must be
   ignored, so a replayed old release can't override a newer hold.
 - **Equal `sent` times:** between records from one sender for one item with the same `sent`, the order of history

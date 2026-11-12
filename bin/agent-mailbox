@@ -232,6 +232,13 @@ have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep 
 field() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { closed = 1; exit }
   NR > 1 && !done { i = index($0, ":"); if (i && substr($0, 1, i - 1) == k) { v = substr($0, i + 1); sub(/^ /, "", v); done = 1 } }
   END { if (closed && done) print v }' "$2"; }
+# utc_second <sent>: a sent time spelled another way that's still UTC (a fraction of a second, +00:00, or the basic
+# form 20261112T235959Z), cut to the second as SENT_RE takes it; status 1 when there's none
+utc_second() { t=$(printf '%s\n' "$1" | sed -n \
+    -e 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}Z$/\1Z/p' \
+    -e 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}+00:\{0,1\}00$/\1Z/p' \
+    -e 's/^\([0-9]\{4\}\)\([0-9][0-9]\)\([0-9][0-9]\)T\([0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)\(\.[0-9]\{1,\}\)\{0,1\}Z$/\1-\2-\3T\4:\5:\6Z/p')
+  matches "$SENT_RE" "$t" && echo "$t"; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
 # temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
@@ -883,18 +890,26 @@ holds)
       ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
-      # every column of the row below is validated, so no header value can shift the others
-      matches "$ITEM_RE" "$rec" && field from "$tmpd/m" | grep -Eq "$NAME_RE" &&
-        field sent "$tmpd/m" | grep -Eq "$SENT_RE" &&
-        basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
-      # a record whose header isn't plain, hold or release, blocks the gate (as a conflict does) when its signature
+      basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
+      from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")
+      # every column of the row below is validated, so no header value can shift the others. A record whose sent,
+      # from or item doesn't parse (PROTOCOL.md section 5) is malformed, placed as near as it can be: at its time to
+      # the second when that's still UTC (else after every other, so it blocks), under its item when the first word
+      # is one (else under every item), and under "?" for a sender it can't name
+      odd=""
+      if ! matches "$ITEM_RE" "$rec" || ! matches "$NAME_RE" "$from" || ! matches "$SENT_RE" "$sent"; then odd=1
+        matches "$NAME_RE" "$from" || from="?"; matches "$SENT_RE" "$sent" || sent=$(utc_second "$sent") || sent="~"
+        matches "$ITEM_RE" "$rec" || { i=${rec%% *}; matches '^[A-Za-z0-9._/#:@-]{1,200}$' "$i" || i='*'; rec="$i ?"; }
+      fi
+      # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
-      # whose signature doesn't reads bad
+      # whose signature doesn't reads bad, and one that doesn't parse still can't count as a hold or release
       v=$(verify_sig "$tmpd/m" "$ME")
-      if ! hdr_ok "$tmpd/m"; then
+      if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
-          (nokey) if [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; then kind=malformed; else v=bad; fi ;;
+          (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
+        [ -z "$odd" ] || kind=malformed
       fi
       # in a strict store, only verified records count, except that a hold, or a record whose header isn't plain, whose
       # sender's key changed, or vanished after this reader pinned it, still blocks: dropping it would let a registry
@@ -902,14 +917,14 @@ holds)
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
       [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
-        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$(field from "$tmpd/m")" ]; }; }; } || continue
-      echo "$(field sent "$tmpd/m") $kind $rec $(field from "$tmpd/m") $(basename "$p") $v"
+        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
+      echo "$sent $kind $rec $from $(basename "$p") $v"
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
   # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
   # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
-  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
+  [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "") || $3 == "*"')
   # the latest record per item and sender, in delivery order; a record whose (signed) sent time is older than one
   # already seen from that sender for that item is a replay and is ignored. A store writer controls history order, so
   # order mustn't decide between records with an equal sent time: a hold wins, a record whose header isn't plain
