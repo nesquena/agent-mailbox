@@ -18,7 +18,7 @@ the most care.
   with exit 124, or `BATS_TEST_TIMEOUT` (120 s by default; bats-core 1.13 or later stops the processes under `run`
   too) in bats. `time_cap` stops the command and everything it started; something that escapes it (its parent gone) is
   stopped at the run's end only when its command line names the run's folder. The whole run stops itself, failing,
-  after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15). The run is always
+  after `AGENT_MAILBOX_TEST_LIMIT` seconds (40 minutes by default; a full run takes about 15, 20 on macOS). The run is always
   ended: TERM first, then KILL a few seconds later if it's still there. A hang then costs one failed check, never an
   unattended wait.
 - **No personal data.** Commits made by the CLI carry the agent's mailbox name, never a person's name or email.

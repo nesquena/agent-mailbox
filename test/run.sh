@@ -17,17 +17,21 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
 ADAPTERS="${*:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+# procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
+# with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
+# (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
+procs_naming() { ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
   [ -d "$d" ] && [ "$d" != "$W" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
-    [ -z "$(ps -eo args= 2>/dev/null | grep -F -- "$d" | grep -v grep)" ] && rm -rf "$d"
+    [ -z "$(procs_naming "$d")" ] && rm -rf "$d"
 done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
 CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
-leftovers() { set -- $(for _lp in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v -e grep -e "^ *$$ " | awk '{ print $1 }') \
+leftovers() { set -- $(for _lp in $(procs_naming "$W" | awk -v me=$$ '$1 != me { print $1 }') \
     $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
   kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
   for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
@@ -63,7 +67,7 @@ time_cap() { _tl=$1; shift; _to=$(mktemp "$W/.tc.XXXXXX") && _te=$(mktemp "$W/.t
   cat "$_to"; cat "$_te" >&2; rm -f "$_to" "$_te"
   if [ -f "$W/.time_cap.$_tc" ]; then rm -f "$W/.time_cap.$_tc"; echo "(timed out: stopped after ${_tl} s)" >&2; return 124; fi
   return "$_tr"; }
-# the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15):
+# the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15, 20 on macOS):
 # past that, a watchdog stops the run and everything it started, and the run fails, saying so. The last "==" line
 # printed names the section it was in
 TL=${AGENT_MAILBOX_TEST_LIMIT:-2400}
@@ -80,19 +84,24 @@ SUITE=$$
 # (a $(...) whose pipe an escaped process holds, or a step that ignores TERM). So it TERMs the run first, its trap then
 # pending, then every process of the run's tree and every process naming its folder, waits up to 5 s for them, KILLs
 # what's left, and TERMs the run again. If the run is still there 5 s later (a step blocked on something that names no
-# folder of the run's), it KILLs the run: the run always ends. A KILLed run skips its exit trap, so its folder stays,
-# for the start-up sweep to remove once it's an hour old
+# folder of the run's), it KILLs the run: the run always ends. A KILLed run skips its exit trap, so the watchdog says
+# why on the run's output (fd 3, which it holds until it ends, at most a second after the run), then stops what still
+# names the run's folder and removes it
 ( ( wd=$(sh -c 'echo $PPID'); n=0
-  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$W" 2>/dev/null; n=$((n+5)); done
+  while [ "$n" -lt "$TL" ]; do sleep 1; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+1))
+    [ $((n % 5)) -ne 0 ] || touch -c "$W" 2>/dev/null; done
   # (the list is a command's output, which every shell splits, zsh included)
-  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W" | grep -v grep |
-    awk '{ print $1 }'); do tree "$_wq"; done); do [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
+  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$W" | awk '{ print $1 }'); do tree "$_wq"; done); do
+    [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
   kill -TERM "$SUITE" 2>/dev/null; [ $# -eq 0 ] || kill -TERM "$@" 2>/dev/null
   _wn=0; while [ $_wn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
   for _wp in "$@"; do kill -0 "$_wp" 2>/dev/null && kill -KILL "$_wp" 2>/dev/null; done
   kill -TERM "$SUITE" 2>/dev/null; _wn=0
   while [ $_wn -lt 50 ] && kill -0 "$SUITE" 2>/dev/null; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
-  ! kill -0 "$SUITE" 2>/dev/null || kill -KILL "$SUITE" 2>/dev/null ) >/dev/null 2>&1 & )
+  kill -0 "$SUITE" 2>/dev/null || exit 0
+  echo "  FAIL the run was killed (KILL): past its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT), it didn't end on TERM; see the last section above" >&3
+  kill -KILL "$SUITE" 2>/dev/null
+  for _wp in $(procs_naming "$W" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$W" ) 3>&1 >/dev/null 2>&1 & )
 # (end of the run's watchdog: the safeguards' checks copy the suite's start up to here)
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
@@ -145,9 +154,9 @@ expect "and returns the command's own exit when it finishes in time" 3 - time_ca
 t0=$(date +%s); out=$(time_cap 2 sh -c '( sh -c "sleep 30; :" "$1/escaped" & ); sleep 60' sh "$W" 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 10 ] && ok "and an escaped process can't keep its caller waiting" ||
   no "an escaped process kept time_cap's caller waiting (exit $rc, $((t1 - t0)) s)" "$out"
-for _ep in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W/escaped" | grep -v grep | awk '{ print $1 }'); do kill_tree "$_ep"; done
+for _ep in $(procs_naming "$W/escaped" | awk '{ print $1 }'); do kill_tree "$_ep"; done
 # (the git section defines its own `within` and `bounded`: none of the names here is one of them)
-for f in tree alive kill_tree time_cap leftovers; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
+for f in tree alive kill_tree time_cap leftovers procs_naming; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
 ( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
 c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
 [ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "time_cap left the command's child running" "pid $c"
@@ -162,10 +171,10 @@ for c in A B; do
   t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/stuck$c.sh" 2>&1); rc=$?; t1=$(date +%s)
   sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
   [ "$rc" = 124 ] && [ $((t1 - t0)) -le 25 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)' && [ -n "$sd" ] &&
-    [ ! -d "$sd" ] && [ -z "$(ps -eo args= | grep -F -- "$sd" | grep -v grep)" ] &&
+    [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
     ok "a run past its limit stops even when its step can't return ($c), leaving nothing behind" ||
     no "a run past its limit didn't stop cleanly with its step stuck ($c: exit $rc, $((t1 - t0)) s)" "$out"
-  for p in $(ps -eo pid=,args= | grep -F -- "${sd:-/nonexistent}" | grep -v grep | awk '{ print $1 }'); do kill_tree "$p"; done
+  for p in $(procs_naming "${sd:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
 done
 # (a) a second TERM landing during the exit trap can't cut it short: the step's TERM trap starts a process naming the
 # run's folder that ignores TERM for 3 s, which the exit cleanup waits on while the watchdog's second TERM arrives.
@@ -177,23 +186,39 @@ out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/late.sh" 2>&1); rc=$?; sd
 [ "$rc" = 124 ] && [ "$(printf '%s\n' "$out" | grep -c 'FAIL the run was stopped')" = 1 ] && [ -n "$sd" ] && [ ! -d "$sd" ] &&
   ok "a second TERM during the exit cleanup can't cut it short (one FAIL line, the folder removed)" ||
   no "a second TERM cut the exit cleanup short (exit $rc)" "$out"
-for p in $(ps -eo pid=,args= | grep -F -- "${sd:-/nonexistent}/late" | grep -v grep | awk '{ print $1 }'); do kill_tree "$p"; done
+for p in $(procs_naming "${sd:-/nonexistent}/late" | awk '{ print $1 }'); do kill_tree "$p"; done
 # (b) a step held by an escaped process that names nothing of the run's: the watchdog ends the run anyway, TERM first,
 # then KILL, within the limit plus about 15 s
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
-  echo "x=\$( ( sleep 40 & echo \$! > \"$W/esc.pid\" ); echo started )"; } > "$W/esc.sh"
+  echo 'echo "dir $W"'; echo "x=\$( ( sleep 40 & echo \$! > \"$W/esc.pid\" ); echo started )"; } > "$W/esc.sh"
 # (its own temp folder inside this run's: a KILLed run leaves its folder, which goes with this run's)
 rm -f "$W/esc.pid"; mkdir -p "$W/tmpb"; t0=$(date +%s)
 out=$(TMPDIR="$W/tmpb" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 90 "$SH" "$W/esc.sh" 2>&1); rc=$?; t1=$(date +%s)
-{ [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ $((t1 - t0)) -le 25 ] && ok "a run held by an escaped process naming nothing of it still ends (exit $rc)" ||
-  no "a run held by an escaped process didn't end in time (exit $rc, $((t1 - t0)) s)" "$out"
+sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p'); i=0; while [ -n "$sd" ] && [ -d "$sd" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+{ { [ "$rc" = 124 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)'; } ||
+  { [ "$rc" = 137 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was killed (KILL)'; }; } && [ $((t1 - t0)) -le 25 ] &&
+  [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+  ok "a run held by an escaped process naming nothing of it still ends, saying why, its folder removed (exit $rc)" ||
+  no "a run held by an escaped process didn't end in time, or cleanly (exit $rc, $((t1 - t0)) s)" "$out"
 [ ! -s "$W/esc.pid" ] || kill_tree "$(cat "$W/esc.pid")"
-# the start-up sweep keeps an hour-old folder that a live process names (a run whose folder age misleads)
-mkdir -p "$W/tmp3/agent mailbox test.LIVExx"; touch -t 202001010000 "$W/tmp3/agent mailbox test.LIVExx"
-"$SH" -c 'sleep 60; :' sh "$W/tmp3/agent mailbox test.LIVExx/run" & lp=$!
+# (c) a run that ends on its own just before its deadline, its exit cleanup waiting on a process that ignores TERM:
+# the watchdog's TERM can't cut that cleanup short. Exit 0, no FAIL line, the folder removed, nothing naming it left
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "dir $W"'; echo '( "$SH" -c '"'"'trap "" TERM; sleep 8; :'"'"' sh "$W/deafx" & ); sleep 2.5'; } > "$W/endnear.sh"
+mkdir -p "$W/tmpc"; out=$(TMPDIR="$W/tmpc" AGENT_MAILBOX_TEST_LIMIT=4 time_cap 60 "$SH" "$W/endnear.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
+[ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q FAIL && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+  ok "a run ending just before its deadline finishes its exit cleanup (exit 0, its folder removed)" ||
+  no "the deadline cut a finished run's exit cleanup short (exit $rc)" "$out"
+for p in $(procs_naming "${sd:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+# the start-up sweep keeps an hour-old folder that a live process names (a run whose folder age misleads), even one
+# whose path holds "grep"
+mkdir -p "$W/grep3/agent mailbox test.LIVExx"; touch -t 202001010000 "$W/grep3/agent mailbox test.LIVExx"
+"$SH" -c 'sleep 60; :' sh "$W/grep3/agent mailbox test.LIVExx/run" & lp=$!
+# (until ps shows it: a fork shows its parent's command line at first)
+i=0; while [ -z "$(procs_naming "$W/grep3/agent mailbox test.LIVExx/run")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo swept'; } > "$W/sweep.sh"
-TMPDIR="$W/tmp3" time_cap 30 "$SH" "$W/sweep.sh" >/dev/null 2>&1
-[ -d "$W/tmp3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
+TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" >/dev/null 2>&1
+[ -d "$W/grep3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
   no "the sweep removed a folder a live process names"
 kill_tree "$lp"; wait "$lp" 2>/dev/null
 # time_cap with no stdin (fd 0 closed) still runs the command
@@ -209,7 +234,7 @@ i=0; while [ -z "$(sed -n 's/^dir //p' "$W/sig.out")" ] && [ $i -lt 50 ]; do sle
 kill -HUP "$sp"; i=0; while kill -0 "$sp" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 ! kill -0 "$sp" 2>/dev/null || kill -KILL "$sp" 2>/dev/null; wait "$sp"; rc=$?
 sd=$(sed -n 's/^dir //p' "$W/sig.out")
-[ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(ps -eo args= | grep -F -- "$sd" | grep -v grep)" ] &&
+[ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
   ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
 [ ! -d "$W/tmp2/agent mailbox test.OLDxxx" ] && [ -d "$W/tmp2/agent mailbox test.NEWxxx" ] &&
   ok "a run sweeps an hour-old folder a killed run left, and keeps a recent one" || no "the sweep removed the wrong folders" "$(ls "$W/tmp2")"
@@ -226,10 +251,10 @@ t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 
 hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM): past its limit of 1 s' &&
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
-sleep 1; [ -n "$hw" ] && [ -z "$(ps -eo args= | grep -F -- "$hw/orphan" | grep -v grep)" ] && [ ! -d "$hw" ] &&
+sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ] &&
   ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
-  no "a stopped run left a process or its folder behind" "$(ps -eo pid=,args= | grep -F -- "${hw:-?}" | grep -v grep)"
-for p in $(ps -eo pid=,args= | grep -F -- "${hw:-/nonexistent}" | grep -v grep | awk '{ print $1 }'); do kill_tree "$p"; done
+  no "a stopped run left a process or its folder behind" "$(procs_naming "${hw:-?}")"
+for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
 
 for AD in $ADAPTERS; do
   echo "== adapter: $AD (shell: $SH)"
