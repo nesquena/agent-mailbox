@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
+  command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
+  topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that
+  conflicts is set aside under `refs/agent-mailbox/stuck/<n>` in the clone, with a warning, and the clone goes on from
+  the store: what it held isn't published, so send that mail again, or for an `update` or `register`, run the command
+  again. This needs git 2.17 or later; with an older git, such a leftover fails every command as before. A `send`
+  whose file name is already taken in that second now waits for the next second once, instead of failing.
 - **`setup` says when your pinned keys stay behind.** Pinned keys belong to the store settings as written, so new
   settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
   Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
