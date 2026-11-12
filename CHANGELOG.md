@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`setup` says when your pinned keys stay behind.** Pinned keys belong to the store settings as written, so new
+  settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
+  Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
+  first written.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
