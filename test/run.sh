@@ -1685,7 +1685,7 @@ R1="$RS/rewake/rw/r1@$(cut -d' ' -f1 "$RS/session-stores/r1")"
 mkdir -p "$RS/sessions/sub"; cp "$RS/sessions/r1" "$RS/sessions/sub/r1"
 expect "or for a session id holding a /" 0 '^$' rewake sub/r1
 expect "or for a session id of .." 0 '^$' rewake ..
-expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1
+expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 echo hi | as rx send rw rw-1 - >/dev/null 2>&1
 # a Claude Code older than 2.1.69 would run the hook as an ordinary Stop hook, so it exits at once there, mail or not
 rm -f "$R1/out"
@@ -2131,7 +2131,7 @@ kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r6@$S6/pid" 2>/dev/null)" 2>/dev/null
 # later keeps it)
 mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r5"
 printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r5"
-rm -f "$RS/session-stores/r5"; rewake r5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
+rm -f "$RS/session-stores/r5"; rewake r5 AGENT_MAILBOX_REWAKE_MAX=5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
 expect "a session an older CLI registered keeps its store when another is added with --also" 0 - \
   test "$(grep -vc ' -$' "$RS/session-stores/r5" 2>/dev/null)" = 2
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
