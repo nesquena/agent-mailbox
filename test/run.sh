@@ -117,10 +117,12 @@ t0=$(date +%s); out=$(time_cap 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date
 expect "and returns the command's own exit when it finishes in time" 3 - time_cap 5 sh -c 'exit 3'
 [ "$(echo kept | time_cap 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "time_cap lost the command's stdin"
 # a process the command started that escapes the stop (its parent killed) can't hold a $(...) around time_cap open
-t0=$(date +%s); out=$(time_cap 2 sh -c '( sleep 30 & ); sleep 60' 2>&1); rc=$?; t1=$(date +%s)
+# (the escaped process names this run's folder, so it's stopped by its own name, never by a pattern another run's
+# processes or the user's could match)
+t0=$(date +%s); out=$(time_cap 2 sh -c '( sh -c "sleep 30; :" "$1/escaped" & ); sleep 60' sh "$W" 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 10 ] && ok "and an escaped process can't keep its caller waiting" ||
   no "an escaped process kept time_cap's caller waiting (exit $rc, $((t1 - t0)) s)" "$out"
-pkill -f '^sleep 30$' 2>/dev/null
+for _ep in $(ps -eo pid=,args= 2>/dev/null | grep -F -- "$W/escaped" | grep -v grep | awk '{ print $1 }'); do kill_tree "$_ep"; done
 # (the git section defines its own `within` and `bounded`: none of the names here is one of them)
 for f in tree alive kill_tree time_cap leftovers; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
 ( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
