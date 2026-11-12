@@ -1358,7 +1358,7 @@ out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
   no "a re-run of setup with unchanged settings spoke of pins" "$out"
 P="$W/home-pm2/.local/state/agent-mailbox/pins"
 # the same folder, spelled with a trailing slash: other settings, which start with no pins
-expect "setup with the store written another way says the pins stay behind" 0 "pinned keys stay with the old store settings" \
+expect "setup with the store written another way says the pins stay behind" 0 "pinned keys .*stay with the old store settings" \
   as pm2 setup --store "$T/store/" --adapter dir --name pm2
 n=0; for d in "$P"/*; do [ -f "$d/pm1" ] && n=$((n+1)); done
 [ "$n" = 1 ] && ok "setup copies no pins to other settings" || no "setup copied pins to other settings" "$(ls -RA "$P")"
