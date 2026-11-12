@@ -50,9 +50,10 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
   if [ "$rc" != "$code" ]; then no "$d (exit $rc, wanted $code)" "$out"; return; fi
-  # (grep exiting above 1 crashed or failed, which isn't the output not matching: it's reported as what it is)
+  # (the check's grep step exiting above 1 crashed or failed, grep or the shell running it, which isn't the output not
+  # matching: it's reported as what it is)
   if [ "$pat" != - ]; then printf '%s\n' "$out" | grep -Eq -- "$pat"; g=$?
-    [ "$g" -le 1 ] || { no "$d (grep failed, exit $g)" "$out"; return; }
+    [ "$g" -le 1 ] || { no "$d (the check's grep step failed, exit $g)" "$out"; return; }
     [ "$g" = 0 ] || { no "$d (output didn't match /$pat/)" "$out"; return; }
   fi
   ok "$d"
