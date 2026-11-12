@@ -26,7 +26,10 @@ expect() {
   if [ "$status" != "$code" ]; then
     printf 'exit %s, wanted %s\n%s\n' "$status" "$code" "$output" >&2; return 1
   fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$output" | grep -Eq -- "$pat"; then
-    printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1
+  # (grep exiting above 1 crashed or failed, which isn't the output not matching: it's reported as what it is)
+  if [ "$pat" != - ]; then
+    local g=0; printf '%s\n' "$output" | grep -Eq -- "$pat" || g=$?
+    if [ "$g" -gt 1 ]; then printf 'grep failed (exit %s)\n%s\n' "$g" "$output" >&2; return 1; fi
+    if [ "$g" = 1 ]; then printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1; fi
   fi
 }
