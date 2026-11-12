@@ -13,6 +13,10 @@
   header and file name name different senders (or whose header isn't plain), and one that reads `bad`, `changed` or
   `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
   refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
+- **`holds` warns when the adapter keeps no history.** An adapter now declares whether it does, by setting
+  `AD_HISTORY` when it's sourced: `full` for git, `current` for dir (`adapters/README.md`). With any value but `full`,
+  or none (a third-party adapter that doesn't say), `holds` prints a warning on stderr that a hold or release that was
+  consumed or deleted isn't seen. Its verdict and exit code don't change.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's

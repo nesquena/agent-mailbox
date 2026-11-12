@@ -52,8 +52,9 @@ NS=agent-mailbox
 # (set only by the git adapter, around its push of what an earlier command left: never taken from the environment)
 AD_LEFTOVER=
 # (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
-# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new)
-AD_DIR= AD_PUBLISHED= AD_UNCHANGED=
+# command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new; AD_HISTORY, set
+# when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 ITEM_RE='^[A-Za-z0-9._/#:@-]{1,200} [A-Za-z0-9._-]{1,64}$'
 # a message file name (PROTOCOL.md section 5); any other file in an inbox isn't a message, and is ignored
@@ -973,6 +974,12 @@ holds)
     done)
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
+  # an adapter that doesn't keep every version (or doesn't say) lists only current mail: say so, then decide as usual,
+  # since a store without history is a choice (adapters/README.md)
+  if [ "$AD_HISTORY" != full ]; then
+    if [ -z "$AD_HISTORY" ]; then h="doesn't say whether it keeps history"; else h="keeps no history"; fi
+    echo "holds: warning: the $ADAPTER adapter $h, so a hold or release that was consumed or deleted isn't seen; gate real actions with an adapter that keeps history (git)" >&2
+  fi
   # items and versions are compared as text throughout, never as numbers (awk's ($x "") forces a string comparison),
   # and reach awk through the environment, which, unlike -v, takes them as they are, backslashes included
   [ -z "$item" ] || records=$(echo "$records" | HOLDS_ITEM=$item awk '($3 "") == (ENVIRON["HOLDS_ITEM"] "")')
