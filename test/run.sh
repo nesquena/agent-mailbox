@@ -46,7 +46,11 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
   if [ "$rc" != "$code" ]; then no "$d (exit $rc, wanted $code)" "$out"; return; fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
+  # (grep exiting above 1 crashed or failed, which isn't the output not matching: it's reported as what it is)
+  if [ "$pat" != - ]; then printf '%s\n' "$out" | grep -Eq -- "$pat"; g=$?
+    [ "$g" -le 1 ] || { no "$d (grep failed, exit $g)" "$out"; return; }
+    [ "$g" = 0 ] || { no "$d (output didn't match /$pat/)" "$out"; return; }
+  fi
   ok "$d"
 }
 
@@ -1646,7 +1650,7 @@ a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$
     else sk "a slow version check doesn't make the guard ask for a re-arm (no jq)"; fi
   else sk "a native Claude Code is told by asking it (the stand-in didn't build)"; fi
 else sk "a native Claude Code is told by asking it (no C compiler)"; fi
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--as rw read") ok "new mail wakes the session with a count and the read command" ;;
   (*) no "new mail wakes the session with a count and the read command" "$rc $r" ;; esac
 # (the notice holds none of the store's text, file names included: they're read as mail)
@@ -1657,12 +1661,12 @@ expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd /
 # a plugin folder whose name holds a backslash sequence (\c ends echo's output in dash) still gets the whole command
 P3="$T/plug\\cache"; mkdir -p "$P3/hooks"; cp "$P/hooks/claude-rewake.sh" "$P3/hooks/"; ln -s "$ROOTDIR/bin" "$P3/bin"
 echo hi | as rx send rw rw-b - >/dev/null 2>&1
-r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh")
+r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh" AGENT_MAILBOX_REWAKE_MAX=60)
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
 expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
     no "new mail beside old wakes it with only the new" "$(cat "$R1/woke")" ;;
   (*) no "new mail beside old wakes it with only the new" "$rc $r" ;; esac
@@ -1754,7 +1758,7 @@ rm -f "$R1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session, naming the command that shows why" 2 \
-  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
+  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
 # the same error again doesn't wake it: the hook keeps retrying, quietly, and wakes for mail once it can go on
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error again doesn't wake it" ||
@@ -1942,7 +1946,7 @@ rm -f "$RS/session-stores/r5"; rewake r5 >/dev/null 2>&1; ALSO=--also; regs r5 -
 expect "a session an older CLI registered keeps its store when another is added with --also" 0 - \
   test "$(grep -vc ' -$' "$RS/session-stores/r5" 2>/dev/null)" = 2
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
-reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
+reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
 expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
@@ -1951,7 +1955,7 @@ n=0 lost=""; while [ $n -lt 5 ]; do rm -f "$RS/session-stores/r8"
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--config "*second*" --as rw read")
   ok "mail on the second store wakes the session with that store's read command" ;;
   (*) no "mail on the second store wakes the session with that store's read command" "$rc $r" ;; esac
@@ -1960,7 +1964,7 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
 [ "$(printf '%s\n' "$r" | grep -c 'new mail')" = 1 ] && ok "mail it woke for on one store before adding another doesn't wake it again" ||
   no "mail it woke for on one store before adding another doesn't wake it again" "$r"
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail on the first store wakes it, and mail it woke for on the other doesn't" ||
@@ -1972,7 +1976,7 @@ op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null)
   no "and the other store's run is stopped with it" "$(ps -o pid=,args= -p "$op")"
 # mail on both at once: all of it is passed on, in this wake or, if one store's run was stopped first, the next
 echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9)"
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60)"
 [ "$rc" = 2 ] && woken rx-2.md && woken rz-2.md && ok "mail on both stores at once is all passed on" ||
   no "mail on both stores at once is all passed on" "$rc $r"
 expect "with no mail on either it wakes once at the day's limit" 2 "daily limit" rewake r9
@@ -2077,12 +2081,12 @@ if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2
   kill -TERM "$hp" 2>/dev/null; wait "$bg"; rc=$?
   if [ "$rc" = 2 ] && grep -q "new mail" "$T/bg.out" && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke"; then
     ok "mail found as the hook stops is passed on, or wakes the next run"
-  else r=$(rewake r9); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
+  else r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail found as the hook stops is passed on, or wakes the next run" || no "mail found as the hook stops is passed on, or wakes the next run" "$rc $r"; fi
 else no "mail found as the hook stops is passed on, or wakes the next run" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 # a store whose watcher can't go on says so once; the other store's mail still wakes the session after that
 mv "$C2" "$C2.off"
-expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9
+expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9 AGENT_MAILBOX_REWAKE_MAX=60
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >/dev/null 2>&1
   n=0; while [ $n -lt 20 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; wait "$bg"; rc=$?
