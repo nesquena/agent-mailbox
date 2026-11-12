@@ -84,12 +84,11 @@ SUITE=$$
 # (a $(...) whose pipe an escaped process holds, or a step that ignores TERM). So it TERMs the run first, its trap then
 # pending, then every process of the run's tree and every process naming its folder, waits up to 5 s for them, KILLs
 # what's left, and TERMs the run again. If the run is still there 5 s later (a step blocked on something that names no
-# folder of the run's), it KILLs the run: the run always ends. A KILLed run skips its exit trap, so the watchdog says
-# why on the run's output (fd 3, which it holds until it ends, at most a second after the run), then stops what still
-# names the run's folder and removes it
+# folder of the run's), it KILLs the run: the run always ends, with exit 137 and no FAIL line of its own. A KILLed run
+# skips its exit trap, so the watchdog then stops what still names the run's folder and removes it. (It never holds
+# the run's output: a caller reading that to its end before reaping the run would see a zombie run still there)
 ( ( wd=$(sh -c 'echo $PPID'); n=0
-  while [ "$n" -lt "$TL" ]; do sleep 1; kill -0 "$SUITE" 2>/dev/null || exit 0; n=$((n+1))
-    [ $((n % 5)) -ne 0 ] || touch -c "$W" 2>/dev/null; done
+  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$W" 2>/dev/null; n=$((n+5)); done
   # (the list is a command's output, which every shell splits, zsh included)
   set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$W" | awk '{ print $1 }'); do tree "$_wq"; done); do
     [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
@@ -99,9 +98,8 @@ SUITE=$$
   kill -TERM "$SUITE" 2>/dev/null; _wn=0
   while [ $_wn -lt 50 ] && kill -0 "$SUITE" 2>/dev/null; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
   kill -0 "$SUITE" 2>/dev/null || exit 0
-  echo "  FAIL the run was killed (KILL): past its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT), it didn't end on TERM; see the last section above" >&3
   kill -KILL "$SUITE" 2>/dev/null
-  for _wp in $(procs_naming "$W" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$W" ) 3>&1 >/dev/null 2>&1 & )
+  for _wp in $(procs_naming "$W" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$W" ) >/dev/null 2>&1 & )
 # (end of the run's watchdog: the safeguards' checks copy the suite's start up to here)
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
@@ -168,7 +166,7 @@ for c in A B; do
     echo 'echo "dir $W"'
     if [ $c = A ]; then echo 'x=$( ( "$SH" -c "sleep 600; :" sh "$W/orphan" & ); echo started )'
     else echo '"$SH" -c '"'"'trap "" TERM; sleep 600; :'"'"' sh "$W/deaf"'; fi; } > "$W/stuck$c.sh"
-  t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/stuck$c.sh" 2>&1); rc=$?; t1=$(date +%s)
+  mkdir -p "$W/tmp$c"; t0=$(date +%s); out=$(TMPDIR="$W/tmp$c" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/stuck$c.sh" 2>&1); rc=$?; t1=$(date +%s)
   sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
   [ "$rc" = 124 ] && [ $((t1 - t0)) -le 25 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)' && [ -n "$sd" ] &&
     [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
@@ -182,7 +180,7 @@ done
 printf '%s\n' 'w=$1' 'trap '"'"'sh -c "trap \"\" TERM; sleep 3; :" sh "$w/late" & exit 143'"'"' TERM' 'sleep 600 & wait' > "$W/lateStep.sh"
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'echo "dir $W"'; echo "\"\$SH\" \"$W/lateStep.sh\" \"\$W\""; } > "$W/late.sh"
-out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/late.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
+mkdir -p "$W/tmpl"; out=$(TMPDIR="$W/tmpl" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/late.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
 [ "$rc" = 124 ] && [ "$(printf '%s\n' "$out" | grep -c 'FAIL the run was stopped')" = 1 ] && [ -n "$sd" ] && [ ! -d "$sd" ] &&
   ok "a second TERM during the exit cleanup can't cut it short (one FAIL line, the folder removed)" ||
   no "a second TERM cut the exit cleanup short (exit $rc)" "$out"
@@ -196,9 +194,9 @@ rm -f "$W/esc.pid"; mkdir -p "$W/tmpb"; t0=$(date +%s)
 out=$(TMPDIR="$W/tmpb" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 90 "$SH" "$W/esc.sh" 2>&1); rc=$?; t1=$(date +%s)
 sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p'); i=0; while [ -n "$sd" ] && [ -d "$sd" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 { { [ "$rc" = 124 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)'; } ||
-  { [ "$rc" = 137 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was killed (KILL)'; }; } && [ $((t1 - t0)) -le 25 ] &&
+  [ "$rc" = 137 ]; } && [ $((t1 - t0)) -le 25 ] &&
   [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
-  ok "a run held by an escaped process naming nothing of it still ends, saying why, its folder removed (exit $rc)" ||
+  ok "a run held by an escaped process naming nothing of it still ends, its folder removed (exit $rc)" ||
   no "a run held by an escaped process didn't end in time, or cleanly (exit $rc, $((t1 - t0)) s)" "$out"
 [ ! -s "$W/esc.pid" ] || kill_tree "$(cat "$W/esc.pid")"
 # (c) a run that ends on its own just before its deadline, its exit cleanup waiting on a process that ignores TERM:
@@ -238,6 +236,17 @@ sd=$(sed -n 's/^dir //p' "$W/sig.out")
   ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
 [ ! -d "$W/tmp2/agent mailbox test.OLDxxx" ] && [ -d "$W/tmp2/agent mailbox test.NEWxxx" ] &&
   ok "a run sweeps an hour-old folder a killed run left, and keeps a recent one" || no "the sweep removed the wrong folders" "$(ls "$W/tmp2")"
+# a run read through dash's $(...), which reads the run's output to its end before reaping it, returns at once, with
+# no FAIL line: the watchdog never holds the run's output, so the read ends when the run does
+if command -v dash >/dev/null 2>&1; then
+  { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+    echo 'echo done; exit 0'; } > "$W/quick.sh"
+  mkdir -p "$W/tmpq"; t0=$(date +%s)
+  out=$(TMPDIR="$W/tmpq" AGENT_MAILBOX_TEST_LIMIT=8 time_cap 30 dash -c 'x=$("$1" "$2"); printf "%s\n" "$x"' sh "$SH" "$W/quick.sh" 2>&1); rc=$?; t1=$(date +%s)
+  [ "$rc" = 0 ] && [ $((t1 - t0)) -le 3 ] && printf '%s\n' "$out" | grep -qx done && ! printf '%s\n' "$out" | grep -q FAIL &&
+    ok "a run read through \$(...) returns as soon as it ends, with no FAIL line" ||
+    no "a run read through \$(...) was held after it ended (exit $rc, $((t1 - t0)) s)" "$out"
+else sk "a run read through \$(...) returns as soon as it ends (no dash here)"; fi
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
@@ -247,7 +256,7 @@ t0=$(date +%s); out=$(time_cap 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s
 # the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
-t0=$(date +%s); out=$(AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
+mkdir -p "$W/tmph"; t0=$(date +%s); out=$(TMPDIR="$W/tmph" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
 hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM): past its limit of 1 s' &&
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
