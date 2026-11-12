@@ -11,6 +11,7 @@ CLI="$ROOTDIR/bin/agent-mailbox"
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID
 W=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-bench.XXXXXX")
+[ -n "$W" ] && [ -d "$W" ] || { echo "can't make a folder under ${TMPDIR:-/tmp}" >&2; exit 1; }
 trap 'rm -rf "$W"' EXIT
 as() { a=$1; shift; HOME="$W/home-$a" sh "$CLI" "$@"; }
 now() { date +%s.%N 2>/dev/null | grep -v N || date +%s; }
