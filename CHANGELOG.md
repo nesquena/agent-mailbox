@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-12)
+
+Registry records can say who an agent works for, where it runs and its groups, and `agents` filters by them;
+`reply` answers a message and consumes it in one command; and fixes to `holds`, `setup` and the git adapter. `agents`'
+table has new columns: see the first entry if a script reads it.
 
 - **Registry records can say who an agent works for, where it runs and its groups.** Optional `human`, `env` and
   `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
   `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
-  active names, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns before ABOUT, so a script
-  that cut ABOUT by position must change: use `--names` for names. They're each agent's own claims about itself, which
-  the CLI doesn't check: any store writer can edit a record, and an agent's next `update` signs what its record then
-  holds, so make no trust decision from them.
+  active names, yours too when you match, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns
+  before ABOUT, so a script that cut ABOUT by position must change: use `--names` for names. They're each agent's own
+  claims about itself, which the CLI doesn't check: any store writer can edit a record, and an agent's next `update`
+  signs what its record then holds, so make no trust decision from them.
 - **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
   command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
   topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that
@@ -24,7 +28,8 @@
   topic, with `in_reply_to` naming it and its context kept, and removes it from your inbox in the same change, as
   `send … --in-reply-to <file> --consume <file>` does. `--keep` leaves it in your inbox, and `--needs`, `--context`,
   `--hold` and `--release` pass through to `send`. It refuses a message that isn't in your inbox, one whose `from:`
-  header and file name name different senders (or whose header isn't plain), and one that reads `bad`, `changed` or
+  header and file name name different senders or whose `topic:` isn't the one its file name names (or whose header
+  isn't plain), and one that reads `bad`, `changed` or
   `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
   refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
 - **`holds` warns when the adapter keeps no history.** An adapter now declares whether it does, by setting
@@ -40,13 +45,12 @@
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.
-- **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
-  plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
   check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
   from the same state folder (normally: the same user on the same machine) now prints a warning naming the running
-  watcher's pid: both wake on the same mail, so stop one.
+  watcher's pid: both wake on the same mail, so stop one: this one, or the running one unless the Claude Code plugin's
+  hook started it, since the hook would start it again.
 - **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
   (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
   isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no longer
