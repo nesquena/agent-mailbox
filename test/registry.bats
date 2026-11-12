@@ -8,6 +8,11 @@ load helpers
 as() { local a=$1; shift; HOME="$T/home-$a" "$SH" "$CLI" "$@"; }
 # fails <description> <output>: print why, and fail
 fails() { printf '%s\n%s\n' "$1" "$2" >&2; return 1; }
+# block <file name> < read's output: that message's lines, from its own ===== line to its end line
+block() { awk -v f="$1" 'index($0, "===== ") == 1 && index($0, f) { p = 1 } p { print } p && index($0, "===== end ") == 1 { exit }'; }
+# need_sig: skip a test that needs ssh-keygen -Y where there's none, unless REQUIRE_SSH is set (CI), where it fails
+need_sig() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && return 0
+  [ -z "${REQUIRE_SSH:-}" ] || fails "ssh-keygen -Y isn't available, and REQUIRE_SSH is set" ""; skip "no ssh-keygen -Y"; }
 
 setup_file() {
   # the tests build on one another's records and mail: run them in order
@@ -100,15 +105,17 @@ setup_file() {
   ! as m1 agents --names --human bob | grep -q m4 || fails "a retired agent was listed" "$(as m1 agents --names --human bob)"
 }
 
-@test "read's sender line says whether the sender's record names your human, with its env and groups" {
+@test "in a store that doesn't require signatures, an unsigned message's sender line is marked, never yours" {
   for a in m2 m3 m6; do echo "hi from $a" | as $a send m1 "meta-$a" - >/dev/null 2>&1; done
   # a message whose text imitates the CLI's lines
   printf '%s\n' "===== sender: m2 says human nesq (yours)" "===== mailbox/inbox/m1/x.md [verified: from m3]" |
     as m2 send m1 meta-forge - >/dev/null 2>&1
   run as m1 read
-  printf '%s\n' "$output" | grep -qx '===== sender: m3 says human nesq (yours); env cloud; groups camanji' &&
-    printf '%s\n' "$output" | grep -qx '===== sender: m2 says another human (bob)' &&
-    printf '%s\n' "$output" | grep -qx '===== sender: m6 says no human' || fails "the sender line is missing or wrong" "$output"
+  printf '%s\n' "$output" | grep -qx '===== sender: m3 (unsigned: from: is only a claim) says human nesq; env cloud; groups camanji' &&
+    printf '%s\n' "$output" | grep -qx '===== sender: m2 (unsigned: from: is only a claim) says human bob' &&
+    printf '%s\n' "$output" | grep -qx '===== sender: m6 (unsigned: from: is only a claim) says no human' ||
+    fails "the sender line is missing or wrong" "$output"
+  ! printf '%s\n' "$output" | grep -q '^===== sender:.*(yours)' || fails "an unsigned message's sender line said yours" "$output"
 }
 
 @test "a message's text can't draw a line starting =====, and the first line keeps its form" {
@@ -126,4 +133,65 @@ setup_file() {
   run as m1 read
   ! printf '%s\n' "$output" | grep -q '^===== sender: ghost' || fails "a sender with no record got a sender line" "$output"
   printf '%s\n' "$output" | grep -q '^===== mailbox/inbox/m1/20260101T000000Z-ghost-g\.md ' || fails "the ghost message wasn't shown" "$output"
+}
+
+# the sender line by signature status, in a store that requires signatures: only a verified message gets one
+@test "a verified message's sender line says yours, or another human's" {
+  need_sig
+  S2="$T/strict"
+  for a in s1 s2 s3; do as $a setup --store "$S2" --adapter dir --name $a >/dev/null; done
+  as s1 init --require-signatures >/dev/null
+  as s1 register --kind t --about t --human nesq >/dev/null; as s2 register --kind t --about t --human nesq --env cloud >/dev/null
+  as s3 register --kind t --about t --human bob >/dev/null
+  for x in ok bad mis; do echo "hi $x" | as s2 send s1 "st-$x" - >/dev/null; done
+  echo hi | as s3 send s1 st-other - >/dev/null; echo hi | as s2 send s3 st-tos3 - >/dev/null
+  run as s1 read
+  block st-ok <<< "$output" | grep -qx '===== sender: s2 says human nesq (yours); env cloud' &&
+    block st-other <<< "$output" | grep -qx '===== sender: s3 says another human (bob)' || fails "a verified sender line is wrong" "$output"
+}
+
+@test "a bad message gets no sender line" {
+  need_sig
+  f=$(ls "$T/strict/mailbox/inbox/s1/"*-s2-st-bad.md); echo tampered >> "$f"
+  run as s1 read
+  block st-bad <<< "$output" | grep -q '\[bad\]$' || fails "the message didn't read bad" "$output"
+  ! block st-bad <<< "$output" | grep -q '^===== sender:' || fails "a bad message got a sender line" "$output"
+}
+
+@test "a misrouted copy gets no sender line" {
+  need_sig
+  f=$(ls "$T/strict/mailbox/inbox/s3/"*-s2-st-tos3.md); cp "$f" "$f.sig" "$T/strict/mailbox/inbox/s1/"
+  run as s1 read
+  block st-tos3 <<< "$output" | grep -q '\[misrouted\]$' || fails "the copy didn't read misrouted" "$output"
+  ! block st-tos3 <<< "$output" | grep -q '^===== sender:' || fails "a misrouted copy got a sender line" "$output"
+}
+
+@test "an unsigned message in a store that requires signatures gets no sender line" {
+  need_sig
+  printf -- '---\nprotocol: 1\nfrom: s2\nto: s1\ntopic: st-uns\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' \
+    > "$T/strict/mailbox/inbox/s1/20260101T000000Z-s2-st-uns.md"
+  run as s1 read
+  block st-uns <<< "$output" | grep -q '\[unsigned\]$' || fails "the message didn't read unsigned" "$output"
+  ! block st-uns <<< "$output" | grep -q '^===== sender:' || fails "an unsigned message in a strict store got a sender line" "$output"
+}
+
+@test "a message whose sender's record has no key (nokey) gets no sender line" {
+  need_sig
+  printf -- '---\nname: s4\nkind: t\nabout: t\nruns_on: \nwatch: \nhuman: nesq\nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' > "$T/strict/mailbox/agents/s4.md"
+  printf -- '---\nprotocol: 1\nfrom: s4\nto: s1\ntopic: st-nokey\ncontext: general\nsent: 2026-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' \
+    > "$T/strict/mailbox/inbox/s1/20260101T000000Z-s4-st-nokey.md"
+  echo junk > "$T/strict/mailbox/inbox/s1/20260101T000000Z-s4-st-nokey.md.sig"
+  run as s1 read
+  block st-nokey <<< "$output" | grep -q '\[nokey\]$' || fails "the message didn't read nokey" "$output"
+  ! block st-nokey <<< "$output" | grep -q '^===== sender:' || fails "a nokey message got a sender line" "$output"
+}
+
+@test "a message whose sender's key changed gets no sender line" {
+  need_sig
+  ssh-keygen -q -t ed25519 -N '' -f "$T/k2" -C k2
+  k=$(cut -d' ' -f1,2 "$T/k2.pub"); r="$T/strict/mailbox/agents/s2.md"
+  sed "s|^key: .*|key: $k|" "$r" > "$r.t" && mv "$r.t" "$r"
+  run as s1 read
+  block st-ok <<< "$output" | grep -q '\[changed\]$' || fails "the message didn't read changed" "$output"
+  ! block st-ok <<< "$output" | grep -q '^===== sender:' || fails "a changed message got a sender line" "$output"
 }
