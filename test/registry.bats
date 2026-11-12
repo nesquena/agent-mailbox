@@ -100,6 +100,15 @@ setup_file() {
   ! as m1 agents --names --human bob | grep -q m4 || fails "a retired agent was listed" "$(as m1 agents --names --human bob)"
 }
 
+@test "--names leaves out a record copied to another agent's name" {
+  # a store writer copies m3's record (human nesq, env cloud, group camanji) to y, with an inbox for y
+  cp "$RM/m3.md" "$RM/y.md"; mkdir -p "$T/store/mailbox/inbox/y"; touch "$T/store/mailbox/inbox/y/.keep"
+  out=$(as m1 agents --names --human nesq)
+  ! printf '%s\n' "$out" | grep -qx y || fails "a record copied to another name was listed" "$out"
+  printf '%s\n' "$out" | grep -qx m3 || fails "the record's own agent was left out" "$out"
+  rm "$RM/y.md"; rm -r "$T/store/mailbox/inbox/y"
+}
+
 @test "agents refuses a filter value that isn't one name, and an unknown option as such" {
   mkdir -p "$T/globdir"; : > "$T/globdir/ops"; : > "$T/globdir/dev"
   ( cd "$T/globdir" && expect 1 "--group takes one name" as m1 agents --names --group 'o*' )
