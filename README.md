@@ -76,7 +76,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 ## Everyday commands
 | Command | What it does |
 |---|---|
-| `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
+| `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer); under a verified message, a `==== sender:` line says whose agent the sender's signed record claims to be. Exit 3 if there's none. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox reply <file> <body.md\|->` | Answer a message in your inbox: it goes to the message's sender, on its topic and context, and the message is consumed in the same step (`--keep` leaves it). Takes `--needs`, `--context`, `--hold` and `--release` as `send` does. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |

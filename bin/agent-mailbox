@@ -33,7 +33,8 @@
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
 #                                       names and from: headers, not signatures
 #   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3); each starts
-#                                       "===== <file> [<status>]" and ends "===== end <file>"
+#                                       "===== <file> [<status>]" and ends "===== end <file>"; a "==== sender:"
+#                                       line about the sender may follow the first
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
@@ -449,11 +450,15 @@ verify_sig() {
 sig_ok() { allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE"; printf '%s %s\n' "$2" "$3" > "$allowed"
   ssh-keygen -Y verify -f "$allowed" -I "$2" -n "$NS" -s "$1.sig" < "$1" >/dev/null 2>&1; so=$?; rm -f "$allowed"; return "$so"; }
 # signed_record <name> <copy>: copy <name>'s record (and its .sig, never one that's a link) to <copy>, and succeed only
-# when that copy is signed by the key this reader pinned for <name>: the key a verified message from <name> was checked
-# against. A record a store writer edited, or one signed by another key, fails
+# when that copy names <name> and is signed by the key this reader pinned for <name>: the key a verified message from
+# <name> was checked against. A record a store writer edited, one signed by another key, and another agent's record
+# copied over this one (two agents sharing a key) all fail
 signed_record() { sr=$(record "$1"); [ -f "$sr" ] && [ ! -L "$sr" ] && [ -f "$sr.sig" ] && [ ! -L "$sr.sig" ] || return 1
   cat -- "$sr" > "$2" 2>/dev/null && cat -- "$sr.sig" > "$2.sig" 2>/dev/null || return 1
-  sk=$(reg_key "$2") && [ -f "$STATE/pins/$STORE_ID/$1" ] && [ "$(cat "$STATE/pins/$STORE_ID/$1")" = "$(printf '%s\n' "$sk" | sha)" ] &&
+  [ "$(field name "$2")" = "$1" ] && sk=$(reg_key "$2") || return 1
+  # ceiling: verify_file pinned the key in the record it read; the copy's key must match that pin too, which guards a
+  # record swapped between verify_file and this copy. No test reproduces that race
+  [ -f "$STATE/pins/$STORE_ID/$1" ] && [ "$(cat "$STATE/pins/$STORE_ID/$1")" = "$(printf '%s\n' "$sk" | sha)" ] &&
     have_ssh && sig_ok "$2" "$1" "$sk"; }
 # sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
 sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
@@ -630,7 +635,8 @@ register|update)
     [ -n "$kind" ] && [ -n "$about" ] || die "usage: register --kind <kind> --about <text> [--runs-on <text>] [--watch <text>] [--key <pub>|--no-key] [--human <h>] [--env <e>] [--groups \"<g> ...\"]"
     status=active
     # (the config's human, from setup --human, unless --human was given)
-    [ -n "$hset" ] || { human=$(cfg human); matches "$NAME_RE" "$human" || human=""; }
+    [ -n "$hset" ] || { human=$(cfg human)
+      [ -z "$human" ] || matches "$NAME_RE" "$human" || { warn "your config's human isn't a name, so none is recorded (set one with setup --human)"; human=""; }; }
   else
     [ -f "$rec" ] || die "'$ME' isn't registered yet (use 'register')"
     kind="${kind:-$(field kind "$rec")}"; about="${about:-$(field about "$rec")}"; runs="${runs:-$(field runs_on "$rec")}"
@@ -939,11 +945,15 @@ read)
   # file swapped in the store meanwhile can't be shown under another's status
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   # "yours" compares with the human your config names (setup --human), which no store writer can change; without one,
-  # with your own record's, only when that record is signed by your own key
-  mine=$(cfg human); matches "$NAME_RE" "$mine" || mine=""
-  if [ -z "$mine" ] && can_sign; then mk=$(own_pub); mr=$(record "$ME")
+  # with your own record's, only when that record names you and is signed by your own key. A config human that isn't a
+  # name is ignored, with a warning, and then nothing is "yours"
+  mine=$(cfg human)
+  if [ -n "$mine" ] && ! matches "$NAME_RE" "$mine"; then
+    warn "your config's human isn't a name, so no sender is shown as yours (set one with setup --human)"; mine=""
+  elif [ -z "$mine" ] && can_sign; then mk=$(own_pub); mr=$(record "$ME")
     if [ -n "$mk" ] && [ -f "$mr" ] && [ ! -L "$mr" ] && [ -f "$mr.sig" ] && [ ! -L "$mr.sig" ] && cat -- "$mr" > "$rt/own" 2>/dev/null &&
-      cat -- "$mr.sig" > "$rt/own.sig" 2>/dev/null && [ "$(reg_key "$rt/own")" = "$mk" ] && sig_ok "$rt/own" "$ME" "$mk"; then
+      cat -- "$mr.sig" > "$rt/own.sig" 2>/dev/null && [ "$(field name "$rt/own")" = "$ME" ] && [ "$(reg_key "$rt/own")" = "$mk" ] &&
+      sig_ok "$rt/own" "$ME" "$mk"; then
       mine=$(claim human "$rt/own"); fi
   fi
   strict=""; require_sigs && strict=1
@@ -965,19 +975,20 @@ read)
     # what the sender's record says of it (human, env, groups: its own claims), on a line of the CLI's own, which a
     # message's text can't draw, since a body line starting with = is indented below. It starts "==== ": "===== "
     # starts only read's frame lines (a message's first and end lines), so a script splitting on them sees nothing
-    # else. Under a verified message, the claims come only from a record signed by the key the message verified with
-    # (a store writer's edit to it shows no claims, and never "yours"); "yours" when it names your human. Under an
-    # unsigned message where the store doesn't require signatures, the record's claims, marked as a claim and never
-    # "yours". None for any other status, or a sender with no record
-    if matches "$NAME_RE" "$fr" && [ -f "$(record "$fr")" ] && { [ "$vs" = verified ] || { [ "$vs" = unsigned ] && [ -z "$strict" ]; }; }; then
-      if [ "$vs" = verified ] && ! signed_record "$fr" "$rt/r"; then
+    # else. Its claims are read in one place only: under a verified message, from a copy of the sender's record that
+    # names the sender and is signed by the key the message verified with (any other record shows no claims, and never
+    # "yours"); "yours" when it names your human. Under an unsigned message where the store doesn't require
+    # signatures, only the sender's name, marked as a claim: no record is read. None for any other status, or for a
+    # verified sender with no record (a record that's a link counts as one, and shows no claims)
+    if matches "$NAME_RE" "$fr" && [ "$vs" = unsigned ] && [ -z "$strict" ]; then
+      printf '==== sender: %s (unsigned: from: is only a claim)\n' "$fr"
+    elif matches "$NAME_RE" "$fr" && [ "$vs" = verified ] && { [ -f "$(record "$fr")" ] || [ -L "$(record "$fr")" ]; }; then
+      if ! signed_record "$fr" "$rt/r"; then
         printf "==== sender: %s's record isn't signed by its key, so its human, env and groups aren't shown\n" "$fr"
-      else [ "$vs" = verified ] || cat -- "$(record "$fr")" > "$rt/r" 2>/dev/null
-        sh_=$(claim human "$rt/r"); se=$(claim env "$rt/r"); sg=$(claim groups "$rt/r")
-        if [ -z "$sh_" ]; then who="no human"; elif [ "$vs" = verified ] && [ -n "$mine" ] && [ "$sh_" = "$mine" ]; then who="human $sh_ (yours)"
-        elif [ "$vs" = verified ] && [ -n "$mine" ]; then who="another human ($sh_)"; else who="human $sh_"; fi
-        un=""; [ "$vs" = verified ] || un=" (unsigned: from: is only a claim)"
-        printf '==== sender: %s%s says %s%s%s\n' "$fr" "$un" "$who" "${se:+; env $se}" "${sg:+; groups $sg}" | clean
+      else sh_=$(claim human "$rt/r"); se=$(claim env "$rt/r"); sg=$(claim groups "$rt/r")
+        if [ -z "$sh_" ]; then who="no human"; elif [ -n "$mine" ] && [ "$sh_" = "$mine" ]; then who="human $sh_ (yours)"
+        elif [ -n "$mine" ]; then who="another human ($sh_)"; else who="human $sh_"; fi
+        printf '==== sender: %s says %s%s%s\n' "$fr" "$who" "${se:+; env $se}" "${sg:+; groups $sg}" | clean
       fi; rm -f "$rt/r" "$rt/r.sig"
     fi
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
