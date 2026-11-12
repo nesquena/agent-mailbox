@@ -20,6 +20,9 @@
 #   send <to> <topic> <body.md|-> [--context <c>] [--in-reply-to <file>] [--needs <text>] [--consume <file>]...
 #        [--hold|--release "<item> <version>"]
 #                                       deliver a message; --consume also removes mail you're answering
+#   reply <file> <body.md|-> [--needs <text>] [--context <c>] [--hold|--release "<item> <version>"] [--keep]
+#                                       answer a message in your inbox: send to its sender, on its topic and context,
+#                                       and consume it in the same change (--keep: leave it in your inbox)
 #   list                                your inbox, oldest first (exit 0: some, 3: none)
 #   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
@@ -485,6 +488,55 @@ own_pub() { op=$(ssh-keygen -y -P '' -f "$KEY" 2>/dev/null | cut -d' ' -f1,2); m
 
 # --- commands ------------------------------------------------------------------------------------------------------
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
+# reply answers a message in your inbox: it reads the addressee (the message's sender) and topic from the message, then
+# runs as send with --in-reply-to and --consume naming it, so the answer and the receipt are one change (PROTOCOL.md
+# section 5). The store is opened here, once, and send goes on from it (LOADED)
+LOADED=""
+if [ "$cmd" = reply ]; then
+  ru='usage: reply <file> <body.md|-> [--needs text] [--context c] [--hold|--release "<item> <version>"] [--keep]'
+  [ $# -ge 1 ] || die "$ru"
+  case "$1" in (-*) misplaced "$1"; matches "$MSG_RE" "$1" || die "$ru" ;; esac
+  rf=$(basename -- "$1"); shift; rbody="" keep="" seen=""
+  # what isn't reply's own is kept, in order, for send: each option with its value
+  n=$#; while [ "$n" -gt 0 ]; do a=$1; shift; n=$((n-1))
+    case "$a" in
+      (--keep) once "$a"; keep=1 ;;
+      (--needs|--context|--hold|--release) [ "$n" -ge 1 ] || die "$a needs a value"; set -- "$@" "$a" "$1"; shift; n=$((n-1)) ;;
+      (-) [ -z "$rbody" ] || die "reply takes one message and one body, not '$a' too"; rbody=- ;;
+      (-*) unknown "$a" ;;
+      (*) [ -z "$rbody" ] || die "reply takes one message and one body, not '$a' too"; rbody=$a ;;
+    esac
+  done
+  [ -n "$rbody" ] || die "$ru"
+  need_me; valid_msg "$rf"
+  load_adapter; ad_sync; need_store; LOADED=1
+  rp="$M/inbox/$ME/$rf"
+  # (a link isn't a message of your inbox's, as for read)
+  plain "$rp" || die "not in your inbox: $rf"
+  hdr_ok "$rp" || die "$rf has a header that isn't plain (verify reads it bad), so reply can't tell who sent it; answer with send if you mean to"
+  rfrom=$(field from "$rp") rtopic=$(field topic "$rp")
+  matches "$NAME_RE" "$rfrom" || die "$rf has no valid from: header, so reply can't tell who sent it"
+  matches "$NAME_RE" "$rtopic" || die "$rf has no valid topic: header to reply on"
+  # the header says who sent a message, and its file name (<stamp>-<from>-<topic>.md) must agree, as read checks
+  st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+  case "$rf" in ($st-"$rfrom-$rtopic".md) ;;
+    ($st-"$rfrom"-*) die "$rf: its topic: header ($rtopic) isn't the topic its file name names; answer with send if you mean to" ;;
+    (*) die "$rf: its from: header names $rfrom, but its file name doesn't name $rfrom as the sender; answer with send if you mean to" ;;
+  esac
+  # its signature, as read shows it. In a strict store only verified mail counts (as for holds), so reply answers only a
+  # message that verifies. Elsewhere a message that reads bad, changed or misrouted is refused too, since consuming it
+  # would remove the sign of tampering unseen; unsigned and nokey are answered, with the status said
+  v=$(verify_file "$rp" "$ME")
+  if require_sigs; then
+    [ "$v" = verified ] || die "this store requires signatures, and $rf doesn't verify ($v; see verify); answer with send if you mean to"
+  else case "$v" in
+    (verified) ;;
+    (unsigned|nokey) warn "$rf reads $v (see verify); answering it anyway, as this store doesn't require signatures" ;;
+    (*) die "$rf reads $v (see verify), so reply won't answer or consume it; answer with send if you mean to" ;;
+  esac; fi
+  [ -n "$keep" ] || set -- --consume "$rf" "$@"
+  set -- "$rfrom" "$rtopic" "$rbody" --in-reply-to "$rf" "$@"; cmd=send
+fi
 case "$cmd" in
 setup)
   store="$STORE" adapter="$ADAPTER" root="$ROOT" branch="$BRANCH" name="${AS:-$(cfg name)}" seen=""
@@ -711,7 +763,7 @@ send)
   [ -n "$text" ] || die "empty message body"
   ! printf '%s\n' "$text" | LC_ALL=C grep -Eq -- "$PRIVKEY_RE" ||
     die "refusing to send: the body holds a private key's text (a line of its block; never put secrets in mail; to discuss a key, describe it, or send its public half)"
-  load_adapter; ad_sync; need_store
+  [ -n "$LOADED" ] || { load_adapter; ad_sync; need_store; }
   active "$to" || die "'$to' isn't an active agent in this mailbox"
   need_active_me
   # sign only with the key your registry record names, so what you send verifies; a strict store refuses otherwise

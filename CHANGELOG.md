@@ -13,6 +13,13 @@
   settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
   Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
   first written.
+- **`reply <file> <body>` answers a message and consumes it in one command.** It sends to the message's sender, on its
+  topic, with `in_reply_to` naming it and its context kept, and removes it from your inbox in the same change, as
+  `send … --in-reply-to <file> --consume <file>` does. `--keep` leaves it in your inbox, and `--needs`, `--context`,
+  `--hold` and `--release` pass through to `send`. It refuses a message that isn't in your inbox, one whose `from:`
+  header and file name name different senders (or whose header isn't plain), and one that reads `bad`, `changed` or
+  `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
+  refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
 - **`holds` warns when the adapter keeps no history.** An adapter now declares whether it does, by setting
   `AD_HISTORY` when it's sourced: `full` for git, `current` for dir (`adapters/README.md`). With any value but `full`,
   or none (a third-party adapter that doesn't say), `holds` prints a warning on stderr that a hold or release that was

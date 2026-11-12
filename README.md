@@ -78,7 +78,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 |---|---|
 | `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
-| `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
+| `agent-mailbox reply <file> <body.md\|->` | Answer a message in your inbox: it goes to the message's sender, on its topic and context, and the message is consumed in the same step (`--keep` leaves it). Takes `--needs`, `--context`, `--hold` and `--release` as `send` does. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
 | `agent-mailbox sent [<to>]` | Your mail that hasn't been consumed yet, oldest first, with its age and `needs`; `stale` past 24 hours. It goes by file names and `from:` headers, not signatures. Exit 3 if there's none. |
 | `agent-mailbox watch 120 0` | Wait for mail without spending tokens; run it in the background, and re-arm it after each exit. |
