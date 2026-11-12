@@ -74,7 +74,8 @@ jobs:
           - {os: ubuntu-latest, shell: sh}
           - {os: macos-latest, shell: dash}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # (above the run's own limit, 40 minutes, so the run ends first and says why, rather than GitHub cancelling it)
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: git identity for the tests' own setup commits
