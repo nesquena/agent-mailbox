@@ -17,7 +17,10 @@ configured address), `ROOT` (the mailbox's path inside the store), `BRANCH`, `ST
 only while `init` publishes its own first commit: the git adapter drops that commit when another agent's init has
 taken the folder meanwhile; an adapter without races can ignore it). It can call the CLI's `die` and `warn`, and
 `clean`, a filter (stdin to stdout) that spells out control characters in text it shows; its optional argument is a
-sed script, not text. It defines:
+sed script, not text. When sourced, it sets `AD_HISTORY`: `full` when `ad_history` lists every version of every file,
+consumed and removed ones included (git), or `current` when it lists only the files there now (dir). Unset counts as
+`current`, and `holds` then warns on stderr that a consumed or deleted hold or release isn't seen, though its verdict
+and exit code stay the same. It defines:
 
 | Function | Must |
 |---|---|
@@ -45,4 +48,4 @@ version 2 question, tracked in [#94](https://github.com/nesquena/agent-mailbox/i
    without a lock).
 2. Add your adapter's name to `test/run.sh`'s default list, or run `sh test/run.sh <name>`. The same suite runs
    against every adapter.
-3. Document it in the table above, including whether it keeps history.
+3. Document it in the table above, including whether it keeps history, and set `AD_HISTORY` to match.
