@@ -50,6 +50,10 @@ of 4, and of 3, run every section once between them, and that `test/section-cost
 section, and nothing else; `sh test/shards-cover.sh --logs <whole run's output> <each shard's output>...` checks that
 the shards printed the same checks as a whole run.
 
+To find the slow checks, set `TEST_TIMES=<file>` (with any of the options above): each check's own time goes in that
+file, one `<ms><tab><section><tab><status><tab><check>` line each, bats tests included, and the run ends by listing
+the 15 slowest. A wait that takes much longer than the work it waits for is the place to look.
+
 CI runs the suite on Linux for every pull request, and on Linux and macOS for every push to main, every manual run
 (Actions, "test", "Run workflow", on your branch) and every release, in four shards per shell, side by side. A
 push to main runs the shards with `--order` and the run's number, so each push tries another order. A manual run and

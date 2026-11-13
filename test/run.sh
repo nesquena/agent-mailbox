@@ -8,6 +8,7 @@
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
+# TEST_TIMES=<file> writes each check's own time to <file> and lists the slowest at the end (see CONTRIBUTING.md).
 set -u
 NL='
 '
@@ -62,9 +63,29 @@ leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != m
   kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
   for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
 pass=0 fail=0 skip=0
-ok() { pass=$((pass+1)); echo "  ok   $1"; }
-no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
-sk() { skip=$((skip+1)); echo "  skip $1"; }
+ok() { pass=$((pass+1)); echo "  ok   $1"; times_note ok "$1"; }
+no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; times_note FAIL "$1"; }
+sk() { skip=$((skip+1)); echo "  skip $1"; times_note skip "$1"; }
+# TEST_TIMES=<file> (opt-in, to find the slow checks): each check's own time, counted from the result before it (or
+# its section's start), one "<ms><tab><section><tab><ok|FAIL|skip><tab><check>" line each in <file>, and the slowest
+# listed at the end; bats tests too, from bats --timing. Milliseconds where date has %N, whole seconds elsewhere. (It's
+# taken out of the environment, so the runs and tools the suite starts neither see it nor write to the file)
+TT=${TEST_TIMES:-}; unset TEST_TIMES; TSEC=""
+if [ -n "$TT" ]; then case $TT in (/*) ;; (*) TT="$PWD/$TT" ;; esac
+  : > "$TT" 2>/dev/null || { echo "FAIL TEST_TIMES: can't write '$TT'"; exit 1; }
+  case $(date +%N 2>/dev/null) in
+    (''|*[!0-9]*) now_ms() { echo $(( $(date +%s) * 1000 )); } ;;
+    (*) now_ms() { _nn=$(date +%s%N); echo "${_nn%??????}"; } ;;
+  esac; _tlast=$(now_ms)
+fi
+# times_mark: a section starts (or a time already counted ends); times_note <status> <check>: one check's line
+times_mark() { [ -z "$TT" ] || _tlast=$(now_ms); }
+times_note() { [ -n "$TT" ] || return 0; _tn=$(now_ms)
+  printf '%s\t%s\t%s\t%s\n' $((_tn - _tlast)) "${TSEC:--}" "$1" "$(printf '%s' "$2" | tr '\t\n\r' '   ')" >> "$TT"; _tlast=$_tn; }
+# times_summary: the slowest checks, at the end of a run with TEST_TIMES
+times_summary() { [ -n "$TT" ] && [ -s "$TT" ] || return 0
+  echo "== the slowest checks (all times in $TT)"
+  sort -t "$(printf '\t')" -k1,1nr "$TT" | head -n 15 | awk -F '\t' '{ printf "  %7.1f s  %-24s %s\n", $1 / 1000, $2, $4 }'; }
 
 # --- nothing waits forever. A step can lose what it waits for (a crashed shell, a send that never happened), so every
 # wait is bounded: a test fails, saying it timed out, instead of the run hanging until someone notices.
@@ -292,6 +313,20 @@ if command -v dash >/dev/null 2>&1; then
     ok "a run read through \$(...) returns as soon as it ends, with no FAIL line" ||
     no "a run read through \$(...) was held after it ended (exit $rc, $((t1 - t0)) s)" "$out"
 else sk "a run read through \$(...) returns as soon as it ends (no dash here)"; fi
+# TEST_TIMES: each check's own time goes in the file, with its section; the summary lists them; what the run starts
+# doesn't see the variable; and without it, nothing is written or printed
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"
+  echo 'TSEC=demo; times_mark; ok first; sleep 1; ok second; sh -c '"'"'echo "child: ${TEST_TIMES:-nothing}"'"'"'; times_summary'; } > "$W/times.sh"
+mkdir -p "$W/tmpt"; rm -f "$W/t.tsv"
+out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/t.tsv" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 10000 ] &&
+  printf '%s\n' "$out" | grep -qx 'child: nothing' && printf '%s\n' "$out" | grep -q '^== the slowest checks' &&
+  ok "TEST_TIMES records each check's own time, with its section, and lists the slowest; what the run starts doesn't see it" ||
+  no "TEST_TIMES didn't record the checks' times as it should (exit $rc)" "$out$NL$(cat "$W/t.tsv" 2>/dev/null)"
+out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q 'slowest checks' && printf '%s\n' "$out" | grep -qx '  ok   second' &&
+  ok "and without TEST_TIMES, a run's output is as before" || no "without TEST_TIMES, a run's output changed (exit $rc)" "$out"
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
@@ -3943,8 +3978,16 @@ sec_bats() {
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"
 elif ! [ "$(bats --count "$ROOTDIR/test" 2>/dev/null)" -gt 0 ] 2>/dev/null; then no "test/*.bats (bats found no tests)"
-elif TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"
-else no "test/*.bats (its failures are above)"; fi
+elif [ -z "$TT" ]; then
+  if TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"; else no "test/*.bats (its failures are above)"; fi
+else
+  # (with TEST_TIMES, each bats test's own time from --timing, "ok <n> <name> in <ms>ms", goes in the file too)
+  TEST_SHELL="$SH" bats --timing "$ROOTDIR/test" > "$W/bats.out" 2>&1; _br=$?; cat "$W/bats.out"
+  awk -v sec="$TSEC" '/^(not )?ok [0-9]+ .* in [0-9]+ms$/ { st = ($1 == "ok") ? "ok" : "FAIL"; l = $0
+      sub(/^(not )?ok [0-9]+ /, "", l); ms = l; sub(/.* in /, "", ms); sub(/ms$/, "", ms); sub(/ in [0-9]+ms$/, "", l)
+      printf "%s\t%s\t%s\t%s\n", ms, sec, st, l }' "$W/bats.out" >> "$TT"
+  times_mark; if [ "$_br" = 0 ]; then ok "test/*.bats"; else no "test/*.bats (its failures are above)"; fi
+fi
 }
 section bats sec_bats
 
@@ -3972,7 +4015,8 @@ fi
   NF { x = x * 16807 % 2147483647; print x, $0 }' | sort -n | cut -d' ' -f2)
 if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
 [ -z "$ORDER" ] || echo "order: seed $ORDER"
-for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"
+for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"; TSEC=$_sid; times_mark
   set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; done
+times_summary
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
