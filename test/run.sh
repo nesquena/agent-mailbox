@@ -399,6 +399,12 @@ if command -v zsh >/dev/null 2>&1; then
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^== setup says when pinned' && printf '%s\n' "$out" | grep -q "^== a signed record whose header" &&
     ok "under zsh, a run of two sections runs both" || no "under zsh, a run of two sections didn't run both (exit $rc)" "$out"
 else sk "under zsh, a run of two sections runs both (no zsh here)"; fi
+# each section's function is its own and defined once (a copy defined later would run under both names, and a function
+# shared by two ids runs one section's checks twice); sec_adapter alone takes an argument and serves each adapter
+d=$(printf '%s' "$SECTIONS" | awk '$2 != "sec_adapter" { print $2 }' | sort | uniq -d
+  for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do
+    [ "$(grep -c "^[[:space:]]*$f[[:space:]]*()" "$0")" = 1 ] || echo "$f"; done)
+[ -z "$d" ] && ok "each section's function is its own, defined once" || no "a section's function is shared or defined more than once" "$d"
 # a section that runs no check (here bats, made empty after it's registered) fails the run, as one whose function is
 # gone would
 sed 's/^section bats sec_bats$/section bats sec_bats; sec_bats() { :; }/' "$0" > "$W/guard/test/hollow.sh"
@@ -1858,8 +1864,8 @@ exec "%s" "$@"
   section git-shared-home sec_git_shared_home
 
   sec_git_replayed_releases() {
+  echo "== git: replayed releases and required signatures"
   if [ -n "$SSH" ]; then
-    echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
     for a in g1 g2 g3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
     expect "init a store that requires signatures" 0 "require_signatures: true" as g1 init --require-signatures
@@ -1895,8 +1901,8 @@ exec "%s" "$@"
 esac
 
 sec_pins_on_move() {
-if [ -n "$SSH" ]; then
 echo "== setup says when pinned keys stay with the old store settings (dir)"
+if [ -n "$SSH" ]; then
 T="$W/pinmove"; mkdir -p "$T"
 as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
 as pm1 register --kind t --about t >/dev/null
@@ -3056,8 +3062,8 @@ fi
 section store-order sec_store_order
 
 sec_key_change() {
-if [ -n "$SSH" ]; then
 echo "== after a key change: holds' advice and trust's message, open or strict (git)"
+if [ -n "$SSH" ]; then
 # a sender holds an item, then its registered key is swapped. What its old key signed stops counting after trust only
 # in a store that requires signatures; elsewhere the old hold reads bad and still counts, and both messages say which.
 # Mode f is a store seen strict whose store.md is then edited to stop requiring signatures: a reader that saw it strict
@@ -3102,8 +3108,8 @@ else sk "key-change (no ssh-keygen -Y)"; fi
 section key-change sec_key_change
 
 sec_strict_stores() {
-if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
+if [ -n "$SSH" ]; then
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in k1 k2 k3 k4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
 as k1 init --require-signatures >/dev/null; for a in k1 k2 k3 k4; do as $a register --kind t --about t >/dev/null; done
@@ -3205,8 +3211,8 @@ else sk "strict-stores (no ssh-keygen -Y)"; fi
 section strict-stores sec_strict_stores
 
 sec_loose_plain_header() {
-if [ -n "$SSH" ]; then
 echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
+if [ -n "$SSH" ]; then
 T="$W/loose"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in j1 j2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
 as j1 init >/dev/null; for a in j1 j2; do as $a register --kind t --about t >/dev/null; done
@@ -4095,7 +4101,7 @@ if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
 # (a section that runs no check, or whose function is gone, fails: it would otherwise pass having tested nothing)
 for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"; TSEC=$_sid; times_mark; _sn=$((pass + fail + skip))
   set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; _sr=$?
-  [ "$_sr" != 127 ] && [ $((pass + fail + skip)) -gt "$_sn" ] || no "section $_sid ran no checks (exit $_sr)"; done
+  [ $((pass + fail + skip)) -gt "$_sn" ] || no "section $_sid ran no checks (exit $_sr)"; done
 times_summary
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
