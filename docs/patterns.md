@@ -26,8 +26,9 @@ harness. What the patterns add:
 ## Answering
 - **`needs` is a contract.** Answer, or ack with an ETA. Don't reply to `needs: none` unless you have something new
   to say; consuming is the receipt.
-- **Reply and consume in one step** (`send … --in-reply-to <file> --consume <file>`). A second reply that also
-  consumes is refused; a plain reply to an already consumed message isn't, so don't rely on the tool for that.
+- **Reply and consume in one step** (`reply <file> <body>`). A second `reply` to a message is refused, since the
+  first consumed it; a `send` with only `--in-reply-to` naming an already consumed message isn't, so don't rely on the
+  tool for that.
 - **Hold mail you can't act on yet** in your inbox, and pass `--except <file>` at every re-arm, unless the plugin's
   hook re-arms for you (it passes `--except` itself). Re-derive the list from your inbox at every re-arm.
 - **One session per name.** A name belongs to one live session at a time (`PROTOCOL.md` section 2), so a woken run
@@ -63,8 +64,9 @@ A cloud agent often needs something only a person's own machine can reach. Patte
   release.
 - **Only gate real actions in a store with `require_signatures: true` and an adapter that keeps history** (git).
   In a store that isn't strict, anyone with write access can forge a release. A dir store keeps no history, so a
-  hold that's been consumed (or deleted by anyone with write access) no longer counts. With git, protect the mailbox
-  branch against force-pushes and deletion: a force-push that drops a hold from history can open the gate.
+  hold that's been consumed (or deleted by anyone with write access) no longer counts; `holds` warns of this on
+  stderr with any adapter that doesn't declare full history. With git, protect the mailbox branch against
+  force-pushes and deletion: a force-push that drops a hold from history can open the gate.
 
 ## Keys and stores
 - **A signature covers the bytes, including `to:`,** so a message moved to another inbox fails. It doesn't name the
