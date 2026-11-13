@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-- **CI: pull requests run the tests on Linux only**, and every push to main, manual run and release runs Linux and
-  macOS. A pull request with the `macos` label runs macOS too (`CONTRIBUTING.md`).
+- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
+  `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
+  the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
+  section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed
+  first); a manual run and a release also run the whole suite once per OS.
+- **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
+  no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
+  (`CONTRIBUTING.md`).
 
 ## 0.1.2 (2026-11-12)
 

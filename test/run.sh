@@ -1,6 +1,10 @@
 #!/bin/sh
-# test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
-# gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
+# test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]: end-to-end tests of
+# bin/agent-mailbox against throwaway stores. Each simulated agent gets its own HOME, so config, keys, pins and the
+# store checkout are as separate as on two machines. The suite is a list of sections, each run in a folder of its own,
+# and each makes what it needs itself, so any of them runs alone or in any order. --list prints the ids of the sections
+# a run would run; --only runs the named ones; --shard i/n runs shard i of n, split by the times in
+# test/section-costs; --order <seed> shuffles them. Any other argument names an adapter.
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
@@ -14,11 +18,31 @@ SH="${TEST_SHELL:-sh}"
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
   AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
-ADAPTERS="${*:-git dir}"
+LIST="" ONLY="" SHARD="" ORDER="" ADAPTERS="" BAD=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    (--list) LIST=1 ;;
+    (--only|--shard|--order) [ -n "${2:-}" ] || { BAD=1; break; }
+      case $1 in (--only) ONLY=$2 ;; (--shard) SHARD=$2 ;; (*) ORDER=$2 ;; esac; shift ;;
+    (-*) BAD=1 ;;
+    (*) ADAPTERS="${ADAPTERS:+$ADAPTERS }$1" ;;
+  esac; shift
+done
+case $SHARD in
+  ('') ;;
+  (*[!0-9/]*|*/*/*|/*|*/) BAD=1 ;;
+  (*/*) [ "${SHARD%/*}" -ge 1 ] && [ "${SHARD%/*}" -le "${SHARD#*/}" ] && [ -z "$ONLY" ] || BAD=1 ;;
+  (*) BAD=1 ;;
+esac
+case $ORDER in (*[!0-9]*) BAD=1 ;; esac
+[ -z "$BAD" ] || { echo "usage: test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]" >&2; exit 64; }
+ADAPTERS="${ADAPTERS:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
-W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+RUNW=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
 # (every cleanup below stops what names this folder, so a run that couldn't make it stops here, before any of them)
-[ -n "$W" ] && [ -d "$W" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
+[ -n "$RUNW" ] && [ -d "$RUNW" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
+# (W, the folder tests make things in, is this one until each section gets its own in it, $RUNW/<id>)
+W=$RUNW
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
@@ -26,14 +50,14 @@ procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
-  [ -d "$d" ] && [ "$d" != "$W" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+  [ -d "$d" ] && [ "$d" != "$RUNW" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
     [ -z "$(procs_naming "$d")" ] && rm -rf "$d"
 done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
-CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$W" ${CCD:+"$CCD"}' EXIT
+CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
-leftovers() { set -- $(for _lp in $(procs_naming "$W" | awk -v me=$$ '$1 != me { print $1 }') \
+leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
     $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
   kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
   for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
@@ -90,9 +114,9 @@ SUITE=$$
 # skips its exit trap, so the watchdog then stops what still names the run's folder and removes it. (It never holds
 # the run's output: a caller reading that to its end before reaping the run would see a zombie run still there)
 ( ( wd=$(sh -c 'echo $PPID'); n=0
-  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$W" 2>/dev/null; n=$((n+5)); done
+  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$RUNW" 2>/dev/null; n=$((n+5)); done
   # (the list is a command's output, which every shell splits, zsh included)
-  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$W" | awk '{ print $1 }'); do tree "$_wq"; done); do
+  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$RUNW" | awk '{ print $1 }'); do tree "$_wq"; done); do
     [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
   kill -TERM "$SUITE" 2>/dev/null; [ $# -eq 0 ] || kill -TERM "$@" 2>/dev/null
   _wn=0; while [ $_wn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
@@ -101,7 +125,7 @@ SUITE=$$
   while [ $_wn -lt 50 ] && kill -0 "$SUITE" 2>/dev/null; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
   kill -0 "$SUITE" 2>/dev/null || exit 0
   kill -KILL "$SUITE" 2>/dev/null
-  for _wp in $(procs_naming "$W" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$W" ) >/dev/null 2>&1 & )
+  for _wp in $(procs_naming "$RUNW" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$RUNW" ) >/dev/null 2>&1 & )
 # (end of the run's watchdog: the safeguards' checks copy the suite's start up to here)
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
@@ -141,7 +165,19 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   fi
   ok "$d"
 }
+# fast_sleep, then fast <agent> <args...>: as, with a sleep that returns at once ($T/fast/sleep) first on PATH, so a
+# push's ten tries take no time
+fast_sleep() { mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"; }
+fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
+# old_ssh: $W/oldssh holds an ssh-keygen that is an OpenSSH without -Y
+old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' \
+  > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"; }
+# section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
+# and run in that order at the end (or as the options above pick)
+SECTIONS=""
+section() { SECTIONS="$SECTIONS$*$NL"; }
 
+sec_safeguards() {
 echo "== the suite's own safeguards: nothing waits forever"
 t0=$(date +%s); out=$(time_cap 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 124 ] && [ $((t1 - t0)) -le 8 ] && printf '%s\n' "$out" | grep -q 'timed out: stopped after 2 s' &&
@@ -273,8 +309,10 @@ sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ]
   ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
   no "a stopped run left a process or its folder behind" "$(procs_naming "${hw:-?}")"
 for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+}
+section safeguards sec_safeguards
 
-for AD in $ADAPTERS; do
+sec_adapter() { AD=$1
   echo "== adapter: $AD (shell: $SH)"
   T="$W/$AD"; mkdir -p "$T"
   if [ "$AD" = git ]; then git init -q --bare "$T/store.git"; STORE="$T/store.git"; else STORE="$T/store"; fi
@@ -781,10 +819,12 @@ notes.md"'
     [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
-done
+}
+for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
 
 # --- cases that need their own store -------------------------------------------------------------------------------
 case " $ADAPTERS " in *" git "*)
+  sec_git_default_branch() {
   echo "== git: a store whose default branch isn't the mailbox branch"
   T="$W/branch"; mkdir -p "$T"; git init -q --bare "$T/store.git"
   git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email s@s && git config user.name s &&
@@ -798,7 +838,10 @@ case " $ADAPTERS " in *" git "*)
   expect "init on a branch with a / in its name" 0 initialized as e2 init
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
+  }
+  section git-default-branch sec_git_default_branch
 
+  sec_git_exact_branch() {
   echo "== git: the mailbox branch is matched by its exact name"
   # ls-remote matches a pattern against the end of ref names: a store whose only ref is x/refs/heads/main has no main
   T="$W/nested"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -816,7 +859,10 @@ case " $ADAPTERS " in *" git "*)
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
+  }
+  section git-exact-branch sec_git_exact_branch
 
+  sec_git_take_turns() {
   echo "== git: commands under one name take turns in its clone"
   T="$W/lock"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in lp lr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -949,7 +995,10 @@ case " $ADAPTERS " in *" git "*)
   expect "nor is one the store's .gitignore names" 3 "no mail" as lp list
   as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
   expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
+  }
+  section git-take-turns sec_git_take_turns
 
+  sec_git_first_init() {
   echo "== git: a first init whose push failed is published by the next command"
   # the store's objects and refs are read-only for the init, so its fetches work and its push fails
   T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -970,6 +1019,9 @@ case " $ADAPTERS " in *" git "*)
   git --git-dir="$T/store.git" update-ref -d refs/heads/main
   expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
   [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
+  }
+  section git-first-init sec_git_first_init
+  sec_git_foreign_history() {
   echo "== git: a clone whose history the store doesn't share fails, saying how to recover"
   # an init left unpublished (the store's folders read-only for its push), then another agent's init wins
   T="$W/initrace"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -1268,15 +1320,16 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "an init at a/./b/. that loses the race to one at a/b says so" 1 "another agent initialized the mailbox at .* first.*title: winner" \
     env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
       RACE_CMD="HOME='$W/home-dn2' '$SH' '$CLI' init --title winner" HOME="$W/home-dn1" "$SH" "$CLI" init --title loser
+  }
+  section git-foreign-history sec_git_foreign_history
 
+  sec_git_unpublished() {
   echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
   T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in xq1 xq2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq1 init >/dev/null; for a in xq1 xq2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
-  # (fast: a sleep that returns at once, so the push's ten tries take no time)
-  mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"
-  fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
+  fast_sleep
   echo hi > "$T/m"
   expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" fast xq1 send xq2 first "$T/m"
   expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" fast xq1 send xq2 second "$T/m"
@@ -1306,14 +1359,14 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
       CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about mine
   rm -f "$T/store.git/hooks/pre-receive"
   # on a store with no mailbox branch yet: a first init the store won't take, then the next command
-  T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
+  T="$W/left2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
   expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
   # an update run again after its exit 4: its sync publishes the earlier change, and it says so, not just "nothing"
-  T="$W/left3"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
+  T="$W/left3"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
   as xq4 init >/dev/null; as xq4 register --kind t --about t --no-key >/dev/null 2>&1
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "an update the store won't take exits 4" 4 "written locally, not published" fast xq4 update --about again
@@ -1322,8 +1375,8 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
   # a command whose sync publishes what an earlier one left, then can't publish its own change, says its own change
   # isn't published (don't resend), not that it wrote nothing: the leftover mark ends with the leftover's push
-  T="$W/left4"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  T="$W/left4"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq5 init >/dev/null; for a in xq5 xq6; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"; echo hi > "$T/m"
   expect "(a first send the store won't take)" 4 "written locally, not published" fast xq5 send xq6 first "$T/m"
@@ -1333,10 +1386,13 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     "^agent-mailbox: written locally, not published" fast xq5 send xq6 second "$T/m"
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  }
+  section git-unpublished sec_git_unpublished
 
+  sec_git_leftover_conflict() {
   echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
-  T="$W/stuck"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  T="$W/stuck"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   nk=--no-key; [ -z "$SSH" ] || nk=""
   as ga init >/dev/null; for a in ga ga-x gb; do as $a register --kind t --about t $nk >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
@@ -1440,7 +1496,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   # a signed leftover moved past an unsigned message of the same name: its .sig goes with it, never staying beside the
   # unsigned one
   if [ -n "$SSH" ]; then
-    T="$W/stuckmix"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+    T="$W/stuckmix"; mkdir -p "$T"; fast_sleep; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
     for a in gs gs-x gr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
     as gs init >/dev/null; as gs register --kind t --about t >/dev/null 2>&1
     for a in gs-x gr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
@@ -1472,6 +1528,9 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   [ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
     [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
     ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
+  }
+  section git-leftover-conflict sec_git_leftover_conflict
+  sec_git_planted() {
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
@@ -1664,7 +1723,10 @@ exec "%s" "$@"
   env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
+  }
+  section git-planted sec_git_planted
 
+  sec_git_shared_home() {
   echo "== git: names sharing one HOME (a config each)"
   T="$W/pername"; mkdir -p "$T"; git init -q --bare "$T/s.git"; PH="$W/home-pername"
   pn() { n=$1; shift; HOME="$PH" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
@@ -1684,7 +1746,10 @@ exec "%s" "$@"
   [ "$(pn pn1 list | grep -c -- '-r[12]\.md$')" = 6 ] && [ "$(pn pn2 list | grep -c -- '-r[12]\.md$')" = 2 ] &&
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
+  }
+  section git-shared-home sec_git_shared_home
 
+  sec_git_replayed_releases() {
   if [ -n "$SSH" ]; then
     echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -1715,9 +1780,13 @@ exec "%s" "$@"
       ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-g3/.config/agent-mailbox/keys/g3" "$f" &&
       git add -A && git commit -qm inject && git push -q origin HEAD:main)
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
-  fi ;;
+  fi
+  }
+  section git-replayed-releases sec_git_replayed_releases
+  ;;
 esac
 
+sec_pins_on_move() {
 if [ -n "$SSH" ]; then
 echo "== setup says when pinned keys stay with the old store settings (dir)"
 T="$W/pinmove"; mkdir -p "$T"
@@ -1746,7 +1815,10 @@ ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
   sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
 expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
 fi
+}
+section pins-on-move sec_pins_on_move
 
+sec_watcher_lifecycle() {
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
@@ -1779,7 +1851,10 @@ if [ -n "$SSH" ]; then
   expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
   expect "and verify" 0 "signed-own.md \\[verified: from w2\\]" as w1 read
 fi
+}
+section watcher-lifecycle sec_watcher_lifecycle
 
+sec_stop_hook() {
 echo "== the Claude Code Stop hook (dir)"
 # PATH without any folder holding an agent-mailbox, so the hook prints this checkout's CLI and nothing installed runs
 NOPATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -z "$d" ] || [ -e "$d/agent-mailbox" ] ||
@@ -1839,7 +1914,10 @@ if PATH=$NOPATH command -v jq >/dev/null 2>&1; then
 else
   sk "the Claude Code Stop hook (no jq)"
 fi
+}
+section stop-hook sec_stop_hook
 
+sec_rewake_hook() {
 echo "== the Claude Code asyncRewake hook (dir)"
 T="$W/rewake"; P="$T/plug 'in'"; mkdir -p "$P/hooks"
 cp "$ROOTDIR/hooks/claude-rewake.sh" "$ROOTDIR/hooks/claude-watch-guard.sh" "$P/hooks/"; ln -s "$ROOTDIR/bin" "$P/bin"
@@ -2513,7 +2591,10 @@ wakes "and the hook then watches only the other store" "rx-r.md" rewake r9
 
 elif [ -n "${CI:-}" ]; then no "the Claude Code asyncRewake hook" "no python3 3.9 or later for a terminal on CI"
 else sk "the Claude Code asyncRewake hook (no python3 3.9 or later for a terminal)"; fi
+}
+section rewake-hook sec_rewake_hook
 
+sec_received_headers() {
 echo "== received headers (dir)"
 T="$W/hdr"; mkdir -p "$T/store"
 for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2610,7 +2691,10 @@ if [ -n "$SSH" ]; then
     env HOME="$W/home-h2b" "$SH" "$CLI" doctor
   tamper_dir "sed -i.bak 's|^key: .*|key: |' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
 else sk "doctor tells a retired name apart by key (no ssh-keygen -Y)"; fi
+}
+section received-headers sec_received_headers
 
+sec_send_stdin() {
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
 for a in i1 i2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2674,7 +2758,10 @@ else
   chmod -R u+w "$NR"
   expect "and the message is delivered" 0 "^x$" block i2 norec
 fi
+}
+section send-stdin sec_send_stdin
 
+sec_store_order() {
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
 for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2856,7 +2943,10 @@ if [ -n "$SSH" ]; then
     no "a linked temp was published" "$(ls -lA "$N/n2")"
   rm -f "$N"/n2/*.tmp.*
 fi
+}
+section store-order sec_store_order
 
+sec_key_change() {
 if [ -n "$SSH" ]; then
 echo "== after a key change: holds' advice and trust's message, open or strict (git)"
 # a sender holds an item, then its registered key is swapped. What its old key signed stops counting after trust only
@@ -2899,7 +2989,10 @@ for mode in o s f; do
   fi
 done
 fi
+}
+section key-change sec_key_change
 
+sec_strict_stores() {
 if [ -n "$SSH" ]; then
 echo "== strict stores fail closed (git)"
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -2998,7 +3091,12 @@ expect "or a shallow checkout can't fetch its full history" 1 "can't read this s
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+fi
+}
+section strict-stores sec_strict_stores
 
+sec_loose_plain_header() {
+if [ -n "$SSH" ]; then
 echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
 T="$W/loose"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in j1 j2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -3011,7 +3109,10 @@ git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom:
   git -C "$T/w" add -A && git -C "$T/w" -c user.name=e -c user.email=e@e commit -qm w && git -C "$T/w" push -q origin HEAD:main
 expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
 fi
+}
+section loose-plain-header sec_loose_plain_header
 
+sec_install_link() {
 echo "== installed link (install.sh)"
 T="$W/inst"; mkdir -p "$T"
 expect "install.sh links the CLI" 0 "linked" env HOME="$W/home-i1" "$SH" "$ROOTDIR/install.sh" --prefix "$T/prefix"
@@ -3065,6 +3166,9 @@ for a in r1 r2; do (cd "$T/rel" && HOME="$W/home-$a" "$SH" "$CLI" setup --store 
 (cd "$T/rel" && HOME="$W/home-r1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-r1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
   HOME="$W/home-r2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-r1" "$SH" "$CLI" send r2 rel -)  >/dev/null 2>&1
 expect "watch on a relative dir store ignores CDPATH" 0 "r1-rel.md" sh -c "cd '$T/rel' && HOME='$W/home-r2' CDPATH='$T/rel/other' '$SH' '$CLI' watch 1 3"
+}
+section install-link sec_install_link
+sec_doctor_odd_values() {
 echo "== doctor, messages and odd values (dir)"
 T="$W/odd/O'Brien"; mkdir -p "$T"
 for a in o1 o2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3141,7 +3245,10 @@ wait
 # a git store given by a path starting with '-' is a path, never an option to git clone
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
+}
+section doctor-odd-values sec_doctor_odd_values
 
+sec_terminal_escapes() {
 echo "== text from the store is shown, never obeyed by the terminal (dir)"
 T="$W/esc"; mkdir -p "$T"
 for a in x1 x2 x3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3227,6 +3334,9 @@ expect "and by a path relative to the current folder" 6 "^misrouted$" in_dir "$I
 expect "verify by path reads a message in the right inbox as before" 6 "^unsigned$" as x1 verify "$I/20260101T000004Z-x2-md.md"
 cp "$I/20260101T000012Z-x2-mis.md" "$T/mis-copy.md"
 expect "and a copy outside any inbox as before" 6 "^unsigned$" as x1 verify "$T/mis-copy.md"
+}
+section terminal-escapes sec_terminal_escapes
+sec_holds_rules() {
 echo "== holds and header rules (git)"
 T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -3374,7 +3484,10 @@ echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" 
 expect "holds won't decide while the store can't be reached" 1 "can't update from the store" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
+}
+section holds-rules sec_holds_rules
 
+sec_send_secrets() {
 echo "== send refuses obvious secrets (dir)"
 T="$W/sec"; mkdir -p "$T"
 for a in sec1 sec2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3556,10 +3669,16 @@ echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
 expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
+}
+section send-secrets sec_send_secrets
 
+sec_capability_probe() {
 echo "== capability probe"
-mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
+old_ssh
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+}
+section capability-probe sec_capability_probe
+sec_cli_hardening() {
 echo "== CLI hardening: update --key, register --key's config, line breaks, the passphrase prompt"
 T="$W/harden"; mkdir -p "$T/store"
 for a in hp1 hp2 hp3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3630,6 +3749,9 @@ if [ -n "$SSH" ]; then
   : > "$T/asklog"; runner 10.2 pp4; "$T/r.sh" < /dev/null >/dev/null 2>&1
   [ "$(asked)" = unset ] && ok "with no terminal, signing leaves SSH_ASKPASS_REQUIRE alone" || no "no terminal, yet SSH_ASKPASS_REQUIRE was set" "$(cat "$T/asklog")"
 fi
+}
+section cli-hardening sec_cli_hardening
+sec_dir_name_race() {
 echo "== dir: two sends that pick the same file name at once can't overwrite each other"
 # one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
 # (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
@@ -3700,6 +3822,9 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
+}
+section dir-name-race sec_dir_name_race
+sec_second_watcher() {
 echo "== a second watcher for a name on a machine warns"
 T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
 as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
@@ -3750,6 +3875,9 @@ rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p3=$(wpid)
 out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
 stopw "$p3"
+}
+section second-watcher sec_second_watcher
+sec_dir_store_gone() {
 echo "== dir: watch notices a store that's gone"
 T="$W/vanish"; mkdir -p "$T/store"
 for a in vw1 vw2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3806,12 +3934,45 @@ expect "and so does holds on one whose store.md goes during the listing" 1 "can'
   env PATH="$T/shim-md2:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
 mv "$T/store.md.gone" "$T/store/mailbox/store.md"
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+old_ssh
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
+}
+section dir-store-gone sec_dir_store_gone
+sec_bats() {
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"
 elif ! [ "$(bats --count "$ROOTDIR/test" 2>/dev/null)" -gt 0 ] 2>/dev/null; then no "test/*.bats (bats found no tests)"
 elif TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"
 else no "test/*.bats (its failures are above)"; fi
+}
+section bats sec_bats
+
+PLAN=$(printf '%s' "$SECTIONS" | awk '{ print $1 }')
+if [ -n "$ONLY" ]; then
+  for _sid in $(printf '%s\n' "$ONLY" | tr ',' ' '); do
+    printf '%s\n' "$PLAN" | grep -qxF -- "$_sid" || { echo "test/run.sh: no section '$_sid' (see --list)" >&2; exit 64; }
+  done
+  PLAN=$(printf '%s\n' "$PLAN" | awk -v o=",$ONLY," 'index(o, "," $1 ",")')
+  [ -n "$PLAN" ] || { echo "test/run.sh: --only names no section (see --list)" >&2; exit 64; }
+elif [ -n "$SHARD" ]; then
+  # (the longest first, each to the shard with the least so far, the first of them on a tie: every shard of n runs
+  # the same split. A section with no time there counts 1 s)
+  PLAN=$(printf '%s\n' "$PLAN" | awk -v i="${SHARD%/*}" -v n="${SHARD#*/}" -v f="$ROOTDIR/test/section-costs" '
+    BEGIN { while ((getline l < f) > 0) if (l ~ /^[a-z0-9][a-z0-9-]* [0-9]+$/) { split(l, a, " "); c[a[1]] = a[2] + 0 } }
+    { id[++m] = $1; w[m] = ($1 in c) ? c[$1] : 1 }
+    END { for (k = 1; k <= m; k++) { b = 0; for (j = 1; j <= m; j++) if (!t[j] && (!b || w[j] > w[b])) b = j
+        s = 1; for (q = 2; q <= n; q++) if (load[q] < load[s]) s = q
+        load[s] += w[b]; t[b] = s }
+      for (k = 1; k <= m; k++) if (t[k] == i) print id[k] }')
+fi
+# (shuffled by a Park-Miller generator, not awk's rand, which some awks seed from the clock whatever the seed)
+[ -z "$ORDER" ] || PLAN=$(printf '%s\n' "$PLAN" | awk -v s="$ORDER" '
+  BEGIN { x = s % 2147483647; if (x < 1) x = 1; for (i = 0; i < 9 + s % 97; i++) x = x * 16807 % 2147483647 }
+  NF { x = x * 16807 % 2147483647; print x, $0 }' | sort -n | cut -d' ' -f2)
+if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
+[ -z "$ORDER" ] || echo "order: seed $ORDER"
+for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"
+  set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; done
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
