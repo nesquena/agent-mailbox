@@ -69,9 +69,17 @@ mailbox/inbox/bob/20200101T000004Z-carol-notes.md from carol topic notes age ?"
 }
 
 @test "a filter takes a name" {
-  expect 1 "--from takes a name" as bob list --from Alice
-  expect 1 "--context takes a name" as bob read --context 'a b'
+  expect 1 "--from takes one name" as bob list --from Alice
+  expect 1 "--context takes one name" as bob read --context 'a b'
   expect 1 "--topic needs a name" as bob list --topic
+}
+
+@test "list's, read's and agents' name options refuse a value with the same rule and message" {
+  run as bob list --from Alice; [ "$status" -eq 1 ]; a=${output#*--from takes }
+  run as bob read --topic Alice; [ "$status" -eq 1 ]; r=${output#*--topic takes }
+  run as bob agents --human Alice; [ "$status" -eq 1 ]; g=${output#*--human takes }
+  [ "$a" = "$g" ] && [ "$r" = "$g" ] || { printf 'list: %s\nread: %s\nagents: %s\n' "$a" "$r" "$g" >&2; return 1; }
+  case "$g" in ("one name (lowercase a-z, 0-9, '.', '-'; up to 63), not 'Alice'") ;; (*) printf 'agents: %s\n' "$g" >&2; return 1 ;; esac
 }
 
 @test "list refuses an unknown option, and a misplaced --as" {
