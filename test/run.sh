@@ -2317,7 +2317,7 @@ echo hi | as rx send rw rw-b - >/dev/null 2>&1
 r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh" AGENT_MAILBOX_REWAKE_MAX=60)
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
-expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
+expect "mail it already woke the session for doesn't wake it again" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
 r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
@@ -2329,11 +2329,11 @@ expect "consumed mail drops off its list" 1 - grep -q rw-1 "$R1/woke"
 expect "mail still in the inbox stays on it" 0 - grep -q rw-2 "$R1/woke"
 # a stale pid file naming a live process that isn't the hook (a pid reused after a restart) doesn't stop it
 sleep 30 & sp=$!; echo "$sp r1" > "$R1/pid"
-expect "a pid file naming another process doesn't count" 2 "daily limit" rewake r1
+expect "a pid file naming another process doesn't count" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 kill "$sp" 2>/dev/null
 # nor does a hook left running by another session (it stops itself once its own session is gone)
 "$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r0" > "$R1/pid"
-expect "another session's hook doesn't hold the lock" 2 "daily limit" rewake r1
+expect "another session's hook doesn't hold the lock" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
@@ -2342,7 +2342,7 @@ else sk "nor does it satisfy this session's Stop guard (no jq)"; fi
 echo "$sp r1" > "$R1/pid"
 expect "this session's does" 0 '^$' rewake r1
 sleep 1 & dp=$!; wait "$dp"; echo "$sp r1 $dp" > "$R1/pid"
-expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit" rewake r1
+expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
@@ -2469,13 +2469,15 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0
-while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
+fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0 sawh=0
+while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
 if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
   kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
 else wait "$bg"; rc=$?
-  case "$rc $(cat "$T/bg.out")" in ("2 "*"daily limit"*) ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
-    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "exit $rc: $(cat "$T/bg.out")" ;; esac
+  # (the hang must have started: the hook prints the same note when its day ran out before any watcher did)
+  case "$sawh $rc $(cat "$T/bg.out")" in ("1 2 "*"reached its daily limit; it starts again at this turn's end."*)
+      ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
+    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; exit $rc: $(cat "$T/bg.out")" ;; esac
   # (the deadline is 5 s out: a watchdog that slept a 15 s check past it would end at 17 or later)
   [ "$n" -le 10 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 5s"
 fi
@@ -2546,7 +2548,7 @@ else sk "the two Stop hooks at one turn end (no jq)"; fi
 # a Claude Code that died but hasn't been reaped (a zombie) doesn't hold the lock
 "$SH" -c 'sleep 0 & echo $! > "$1"; exec sleep 30' sh "$T/zpid" & zp=$!; sleep 1
 "$SH" -c 'sleep 30; :' claude-rewake.sh > /dev/null 2>&1 & sp=$!; echo "$sp r1 $(cat "$T/zpid")" > "$R1/pid"
-expect "a lock whose Claude Code is a zombie doesn't count" 2 "daily limit" rewake r1
+expect "a lock whose Claude Code is a zombie doesn't count" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 kill_tree "$sp"; kill "$zp" 2>/dev/null; rm -f "$R1/pid"
 # an interval that isn't whole seconds is the default, not a watcher that can't start
 echo hi | as rx send rw rw-i - >/dev/null 2>&1
@@ -2583,10 +2585,10 @@ regs() { s=$1; shift; HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_M
 reg() { regs r9 "$@"; }
 # (a plain watch makes this the session's only store, as before; another store, or another name, replaces it)
 regs r7 --as rx; regs r7 --as rw; echo hi | as rw send rx rx-q - >/dev/null 2>&1
-expect "a plain watch under another name stops the earlier name's wakes" 2 "daily limit" rewake r7
+expect "a plain watch under another name stops the earlier name's wakes" 2 "daily limit with no new mail" rewake r7 AGENT_MAILBOX_REWAKE_MAX=5
 as rx consume "$(as rx list | grep rx-q | sed 's#.*/##')" >/dev/null 2>&1
 regs r7 --config "$C2"; echo hi | as rx send rw rx-p - >/dev/null 2>&1
-expect "and a plain watch on another store stops the earlier store's" 2 "daily limit" rewake r7
+expect "and a plain watch on another store stops the earlier store's" 2 "daily limit with no new mail" rewake r7 AGENT_MAILBOX_REWAKE_MAX=5
 as rw consume "$(as rw list | grep rx-p | sed 's#.*/##')" >/dev/null 2>&1
 # (a watcher the hook starts isn't the agent registering: a hook already running when a store is added with --also,
 # restarting its watcher, leaves that store watched)
@@ -2639,7 +2641,7 @@ echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >
 r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60)"
 [ "$rc" = 2 ] && woken rx-2.md && woken rz-2.md && ok "mail on both stores at once is all passed on" ||
   no "mail on both stores at once is all passed on" "$rc $r"
-expect "with no mail on either it wakes once at the day's limit" 2 "daily limit" rewake r9
+expect "with no mail on either it wakes once at the day's limit" 2 "daily limit with no new mail" rewake r9 AGENT_MAILBOX_REWAKE_MAX=5
 # a watcher the agent started by hand on one store doesn't count for the other, though it's for the same name
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
