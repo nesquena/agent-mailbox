@@ -293,7 +293,8 @@ mkdir -p "$W/grep3/agent mailbox test.LIVExx"; touch -t 202001010000 "$W/grep3/a
 # (until ps shows it: a fork shows its parent's command line at first)
 i=0; while [ -z "$(procs_naming "$W/grep3/agent mailbox test.LIVExx/run")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo swept'; } > "$W/sweep.sh"
-TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" >/dev/null 2>&1
+# (in a subshell: under zsh's sh emulation, an assignment before a function call outlives the call, exported)
+( TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" ) >/dev/null 2>&1
 [ -d "$W/grep3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
   no "the sweep removed a folder a live process names"
 kill_tree "$lp"; wait "$lp" 2>/dev/null
@@ -340,9 +341,9 @@ mkdir -p "$W/tmpt"; rm -f "$W/t.tsv"
 # (a relative path, from the folder the run starts in, which it then leaves: the file stays where it was named)
 out=$(cd "$W" && TMPDIR="$W/tmpt" TEST_TIMES=t.tsv time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
 ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
-[ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 10000 ] &&
+[ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 9900 ] &&
   printf '%s\n' "$out" | grep -qx 'child: nothing' && printf '%s\n' "$out" | grep -q '^== the slowest checks' &&
-  printf '%s\n' "$out" | grep -Eq '^ +(0\.9|[1-9]\.[0-9]|10\.0) s  demo +second$' &&
+  printf '%s\n' "$out" | grep -Eq '^ +(0\.9|[1-9]\.[0-9]) s  demo +second$' &&
   ok "TEST_TIMES records each check's own time, with its section, and lists the slowest; what the run starts doesn't see it" ||
   no "TEST_TIMES didn't record the checks' times as it should (exit $rc)" "$out$NL$(cat "$W/t.tsv" 2>/dev/null)"
 out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
@@ -368,25 +369,40 @@ rm -f "$W/m.tsv"; out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/m.tsv" time_cap 30 "$SH"
 ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
 [ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "TEST_TIMES counts a check's time from its section's start (${ms} ms after a 2 s gap)" ||
   no "TEST_TIMES counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/m.tsv" 2>/dev/null)"
-# TEST_TIMES with a stand-in bats (first on PATH; it takes 2 s and reports two tests, 1500 ms between them): the
-# tests' lines go in the file, its exit decides the bats line's ok or FAIL, and the bats line gets the rest of the
-# section's time, about 0.5 s (loose bounds: it's timed by sleep)
-mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 2' \
-  'printf "1..2\nok 1 aa in 1000ms\nnot ok 2 bb in 500ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
+# TEST_TIMES with a stand-in bats (first on PATH; it takes 3 s and reports two tests of 1200 ms each, an ok and a
+# failure, so only their sum leaves the right rest): the tests' lines go in the file, its exit decides the bats line's ok
+# or FAIL, and the bats line gets the rest of the section's time, about 0.6 s (loose bounds: it's timed by sleep)
+mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 3' \
+  'printf "1..2\nok 1 aa in 1200ms\nnot ok 2 bb in 1200ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
   echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
+_otd=${TMPDIR-unset}
+# (in a subshell each: under zsh's sh emulation, the assignments would outlive the call, exported to the run)
 for c in 0 1; do rm -f "$W/b$c.tsv"
-  TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" > "$W/b$c.out" 2>&1
+  ( TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" ) > "$W/b$c.out" 2>&1
 done
+lk=$(sh -c 'echo "${TEST_TIMES-}|${STUBRC-}|${STUBDIR-}"'); [ "$lk" = "||" ] && [ "${TMPDIR-unset}" = "$_otd" ] &&
+  ok "the stand-in's settings stay with its run (none reaches what this run starts)" ||
+  no "the stand-in's settings leaked into the run" "child sees: $lk; TMPDIR ${TMPDIR-unset} (was $_otd)"
 bl0=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b0.tsv" 2>/dev/null)
 bl1=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b1.tsv" 2>/dev/null)
 tl0=$(awk -F '\t' '$4 == "aa" || $4 == "bb" { printf "%s %s %s;", $1, $3, $4 }' "$W/b0.tsv" 2>/dev/null)
-[ "${bl0%% *}" = ok ] && [ "${bl1%% *}" = FAIL ] && [ "$tl0" = "1000 ok aa;500 FAIL bb;" ] &&
+[ "${bl0%% *}" = ok ] && [ "${bl1%% *}" = FAIL ] && [ "$tl0" = "1200 ok aa;1200 FAIL bb;" ] &&
   ok "TEST_TIMES with bats: each test's line goes in the file, and bats' exit decides its own line" ||
-  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}$NL$(cat "$W/b1.out" 2>/dev/null)"
+  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}${NL}exit 0's run:$NL$(cat "$W/b0.out" 2>/dev/null)${NL}exit 1's run:$NL$(cat "$W/b1.out" 2>/dev/null)"
 r=${bl0#* }; case $r in (''|*[!0-9]*) r=-1 ;; esac
-[ "$r" -ge 200 ] && [ "$r" -le 1500 ] && ok "and the bats line gets the rest of the section's time (${r} ms of about 2000, less the tests' 1500)" ||
-  no "the bats line's time isn't the rest of the section's (${r} ms; about 500 expected)" "$(cat "$W/b0.tsv" 2>/dev/null)"
+[ "$r" -ge 200 ] && [ "$r" -le 1700 ] && ok "and the bats line gets the rest of the section's time (${r} ms of about 3000, less the tests' 2400)" ||
+  no "the bats line's time isn't the rest of the section's (${r} ms; about 600 expected)" "$(cat "$W/b0.tsv" 2>/dev/null)"
+# TEST_TIMES: the run's own section loop marks each section's start. Two sections run by the suite's own loop: a's
+# check, then 2 s with no check, then b's; b's time is from its section's start, under 1.5 s (on a whole-seconds clock
+# it reads 0 or 1000; counted from a's check it would be 2000 or more)
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SECTIONS=""$/,/^  SECTIONS="\$SECTIONS\$\*\$NL"; }$/p' "$0"
+  echo 'sa() { echo "== a"; ok a1; sleep 2; }; section a sa; sb() { echo "== b"; ok b1; }; section b sb'
+  sed -n '/^PLAN=\$(printf /,$p' "$0"; } > "$W/loop.sh"
+rm -f "$W/l.tsv"; out=$( ( TMPDIR="$W/tmpt" TEST_TIMES="$W/l.tsv" time_cap 30 "$SH" "$W/loop.sh" ) 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "b" && $4 == "b1" { print $1 }' "$W/l.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "the run's section loop starts each section's count afresh (${ms} ms after a 2 s gap)" ||
+  no "the run's section loop counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/l.tsv" 2>/dev/null)"
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
