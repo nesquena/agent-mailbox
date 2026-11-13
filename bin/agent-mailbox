@@ -213,6 +213,9 @@ session_store() { t="$STATE/session-stores/$SESSION"; mkdir -p "$STATE/session-s
   c=$(SS_K="$STORE_ID $ME" awk 'index($0, ENVIRON["SS_K"] " ") == 1 { c = substr($0, length(ENVIRON["SS_K"]) + 2) }
     END { print c }' "$t" 2>/dev/null)
   [ "$c" = "$1" ] || { [ "$1" = - ] && [ -z "$c" ]; } || printf '%s %s %s\n' "$STORE_ID" "$ME" "$1" >> "$t"; }
+# word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally (as the plugin's
+# Stop guard quotes the commands it prints)
+word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 # session_watches: this session ran watch for this name on this store, and hasn't dropped it since: the latest line for
 # the store and name in session-stores/<session id> isn't -, or (a record from before store lines) the session's name
 # is this one
@@ -1213,11 +1216,12 @@ doctor)
   [ -z "$KEY" ] || { [ -f "$KEY" ] && { kf=""; ! have_ssh || kf=$(fpnote "$(own_pub)")
       printf 'ok   signing key at %s%s\n' "$KEY" "${kf:+ ($kf)}"; } || printf 'warn no signing key at %s (mail will be unsigned)\n' "$KEY"; }
   # the Claude Code plugin's hooks fail open: without jq its Stop guard lets every turn end, watcher or not, and says
-  # nothing. So inside Claude Code (CLAUDE_CODE_SESSION_ID) doctor says whether jq is there; elsewhere jq isn't needed
+  # nothing. So inside Claude Code (CLAUDE_CODE_SESSION_ID) doctor says whether jq is on its own PATH (the hooks' can
+  # differ, say an app-launched Claude Code on macOS without Homebrew's); elsewhere jq isn't needed
   # (the CLI never uses it) and doctor can't tell whether the plugin is in use, so it isn't mentioned
   if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
-    if command -v jq >/dev/null 2>&1; then echo "ok   jq is installed (the Claude Code plugin's Stop guard needs it)"
-    else echo "warn jq isn't installed: the Claude Code plugin's Stop guard needs it, and without it lets a turn end with no watcher running"; fi
+    if command -v jq >/dev/null 2>&1; then echo "ok   jq is on this shell's PATH (the Claude Code plugin's Stop guard needs it)"
+    else echo "warn jq isn't on this shell's PATH: the Claude Code plugin's Stop guard needs it, and without it lets a turn end with no watcher running (the hooks' PATH can differ from this shell's)"; fi
   fi
   # whether a watcher for this name runs on this store, read from its pid files as watch reads them (other_watcher):
   # information, unless this session ran watch for the name on this store and none runs now, so new mail won't wake it.
@@ -1228,9 +1232,25 @@ doctor)
     for pf in "$STATE/run/$ME@$STORE_ID.pid" "$STATE/run/$ME.pid"; do wp=$(other_watcher "$pf") && break; done
     if [ -n "$wp" ]; then echo "info a watcher for $ME is running on this store (pid $wp)"
     elif session_watches; then
-      echo "warn no watcher for $ME is running on this store, though this session ran watch for it: new mail won't wake the session; run watch again"
-      [ ! -f "$STATE/rewake/$ME/$SESSION@$STORE_ID/declined" ] && [ ! -f "$STATE/rewake/$ME/$SESSION/declined" ] ||
-        echo "warn the Claude Code plugin's hook didn't start a watcher at the last turn end: it runs only where Claude Code 2.1.69 or later runs it in the background; keep watch running as a background command"
+      # on a turn the plugin's hook woke (new mail, its daily note, an error), the hook's watch has exited and it starts
+      # another at this turn's end, so there's nothing to re-arm: the hook keeps a folder for this session (per store,
+      # or per name before store folders), with a `declined` note when it wouldn't run
+      rw="$STATE/rewake/$ME/$SESSION@$STORE_ID"; [ -d "$rw" ] || rw="$STATE/rewake/$ME/$SESSION"
+      if [ -d "$rw" ] && [ ! -f "$rw/declined" ]; then
+        echo "info no watcher for $ME is running right now; the Claude Code plugin's hook starts one at this turn's end"
+      else
+        # the re-arm is the command the plugin's Stop guard prints: this session's config, and --also when the session
+        # watches several stores, so the others stay watched (a plain watch makes this store the session's only one)
+        cli=agent-mailbox; command -v agent-mailbox >/dev/null 2>&1 || cli=$0
+        sc=$(cat "$STATE/session-configs/$SESSION" 2>/dev/null)
+        ns=$(awk 'NF >= 3 { k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); cf[k] = c }
+          END { for (k in cf) if (cf[k] != "-") n++; print n + 0 }' "$STATE/session-stores/$SESSION" 2>/dev/null)
+        also=""; [ "${ns:-0}" -lt 2 ] || also=" --also"
+        printf "warn no watcher for %s is running on this store, though this session ran watch for it: new mail won't wake the session; run watch again, as a background command: %s%s --as %s watch 120 0%s\n" \
+          "$ME" "$(word "$cli")" "${sc:+ --config $(word "$sc")}" "$ME" "$also"
+        [ ! -f "$rw/declined" ] ||
+          echo "warn the Claude Code plugin's hook didn't start a watcher at the last turn end: it runs only where Claude Code 2.1.69 or later runs it in the background; keep watch running as a background command"
+      fi
     else echo "info no watcher for $ME is running on this store"; fi
   fi
   exit $ok ;;

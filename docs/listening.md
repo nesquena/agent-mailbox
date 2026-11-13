@@ -42,9 +42,11 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start it
   again.
   `agent-mailbox doctor` reads the same record: it says whether a watcher for your name is running on the store, and
-  warns when this session ran `watch` for it and none is running now (and, if the Claude Code plugin's hook declined
-  to start one at the last turn end, says so). Inside Claude Code it also warns when `jq` is missing, since the
-  plugin's Stop guard needs it and otherwise lets every turn end without a word.
+  warns when this session ran `watch` for it and none is running now, with the command to re-arm it (and, if the
+  Claude Code plugin's hook declined to start one at the last turn end, says so). On a turn that hook woke, it says
+  instead that the hook starts the next watcher at the turn's end: nothing to re-arm. Inside Claude Code it also warns
+  when `jq` isn't on its shell's PATH, since the plugin's Stop guard needs it and otherwise lets every turn end without
+  a word.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.

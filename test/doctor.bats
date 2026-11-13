@@ -50,13 +50,13 @@ lacks() { ! printf '%s\n' "$output" | grep -Eq -- "$1" || { printf "a line match
   command -v jq >/dev/null 2>&1 || skip "jq isn't installed"
   doctor CLAUDE_CODE_SESSION_ID=s1
   [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
-  has "^ok   jq is installed \(the Claude Code plugin's Stop guard needs it\)$"
+  has "^ok   jq is on this shell's PATH \(the Claude Code plugin's Stop guard needs it\)$"
 }
 
 @test "inside Claude Code, without jq, doctor warns that the Stop guard is off, and still passes" {
   doctor CLAUDE_CODE_SESSION_ID=s1 PATH="$T/nojq"
   [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
-  has "^warn jq isn't installed: the Claude Code plugin's Stop guard needs it"
+  has "^warn jq isn't on this shell's PATH: the Claude Code plugin's Stop guard needs it"
   lacks '^ok   jq'
 }
 
@@ -104,6 +104,44 @@ lacks() { ! printf '%s\n' "$output" | grep -Eq -- "$1" || { printf "a line match
   lacks "hook didn't start a watcher"
 }
 
+@test "the warning gives the whole re-arm command: this session's config, and no --also for one store" {
+  doctor AGENT_MAILBOX_SESSION=s2
+  has "run watch again, as a background command: [^ ]*agent-mailbox --config '[^']*/config' --as alice watch 120 0$"
+}
+
+@test "a session that watches several stores is told to re-arm with --also, so the others stay watched" {
+  cp "$STATE/session-stores/s2" "$T/s2.stores"
+  echo "0123456789abcdef alice $HOME/other.config" >> "$STATE/session-stores/s2"
+  doctor AGENT_MAILBOX_SESSION=s2
+  cp "$T/s2.stores" "$STATE/session-stores/s2"
+  has "^warn no watcher for alice .* --as alice watch 120 0 --also$"
+}
+
+@test "a store the session dropped (its latest line is -) isn't counted for --also" {
+  cp "$STATE/session-stores/s2" "$T/s2.stores"
+  printf '%s\n' "0123456789abcdef alice $HOME/other.config" "0123456789abcdef alice -" >> "$STATE/session-stores/s2"
+  doctor AGENT_MAILBOX_SESSION=s2
+  cp "$T/s2.stores" "$STATE/session-stores/s2"
+  has "--as alice watch 120 0$"
+}
+
+@test "on a turn the plugin's hook woke, doctor says the hook starts a watcher at the turn's end, and doesn't warn" {
+  mkdir -p "$STATE/rewake/alice/s2@$SID"; echo k1 > "$STATE/rewake/alice/s2@$SID/last"
+  doctor AGENT_MAILBOX_SESSION=s2
+  rm -rf "$STATE/rewake/alice/s2@$SID"
+  [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  has "^info no watcher for alice is running right now; the Claude Code plugin's hook starts one at this turn's end$"
+  lacks '^warn (no watcher|the Claude Code)'
+}
+
+@test "so it does with the hook's older folder, named for the session alone" {
+  mkdir -p "$STATE/rewake/alice/s2"; echo k1 > "$STATE/rewake/alice/s2/last"
+  doctor AGENT_MAILBOX_SESSION=s2
+  rm -rf "$STATE/rewake/alice/s2"
+  has "^info no watcher for alice is running right now; the Claude Code plugin's hook starts one"
+  lacks '^warn (no watcher|the Claude Code)'
+}
+
 @test "another session's watch doesn't make doctor warn" {
   doctor AGENT_MAILBOX_SESSION=s3
   [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
@@ -114,10 +152,33 @@ lacks() { ! printf '%s\n' "$output" | grep -Eq -- "$1" || { printf "a line match
 @test "when the plugin's hook declined at the last turn end, doctor says why no watcher started" {
   mkdir -p "$STATE/rewake/alice/s2@$SID"; echo k1 > "$STATE/rewake/alice/s2@$SID/declined"
   doctor AGENT_MAILBOX_SESSION=s2
-  rm -f "$STATE/rewake/alice/s2@$SID/declined"
+  rm -rf "$STATE/rewake/alice/s2@$SID"
   [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
   has "^warn no watcher for alice is running on this store"
   has "^warn the Claude Code plugin's hook didn't start a watcher at the last turn end: it runs only where Claude Code 2\.1\.69"
+  lacks "hook starts one at this turn's end"
+}
+
+@test "so it does when the declined note is in the hook's older folder" {
+  mkdir -p "$STATE/rewake/alice/s2"; echo k1 > "$STATE/rewake/alice/s2/declined"
+  doctor AGENT_MAILBOX_SESSION=s2
+  rm -rf "$STATE/rewake/alice/s2"
+  has "^warn no watcher for alice is running on this store"
+  has "^warn the Claude Code plugin's hook didn't start a watcher at the last turn end"
+}
+
+@test "another name in a session that watched only alice isn't warned about" {
+  "$SH" "$CLI" --as carol register --kind x --about y --no-key >/dev/null
+  run env AGENT_MAILBOX_SESSION=s2 "$(command -v "$SH")" "$CLI" --as carol doctor
+  has '^info no watcher for carol is running on this store$'
+  lacks '^warn no watcher'
+}
+
+@test "a session from before store lines (only its name recorded) still gets the warning" {
+  mkdir -p "$STATE/sessions"; echo alice > "$STATE/sessions/s5"
+  doctor AGENT_MAILBOX_SESSION=s5
+  rm -f "$STATE/sessions/s5"
+  has "^warn no watcher for alice is running on this store, though this session ran watch for it"
 }
 
 @test "once the name is retired, its session's stopped watcher isn't a warning" {
