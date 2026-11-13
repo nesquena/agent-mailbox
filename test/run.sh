@@ -564,14 +564,16 @@ x-trace:abc
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
   printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
     no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
-  for f in 20200101T000008Z-carol-hdr8 20200101T000009Z-alice-ops-x 2020-alice-hdr0; do
-    printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
-      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
+  # (the note says what the name should be, not which part is off: names may hold '-', so alice-ops-x could be
+  # alice about ops-x or alice-ops about x)
+  for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
+    printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
+      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
     expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
-      "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
+      "carol-copy\.md \[verified: from alice; its file name doesn't name it as from alice about review-1\]$" as bob read
   fi
   tamper "rm -f mailbox/inbox/bob/20200101T0000* mailbox/inbox/bob/2020-alice-hdr0.md"
   # read takes each message once: a store file swapped right after its signature is checked (a stand-in ssh-keygen
@@ -3209,6 +3211,9 @@ expect "a hold whose sender's key was swapped still holds, pointing at agents fo
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
 expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key .*out of band \(.agents. shows its fingerprint\) and ask" as k1 holds "g#1" --version v1
+sg k2 29990101T000100Z-k2-hyy.md hyy "hold: yy#1 v1 "
+expect "one whose hold line doesn't parse, from that sender, says so, with the key advice" 5 \
+  "yy#1 has a record from k2 whose hold: or release: line doesn't parse \(29990101T000100Z-k2-hyy\.md, changed: confirm k2's new key" as k1 holds "yy#1" --version v1
 sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
 sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
 "
@@ -3231,9 +3236,14 @@ expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a recor
 # a signed hold whose sent, or item, doesn't parse blocks over the sender's older release, rather than being skipped
 for x in s t u w; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hs.md hs "hold: s#1 v1"
-expect "a signed hold whose sent has a fraction of a second blocks over an older release" 5 "s#1 has a record from k3" as k1 holds "s#1" --version v1
+expect "a signed hold whose sent has a fraction of a second blocks over an older release, saying its sent doesn't parse" 5 \
+  "s#1 has a record from k3 whose sent: time doesn't parse \(20261112T235959Z-k3-hs\.md\); ask k3 to send it again" as k1 holds "s#1" --version v1
 sg k3 29990101T000100Z-k3-ht.md ht "hold: t#1 v1 "
-expect "a signed hold whose item doesn't parse (a trailing space) blocks" 5 "t#1 has a record from k3" as k1 holds "t#1" --version v1
+expect "a signed hold whose item doesn't parse (a trailing space) blocks, saying so" 5 \
+  "t#1 has a record from k3 whose hold: or release: line doesn't parse \(29990101T000100Z-k3-ht\.md\); ask k3 to send it again" as k1 holds "t#1" --version v1
+SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hzz.md hzz "hold: zz#1 v1 "
+expect "one whose sent and item both don't parse says both" 5 \
+  "zz#1 has a record from k3 whose sent: and hold: or release: lines don't parse \(20261112T235959Z-k3-hzz\.md\)" as k1 holds "zz#1" --version v1
 # it's placed in delivery order, so it counts until that sender's next record
 SGSENT=2999-01-02T00:00:00Z sg k3 29990102T000000Z-k3-rs2.md rs2 "release: s#1 v1"
 expect "a later release from the same sender clears an odd-sent hold" 0 "s#1 released by k3" as k1 holds "s#1" --version v1
