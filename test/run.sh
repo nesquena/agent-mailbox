@@ -564,18 +564,16 @@ x-trace:abc
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
   printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
     no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
-  for f in 20200101T000008Z-carol-hdr8 2020-alice-hdr0; do
-    printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
-      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
-  # (one that names the sender but another topic is pointed out as that, as reply says it: the sender is right)
-  printf '%s\n' "$out" | grep -q "20200101T000009Z-alice-ops-x\.md \[unsigned; its topic: header (hdr9) isn't the topic its file name names\]$" &&
-    ok "a file name naming the sender but another topic is pointed out as the topic" ||
-    no "a file name naming the sender but another topic is pointed out as the topic" "$out"
+  # (the note says what the name should be, not which part is off: names may hold '-', so alice-ops-x could be
+  # alice about ops-x or alice-ops about x)
+  for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
+    printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
+      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
     expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
-      "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
+      "carol-copy\.md \[verified: from alice; its file name doesn't name it as from alice about review-1\]$" as bob read
   fi
   tamper "rm -f mailbox/inbox/bob/20200101T0000* mailbox/inbox/bob/2020-alice-hdr0.md"
   # read takes each message once: a store file swapped right after its signature is checked (a stand-in ssh-keygen

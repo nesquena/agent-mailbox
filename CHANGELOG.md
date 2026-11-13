@@ -10,10 +10,11 @@
 - **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
   no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
   (`CONTRIBUTING.md`).
-- **`read` and `holds` say what's actually wrong.** `read` notes a message whose file name names its sender but another
-  topic as that ("its topic: header (...) isn't the topic its file name names", as `reply` says it), not as a file
-  name that doesn't name the sender. `holds` says a record blocks because its `sent:` time or its `hold:` or
-  `release:` line doesn't parse, rather than calling that header not plain.
+- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, `read`
+  now says what the name should be ("its file name doesn't name it as from <from> about <topic>"), rather than
+  always saying the file name doesn't name the sender, which was wrong when only the topic differed. `holds` says a
+  record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than calling that
+  header not plain.
 
 ## 0.1.2 (2026-11-12)
 
