@@ -938,12 +938,15 @@ read)
     if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
     v=$(verify_file "$rt/m" "$ME")
     # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
-    # name that doesn't name that sender (<stamp>-<from>-<topic>.md) is pointed out
+    # name that doesn't name that sender (<stamp>-<from>-<topic>.md) is pointed out, and one that names the sender but
+    # another topic, as that (as reply says it)
     fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); b=${p##*/}
     st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
     if matches "$NAME_RE" "$fr"; then
       [ "$v" != verified ] || v="verified: from $fr"
-      if matches "$NAME_RE" "$tp"; then case "$b" in ($st-"$fr-$tp".md) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac
+      if matches "$NAME_RE" "$tp"; then case "$b" in ($st-"$fr-$tp".md) ;;
+          ($st-"$fr"-*) v="$v; its topic: header ($tp) isn't the topic its file name names" ;;
+          (*) v="$v; its file name doesn't name $fr as the sender" ;; esac
       else case "$b" in ($st-"$fr"-*) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac; fi
     fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
@@ -1063,12 +1066,19 @@ holds)
     exit 0
   fi
   [ -n "$latest" ] || { echo "holds: nothing recorded for $item"; exit 5; }
-  echo "$latest" | HOLDS_WANT=$version HOLDS_STRICT=$strict awk 'BEGIN { want = ENVIRON["HOLDS_WANT"]
+  # (a record that blocks says why: a sent of another form is listed as -, and an item with more after it as <item> ?;
+  # otherwise its header isn't plain)
+  echo "$latest" | HOLDS_WANT=$version HOLDS_STRICT=$strict awk 'function why() {
+      if ($1 == "-" && $4 == "?") return "whose sent: and hold: or release: lines don'"'"'t parse"
+      if ($1 == "-") return "whose sent: time doesn'"'"'t parse"
+      if ($4 == "?") return "whose hold: or release: line doesn'"'"'t parse"
+      return "whose header isn'"'"'t plain" }
+    BEGIN { want = ENVIRON["HOLDS_WANT"]
       oldkey = ENVIRON["HOLDS_STRICT"] != "" ? "mail signed with its old key, holds included, then stops counting" : "its old key'"'"'s holds still count after that, since this store doesn'"'"'t require signatures: ask it to release them" }
     $2 == "hold" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (" oldkey "), or restore its record)"; bad = 1; next }
     $2 == "hold" { print "holds: " $3 " is held by " $5 " at " $4 " (" $6 ")"; bad = 1; next }
-    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (" oldkey "), or restore its record)"; bad = 1; next }
-    $2 == "malformed" { print "holds: " $3 " has a record from " $5 " whose header isn'"'"'t plain (" $6 "); ask " $5 " to send it again"; bad = 1; next }
+    $2 == "malformed" && ($7 == "changed" || $7 == "nokey") { print "holds: " $3 " has a record from " $5 " " why() " (" $6 ", " $7 ": confirm " $5 "'"'"'s new key (or restored record) with its human out of band" ($7 == "changed" ? " (`agents` shows its fingerprint)" : "") " and ask " $5 " to re-send any hold it still means, then trust " $5 " (" oldkey "), or restore its record)"; bad = 1; next }
+    $2 == "malformed" { print "holds: " $3 " has a record from " $5 " " why() " (" $6 "); ask " $5 " to send it again"; bad = 1; next }
     $2 == "conflict" { print "holds: " $3 " has releases from " $5 " sent at the same time for different versions (" $4 "); ask " $5 " to send one release again"; bad = 1; next }
     ($4 "") != (want "") { print "holds: " $3 " was released by " $5 " at " $4 ", not " want " (" $6 ")"; bad = 1; next }
     { print "holds: " $3 " released by " $5 " at " $4 " (" $6 ", " $7 ")"; if ($7 != "verified") weak = 1 }
