@@ -208,7 +208,8 @@ old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" 
 # section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
 # and run in that order at the end (or as the options above pick)
 SECTIONS=""
-section() { case $1 in (''|[![:lower:][:digit:]]*|*[![:lower:][:digit:]-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
+# (the id's letters are spelled out, not a-z: macOS sh, bash 3.2, matches a range by the locale's collation)
+section() { case $1 in (''|[!abcdefghijklmnopqrstuvwxyz0123456789]*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
   case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
   case $(type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
@@ -394,8 +395,13 @@ out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/badid.sh" --list 2>
 # each section has its own function, defined once (a second definition, or a function shared by two ids, would run one
 # section's checks under both ids and the other's never); sec_adapter alone takes an argument and serves each adapter
 d=$(printf '%s' "$SECTIONS" | awk '$2 != "sec_adapter" { print $2 }' | sort | uniq -d
-  for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || echo "$f"; done)
-[ -z "$d" ] && ok "each section's function is its own, defined once" || no "a section's function is shared or defined more than once" "$d"
+  printf '%s' "$SECTIONS" | awk '$2 == "sec_adapter" && $1 != "adapter-" $3 { print $1 " runs adapter " $3 }'
+  for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do
+    [ "$(grep -c "^[[:space:]]*$f[[:space:]]*()" "$0")" = 1 ] || echo "$f"; done
+  for f in $(sed -n 's/^[[:space:]]*\(sec_[a-z0-9_]*\)[[:space:]]*().*/\1/p' "$0" | sort -u); do
+    printf '%s' "$SECTIONS" | awk -v f="$f" '$2 == f { n++ } END { exit !n }' || echo "$f (never registered)"; done)
+[ -z "$d" ] && ok "each section has its own function, defined once, and each sec_ function is a section's" ||
+  no "a section's function is shared, defined more than once, or not registered" "$d"
 # the suite run by zsh (when it's here; the CLI under sh, as zsh isn't a shell the CLI supports): a run of several
 # sections runs each of them
 if command -v zsh >/dev/null 2>&1; then
@@ -4053,6 +4059,7 @@ section bats sec_bats
 
 PLAN=$(printf '%s' "$SECTIONS" | awk '{ print $1 }')
 if [ -n "$ONLY" ]; then
+  case $ONLY in (*[!,abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: --only takes ids joined by commas, with no spaces (see --list)" >&2; exit 64 ;; esac
   for _sid in $(printf '%s\n' "$ONLY" | tr ',' ' '); do
     printf '%s\n' "$PLAN" | grep -qxF -- "$_sid" || { echo "test/run.sh: no section '$_sid' (see --list)" >&2; exit 64; }
   done
