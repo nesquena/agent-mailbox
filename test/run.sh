@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
     (--only|--shard|--order) [ -n "${2:-}" ] || { BAD=1; break; }
       case $1 in (--only) ONLY=$2 ;; (--shard) SHARD=$2 ;; (*) ORDER=$2 ;; esac; shift ;;
     (-*) BAD=1 ;;
-    (*) ADAPTERS="${ADAPTERS:+$ADAPTERS }$1" ;;
+    (*) case " $ADAPTERS " in (*" $1 "*) ;; (*) ADAPTERS="${ADAPTERS:+$ADAPTERS }$1" ;; esac ;;
   esac; shift
 done
 case $SHARD in
@@ -208,8 +208,9 @@ old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" 
 # section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
 # and run in that order at the end (or as the options above pick)
 SECTIONS=""
-section() { case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
-  command -v "$2" >/dev/null 2>&1 || { echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64; }
+section() { case $1 in (''|[!a-z0-9]*|*[!a-z0-9-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
+  case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
+  case $(type "$2" 2>/dev/null) in (*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
 
 sec_safeguards() {
@@ -369,21 +370,22 @@ hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
 sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ] &&
   ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
-  no "a stopped run left a process or its folder behind" "$(procs_naming "${hw:-}")"
+  no "a stopped run left a process or its folder behind" "${hw:+$(procs_naming "$hw")}${hw:-(it printed no folder) $out}"
 for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
 # a section named twice, or one whose function doesn't exist, stops the run before it starts (either would drop a
 # section with every shard still listing each id once); so does a shard with no sections
-mkdir -p "$W/guard/test"; cp "$ROOTDIR/test/section-costs" "$W/guard/test/"
+mkdir -p "$W/guard/test" "$W/guard/tmp"
 sed 's/^section capability-probe sec_capability_probe$/section cli-hardening sec_capability_probe/' "$SELF" > "$W/guard/test/twice.sh"
 sed 's/^section bats sec_bats$/section bats sec_batz/' "$SELF" > "$W/guard/test/nofn.sh"
-out=$("$SH" "$W/guard/test/twice.sh" --list 2>&1); rc=$?
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/twice.sh" --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'cli-hardening' is named twice" &&
   ok "a section named twice stops the run" || no "a section named twice didn't stop the run (exit $rc)" "$out"
-out=$("$SH" "$W/guard/test/nofn.sh" --list 2>&1); rc=$?
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/nofn.sh" --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'bats' has no function 'sec_batz'" &&
   ok "and so does a section whose function doesn't exist" || no "a section with no function didn't stop the run (exit $rc)" "$out"
-out=$("$SH" "$SELF" --shard 40/40 --list 2>&1); rc=$?
-[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "shard 40/40 has no sections" &&
+n=$(( $(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$SELF" --list | wc -l) + 1 ))
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$SELF" --shard "$n/$n" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "shard $n/$n has no sections" &&
   ok "and so does a shard with no sections" || no "a shard with no sections didn't stop the run (exit $rc)" "$out"
 }
 section safeguards sec_safeguards
@@ -896,7 +898,8 @@ notes.md"'
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
 }
-for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
+# (the list split as a command's output, which zsh splits too)
+for AD in $(printf '%s\n' "$ADAPTERS" | tr ' ' '\n'); do section "adapter-$AD" sec_adapter "$AD"; done
 
 # --- cases that need their own store -------------------------------------------------------------------------------
 case " $ADAPTERS " in *" git "*)
