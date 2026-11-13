@@ -79,11 +79,14 @@ times_note() { [ -n "$TT" ] || return 0; _ttn=$(now_ms); _ttd=$((_ttn - _tlast))
   printf '%s\t%s\t%s\t%s\n' "$_ttd" "${TSEC:--}" "$1" "$(printf '%s' "$2" | tr '\t\n\r' '   ')" >> "$TT"; _tlast=$_ttn; }
 # bats_times <section> < bats --timing output: a times line per test, from "ok <n> <name> in <ms>ms", maybe with a
 # directive after it (" # skip <why>" for a skipped test, " # timeout after <n>s" on a "not ok"); "not ok" is a failure.
-# The last " in <ms>ms" is the time, whatever the name holds
+# The last " in <ms>ms" is the time, whatever the name holds. (bats 1.4 to 1.7 print a skip with no time, "ok <n> <name>
+# # skip <why>": that's a skip of 0 ms)
 bats_times() { awk -v sec="$1" '/^(not )?ok [0-9]+ / && match($0, / in [0-9]+ms( # .*)?$/) {
     st = ($1 == "ok") ? "ok" : "FAIL"; tail = substr($0, RSTART); name = substr($0, 1, RSTART - 1)
     sub(/^(not )?ok [0-9]+ /, "", name); gsub(/\t/, " ", name); if (st == "ok" && tail ~ /^ in [0-9]+ms # [Ss][Kk][Ii][Pp]/) st = "skip"
-    ms = tail; sub(/^ in /, "", ms); sub(/ms.*/, "", ms); printf "%s\t%s\t%s\t%s\n", ms, sec, st, name }'; }
+    ms = tail; sub(/^ in /, "", ms); sub(/ms.*/, "", ms); printf "%s\t%s\t%s\t%s\n", ms, sec, st, name; next }
+  /^ok [0-9]+ .* # [Ss][Kk][Ii][Pp]/ { name = $0; sub(/^ok [0-9]+ /, "", name); sub(/ # [Ss][Kk][Ii][Pp].*$/, "", name)
+    gsub(/\t/, " ", name); printf "0\t%s\tskip\t%s\n", sec, name }'; }
 # times_summary: the slowest checks, at the end of a run with TEST_TIMES
 times_summary() { [ -n "$TT" ] && [ -s "$TT" ] || return 0
   echo "== the slowest checks (all times in $TT)"
@@ -339,6 +342,7 @@ out=$(cd "$W" && TMPDIR="$W/tmpt" TEST_TIMES=t.tsv time_cap 30 "$SH" "$W/times.s
 ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
 [ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 10000 ] &&
   printf '%s\n' "$out" | grep -qx 'child: nothing' && printf '%s\n' "$out" | grep -q '^== the slowest checks' &&
+  printf '%s\n' "$out" | grep -Eq '^ +(0\.9|[1-9]\.[0-9]|10\.0) s  demo +second$' &&
   ok "TEST_TIMES records each check's own time, with its section, and lists the slowest; what the run starts doesn't see it" ||
   no "TEST_TIMES didn't record the checks' times as it should (exit $rc)" "$out$NL$(cat "$W/t.tsv" 2>/dev/null)"
 out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
@@ -348,14 +352,41 @@ out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo "dir $RUNW"; echo started'; } > "$W/badtt.sh"
 out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/no such dir/t.tsv" time_cap 30 "$SH" "$W/badtt.sh" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^FAIL TEST_TIMES: can't write" && ! printf '%s\n' "$out" | grep -q -e started -e 'not found' &&
-  ok "TEST_TIMES naming a file it can't write fails the run at once, saying so" || no "an unwritable TEST_TIMES didn't fail cleanly (exit $rc)" "$out"
+  [ ! -e "$W/no such dir" ] && [ -z "$(ls "$W/tmpt" | grep 'agent mailbox test')" ] &&
+  ok "TEST_TIMES naming a file it can't write fails the run at once, saying so, leaving nothing behind" || no "an unwritable TEST_TIMES didn't fail cleanly (exit $rc)" "$out"
 # TEST_TIMES' bats lines: a fixed sample through the parser (a plain test, a skip, a name holding " in 5ms", a failure,
-# and lines that aren't results)
-want=$(printf '3\tsx\tok\tplain\n4\tsx\tskip\tskipped one\n3\tsx\tok\tname with in 5ms inside\n3\tsx\tFAIL\tfails\n1333\tsx\tFAIL\tslow')
+# a timeout, an old bats' skip with no time, and lines that aren't results)
+want=$(printf '3\tsx\tok\tplain\n4\tsx\tskip\tskipped one\n3\tsx\tok\tname with in 5ms inside\n3\tsx\tFAIL\tfails\n1333\tsx\tFAIL\tslow\n0\tsx\tskip\tan old bats skip')
 got=$(printf '%s\n' '1..4' 'ok 1 plain in 3ms' 'ok 2 skipped one in 4ms # skip because' 'ok 3 name with in 5ms inside in 3ms' \
-  'not ok 4 fails in 3ms' 'not ok 5 slow in 1333ms # timeout after 1s' '# (in test file x.bats, line 4)' '#   `false'"'"' failed' | bats_times sx)
-[ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip, a failure or a timeout as FAIL, by the last \" in <ms>ms\"" ||
+  'not ok 4 fails in 3ms' 'not ok 5 slow in 1333ms # timeout after 1s' 'ok 6 an old bats skip # skip why' '# (in test file x.bats, line 4)' '#   `false'"'"' failed' | bats_times sx)
+[ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip (an old bats' too), a failure or a timeout as FAIL, by the last \" in <ms>ms\"" ||
   no "TEST_TIMES misread bats' times" "$got"
+# TEST_TIMES: a mark (a section's start) restarts the count, so a check's time is from its section's start, not the
+# previous section's last check
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'TSEC=one; times_mark; sleep 2; TSEC=two; times_mark; ok x'; } > "$W/mark.sh"
+rm -f "$W/m.tsv"; out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/m.tsv" time_cap 30 "$SH" "$W/mark.sh" 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "TEST_TIMES counts a check's time from its section's start (${ms} ms after a 2 s gap)" ||
+  no "TEST_TIMES counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/m.tsv" 2>/dev/null)"
+# TEST_TIMES with a stand-in bats (first on PATH; it takes 2 s and reports two tests, 1500 ms between them): the
+# tests' lines go in the file, its exit decides the bats line's ok or FAIL, and the bats line gets the rest of the
+# section's time, about 0.5 s (loose bounds: it's timed by sleep)
+mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 2' \
+  'printf "1..2\nok 1 aa in 1000ms\nnot ok 2 bb in 500ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
+  echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
+for c in 0 1; do rm -f "$W/b$c.tsv"
+  TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" > "$W/b$c.out" 2>&1
+done
+bl0=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b0.tsv" 2>/dev/null)
+bl1=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b1.tsv" 2>/dev/null)
+tl0=$(awk -F '\t' '$4 == "aa" || $4 == "bb" { printf "%s %s %s;", $1, $3, $4 }' "$W/b0.tsv" 2>/dev/null)
+[ "${bl0%% *}" = ok ] && [ "${bl1%% *}" = FAIL ] && [ "$tl0" = "1000 ok aa;500 FAIL bb;" ] &&
+  ok "TEST_TIMES with bats: each test's line goes in the file, and bats' exit decides its own line" ||
+  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}$NL$(cat "$W/b1.out" 2>/dev/null)"
+r=${bl0#* }; case $r in (''|*[!0-9]*) r=-1 ;; esac
+[ "$r" -ge 200 ] && [ "$r" -le 1500 ] && ok "and the bats line gets the rest of the section's time (${r} ms of about 2000, less the tests' 1500)" ||
+  no "the bats line's time isn't the rest of the section's (${r} ms; about 500 expected)" "$(cat "$W/b0.tsv" 2>/dev/null)"
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
@@ -4084,7 +4115,8 @@ elif [ -z "$TT" ]; then
   if TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"; else no "test/*.bats (its failures are above)"; fi
 else
   # (with TEST_TIMES: streamed as it runs, so a test that hangs still shows; each test's own time, from --timing, goes
-  # in the file, and the bats line itself gets the rest: bats' own startup and the files' setup_file)
+  # in the file, and the bats line itself gets the rest: bats' own startup, the files' setup_file, and each test's own
+  # overhead outside its timed body)
   { TEST_SHELL="$SH" bats -F tap --timing "$ROOTDIR/test" 2>&1; echo $? > "$W/bats.rc"; } | tee "$W/bats.out"
   _br=$(cat "$W/bats.rc" 2>/dev/null); _bt=$(bats_times "$TSEC" < "$W/bats.out")
   [ -z "$_bt" ] || printf '%s\n' "$_bt" >> "$TT"
