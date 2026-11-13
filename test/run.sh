@@ -1035,8 +1035,15 @@ case " $ADAPTERS " in *" git "*)
   else sk "a holder and a waiter that disagree on the boot's id (no /proc here)"; fi
   # (the lock again as a holder with the boot's id writes it, for the doctor test below)
   printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
-  # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing
-  within 30 "doctor says the store is busy while another command holds the lock" 0 "^busy the store wasn't checked" alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor
+  # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing. (Where
+  # ssh-keygen has no -Y, doctor exits 1 for that alone: then that must be its only FAIL line)
+  out=$(time_cap 30 alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor 2>&1); rc=$?
+  fl=$(printf '%s\n' "$out" | grep '^FAIL ')
+  if printf '%s\n' "$out" | grep -q "^busy the store wasn't checked" &&
+     { [ "$rc" = 0 ] || { [ "$rc" = 1 ] && [ -z "$SSH" ] && [ "$(printf '%s\n' "$fl" | wc -l | tr -d ' ')" = 1 ] &&
+       case $fl in ("FAIL ssh-keygen -Y is available"*) true ;; (*) false ;; esac; }; }; then
+    ok "doctor says the store is busy while another command holds the lock"
+  else no "doctor says the store is busy while another command holds the lock (exit $rc)" "$out"; fi
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
   # a holder on another host (or under this machine's earlier name) can't be checked: it's waited for, and the message
   # says which file to delete if nothing is running there
@@ -2491,14 +2498,20 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 else sk "the two Stop hooks at one turn end (no jq)"; fi
 # a Claude Code that died but hasn't been reaped (a zombie) doesn't hold the lock
 "$SH" -c 'sleep 0 & echo $! > "$1"; exec sleep 30' sh "$T/zpid" & zp=$!; sleep 1
-"$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r1 $(cat "$T/zpid")" > "$R1/pid"
+"$SH" -c 'sleep 30; :' claude-rewake.sh > /dev/null 2>&1 & sp=$!; echo "$sp r1 $(cat "$T/zpid")" > "$R1/pid"
 expect "a lock whose Claude Code is a zombie doesn't count" 2 "daily limit" rewake r1
-kill "$sp" "$zp" 2>/dev/null; rm -f "$R1/pid"
+kill_tree "$sp"; kill "$zp" 2>/dev/null; rm -f "$R1/pid"
 # an interval that isn't whole seconds is the default, not a watcher that can't start
 echo hi | as rx send rw rw-i - >/dev/null 2>&1
 wakes "a bad interval falls back to the default" "rw-i.md" rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=0
 echo hi | as rx send rw rw-j - >/dev/null 2>&1
 wakes "and so does a bad limit" "rw-j.md" rewake r1 AGENT_MAILBOX_REWAKE_MAX=x
+# and a check interval out of its range (0, empty, 16, not a number) is the default 15 s: the hook's own line, with each
+ckl=$(grep '^ck=' "$P/hooks/claude-rewake.sh"); got=""
+for v in 0 '' 16 2x 2; do got="$got $(AGENT_MAILBOX_REWAKE_CHECK=$v "$SH" -c "$ckl"'; echo "$ck"')"; done
+[ "$(printf '%s\n' "$ckl" | wc -l | tr -d ' ')" = 1 ] && [ "$got" = " 15 15 15 15 2" ] &&
+  ok "and so does a check interval out of range (0, empty, 16, not a number), while 2 is kept" ||
+  no "a check interval out of range didn't fall back to 15" "values 0 '' 16 2x 2 gave:$got; the line: $ckl"
 # an interval over an hour, or a limit of 00, is the default too: the watcher it starts says so
 for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=86400 AGENT_MAILBOX_REWAKE_MAX=00 > /dev/null & bg=$!
@@ -2666,11 +2679,13 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rew
 else sk "a stop the guard kept going isn't taken for one Claude Code waited at (no jq)"; fi
 # another hook holding one store (its mail pending, not yet passed on): a wake on the other store doesn't record that
 # mail as woken for, which is the other hook's to do
-"$SH" -c 'sleep 60; :' claude-rewake.sh & oh=$!; echo "$oh r9" > "$RS/rewake/rw/r9@$S1/pid"; echo x-other.md > "$RS/rewake/rw/r9@$S1/pending"
+# (its output goes nowhere, and it's stopped with its sleep, by its pid: a sleep left behind would hold the run's output
+# open for up to a minute after the run ends, and names nothing of the run's for the exit cleanup to find)
+"$SH" -c 'sleep 60; :' claude-rewake.sh > /dev/null 2>&1 & oh=$!; echo "$oh r9" > "$RS/rewake/rw/r9@$S1/pid"; echo x-other.md > "$RS/rewake/rw/r9@$S1/pending"
 echo hi | as rz send rw rz-o - >/dev/null 2>&1
 wakes "a wake on one store wakes for its mail" "rz-o.md" rewake r9
 expect "and leaves another hook's pending mail to that hook" 1 - grep -qx x-other.md "$RS/rewake/rw/r9@$S1/woke"
-kill "$oh" 2>/dev/null; wait "$oh" 2>/dev/null; rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S1/pending"
+kill_tree "$oh"; wait "$oh" 2>/dev/null; rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S1/pending"
 # the hook stopped just as a store's run has found mail: that mail is passed on, or wakes the next run, never neither
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
@@ -2703,6 +2718,13 @@ expect "retiring the name on one store records it in the session's list" 0 - tes
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
 wakes "and the hook then watches only the other store" "rx-r.md" rewake r9
+# (at the end, every hook and watcher the section left running is stopped, with what it started, by the pid its pid file
+# holds: their command lines name the plugin, not this run's folder, so the exit cleanup wouldn't find them, and one
+# still running holds the run's output open until its 60 s limit)
+for f in "$RS"/run/*.pid "$RS"/rewake/*/*/pid; do [ -f "$f" ] || continue
+  p=$(cut -d' ' -f1 "$f" 2>/dev/null); case $p in (''|*[!0-9]*) continue ;; esac
+  # (only while that pid is still a hook or the CLI: a pid the system gave to something else since is left alone)
+  case $(ps -o args= -p "$p" 2>/dev/null) in (*claude-rewake*|*agent-mailbox*) kill_tree "$p" ;; esac; done
 
 elif [ -n "${CI:-}" ]; then no "the Claude Code asyncRewake hook" "no python3 3.9 or later for a terminal on CI"
 else sk "the Claude Code asyncRewake hook (no python3 3.9 or later for a terminal)"; fi
