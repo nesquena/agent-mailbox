@@ -13,6 +13,8 @@ set -u
 NL='
 '
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
+# (this file, for the checks that read it: inside a function, zsh sets $0 to the function's name)
+SELF=$0
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
 # each simulated agent's HOME must decide its config and state: clear anything the host sets (CI runners set XDG_*)
@@ -206,7 +208,9 @@ old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" 
 # section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
 # and run in that order at the end (or as the options above pick)
 SECTIONS=""
-section() { SECTIONS="$SECTIONS$*$NL"; }
+section() { case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
+  command -v "$2" >/dev/null 2>&1 || { echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64; }
+  SECTIONS="$SECTIONS$*$NL"; }
 
 sec_safeguards() {
 echo "== the suite's own safeguards: nothing waits forever"
@@ -223,7 +227,7 @@ t0=$(date +%s); out=$(time_cap 2 sh -c '( sh -c "sleep 30; :" "$1/escaped" & ); 
   no "an escaped process kept time_cap's caller waiting (exit $rc, $((t1 - t0)) s)" "$out"
 for _ep in $(procs_naming "$W/escaped" | awk '{ print $1 }'); do kill_tree "$_ep"; done
 # (the git section defines its own `within` and `bounded`: none of the names here is one of them)
-for f in tree alive kill_tree time_cap leftovers procs_naming; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
+for f in tree alive kill_tree time_cap leftovers procs_naming; do [ "$(grep -c "^ *$f() {" "$SELF")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
 ( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
 c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
 [ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "time_cap left the command's child running" "pid $c"
@@ -231,7 +235,7 @@ kill "$c" 2>/dev/null
 # a run past its limit stops even while its step can't return: (A) a $(...) whose pipe an escaped process holds, (B) a
 # step that ignores TERM. Each ends with exit 124, the FAIL line, no process left and no folder
 for c in A B; do
-  { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  { sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
     echo 'echo "dir $W"'
     if [ $c = A ]; then echo 'x=$( ( "$SH" -c "sleep 600; :" sh "$W/orphan" & ); echo started )'
     else echo '"$SH" -c '"'"'trap "" TERM; sleep 600; :'"'"' sh "$W/deaf"'; fi; } > "$W/stuck$c.sh"
@@ -247,7 +251,7 @@ done
 # run's folder that ignores TERM for 3 s, which the exit cleanup waits on while the watchdog's second TERM arrives.
 # Exactly one FAIL line, and the folder is removed
 printf '%s\n' 'w=$1' 'trap '"'"'sh -c "trap \"\" TERM; sleep 3; :" sh "$w/late" & exit 143'"'"' TERM' 'sleep 600 & wait' > "$W/lateStep.sh"
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'echo "dir $W"'; echo "\"\$SH\" \"$W/lateStep.sh\" \"\$W\""; } > "$W/late.sh"
 mkdir -p "$W/tmpl"; out=$(TMPDIR="$W/tmpl" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/late.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
 [ "$rc" = 124 ] && [ "$(printf '%s\n' "$out" | grep -c 'FAIL the run was stopped')" = 1 ] && [ -n "$sd" ] && [ ! -d "$sd" ] &&
@@ -256,7 +260,7 @@ mkdir -p "$W/tmpl"; out=$(TMPDIR="$W/tmpl" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 6
 for p in $(procs_naming "${sd:-/nonexistent}/late" | awk '{ print $1 }'); do kill_tree "$p"; done
 # (b) a step held by an escaped process that names nothing of the run's: the watchdog ends the run anyway, TERM first,
 # then KILL, within the limit plus about 15 s
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'echo "dir $W"'; echo "x=\$( ( sleep 40 & echo \$! > \"$W/esc.pid\" ); echo started )"; } > "$W/esc.sh"
 # (its own temp folder inside this run's: a KILLed run leaves its folder, which goes with this run's)
 rm -f "$W/esc.pid"; mkdir -p "$W/tmpb"; t0=$(date +%s)
@@ -270,7 +274,7 @@ sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p'); i=0; while [ -n "$sd" ] && [ -
 [ ! -s "$W/esc.pid" ] || kill_tree "$(cat "$W/esc.pid")"
 # (c) a run that ends on its own just before its deadline, its exit cleanup waiting on a process that ignores TERM:
 # the watchdog's TERM can't cut that cleanup short. Exit 0, no FAIL line, the folder removed, nothing naming it left
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'echo "dir $W"'; echo '( "$SH" -c '"'"'trap "" TERM; sleep 8; :'"'"' sh "$W/deafx" & ); sleep 2.5'; } > "$W/endnear.sh"
 mkdir -p "$W/tmpc"; out=$(TMPDIR="$W/tmpc" AGENT_MAILBOX_TEST_LIMIT=4 time_cap 60 "$SH" "$W/endnear.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
 [ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q FAIL && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
@@ -283,14 +287,14 @@ mkdir -p "$W/grep3/agent mailbox test.LIVExx"; touch -t 202001010000 "$W/grep3/a
 "$SH" -c 'sleep 60; :' sh "$W/grep3/agent mailbox test.LIVExx/run" & lp=$!
 # (until ps shows it: a fork shows its parent's command line at first)
 i=0; while [ -z "$(procs_naming "$W/grep3/agent mailbox test.LIVExx/run")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo swept'; } > "$W/sweep.sh"
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; echo 'echo swept'; } > "$W/sweep.sh"
 TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" >/dev/null 2>&1
 [ -d "$W/grep3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
   no "the sweep removed a folder a live process names"
 kill_tree "$lp"; wait "$lp" 2>/dev/null
 # a run that can't make its folder (TMPDIR missing) stops at once, before anything that stops processes; and an empty
 # name matches no process, so no cleanup can reach beyond the run
-{ sed -n '1,/^# (end of the run.s watchdog/p' "$0"; echo 'echo started'; } > "$W/nodir.sh"
+{ sed -n '1,/^# (end of the run.s watchdog/p' "$SELF"; echo 'echo started'; } > "$W/nodir.sh"
 out=$(TMPDIR="$W/missing" time_cap 30 "$SH" "$W/nodir.sh" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL can't make the run's folder" && ! printf '%s\n' "$out" | grep -qx started &&
   ok "a run that can't make its folder stops before it starts" || no "a run without its folder went on (exit $rc)" "$out"
@@ -301,7 +305,7 @@ out=$(time_cap 5 sh -c 'echo ran' <&- 2>&1); rc=$?
 # a run stopped by a signal (HUP here; INT the same, from a terminal) still stops what it started and removes its
 # folder; and a later run sweeps a folder an hour old that a killed run left, keeping a recent one
 mkdir -p "$W/tmp2/agent mailbox test.OLDxxx" "$W/tmp2/agent mailbox test.NEWxxx"; touch -t 202001010000 "$W/tmp2/agent mailbox test.OLDxxx"
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'echo "dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/sig.sh"
 TMPDIR="$W/tmp2" "$SH" "$W/sig.sh" > "$W/sig.out" 2>&1 & sp=$!
 i=0; while [ -z "$(sed -n 's/^dir //p' "$W/sig.out")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; sleep 1
@@ -315,7 +319,7 @@ sd=$(sed -n 's/^dir //p' "$W/sig.out")
 # a run read through dash's $(...), which reads the run's output to its end before reaping it, returns at once, with
 # no FAIL line: the watchdog never holds the run's output, so the read ends when the run does
 if command -v dash >/dev/null 2>&1; then
-  { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  { sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
     echo 'echo done; exit 0'; } > "$W/quick.sh"
   mkdir -p "$W/tmpq"; t0=$(date +%s)
   out=$(TMPDIR="$W/tmpq" AGENT_MAILBOX_TEST_LIMIT=8 time_cap 30 dash -c 'x=$("$1" "$2"); printf "%s\n" "$x"' sh "$SH" "$W/quick.sh" 2>&1); rc=$?; t1=$(date +%s)
@@ -325,7 +329,7 @@ if command -v dash >/dev/null 2>&1; then
 else sk "a run read through \$(...) returns as soon as it ends (no dash here)"; fi
 # TEST_TIMES: each check's own time goes in the file, with its section; the summary lists them; what the run starts
 # doesn't see the variable; and without it, nothing is written or printed
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"
   echo 'cd "$TMPDIR"; TSEC=demo; times_mark; ok first; sleep 1; ok second; sh -c '"'"'echo "child: ${TEST_TIMES:-nothing}"'"'"'; times_summary'; } > "$W/times.sh"
 mkdir -p "$W/tmpt"; rm -f "$W/t.tsv"
 # (a relative path, from the folder the run starts in, which it then leaves: the file stays where it was named)
@@ -339,7 +343,7 @@ out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q 'slowest checks' && printf '%s\n' "$out" | grep -qx '  ok   second' &&
   ok "and without TEST_TIMES, a run's output is as before" || no "without TEST_TIMES, a run's output changed (exit $rc)" "$out"
 # TEST_TIMES naming a file that can't be written: the run fails at once, saying so, leaving nothing behind
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo "dir $RUNW"; echo started'; } > "$W/badtt.sh"
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; echo 'echo "dir $RUNW"; echo started'; } > "$W/badtt.sh"
 out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/no such dir/t.tsv" time_cap 30 "$SH" "$W/badtt.sh" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^FAIL TEST_TIMES: can't write" && ! printf '%s\n' "$out" | grep -q -e started -e 'not found' &&
   ok "TEST_TIMES naming a file it can't write fails the run at once, saying so" || no "an unwritable TEST_TIMES didn't fail cleanly (exit $rc)" "$out"
@@ -351,13 +355,13 @@ got=$(printf '%s\n' '1..4' 'ok 1 plain in 3ms' 'ok 2 skipped one in 4ms # skip b
 [ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip, a failure or a timeout as FAIL, by the last \" in <ms>ms\"" ||
   no "TEST_TIMES misread bats' times" "$got"
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
 t0=$(date +%s); out=$(time_cap 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" = 0 ] && [ $((t1 - t0)) -le 10 ] && printf '%s\n' "$out" | grep -qx returned &&
   ok "a bare wait in a test doesn't wait for the run's watchdog" || no "a bare wait waited for the watchdog (exit $rc, $((t1 - t0)) s)" "$out"
 # the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+{ sed -n '1,/^SUITE=\$\$$/p' "$SELF"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$SELF" | sed 1d
   echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
 mkdir -p "$W/tmph"; t0=$(date +%s); out=$(TMPDIR="$W/tmph" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
 hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
@@ -365,8 +369,22 @@ hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
   ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
 sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ] &&
   ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
-  no "a stopped run left a process or its folder behind" "$(procs_naming "${hw:-?}")"
+  no "a stopped run left a process or its folder behind" "$(procs_naming "${hw:-}")"
 for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+# a section named twice, or one whose function doesn't exist, stops the run before it starts (either would drop a
+# section with every shard still listing each id once); so does a shard with no sections
+mkdir -p "$W/guard/test"; cp "$ROOTDIR/test/section-costs" "$W/guard/test/"
+sed 's/^section capability-probe sec_capability_probe$/section cli-hardening sec_capability_probe/' "$SELF" > "$W/guard/test/twice.sh"
+sed 's/^section bats sec_bats$/section bats sec_batz/' "$SELF" > "$W/guard/test/nofn.sh"
+out=$("$SH" "$W/guard/test/twice.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'cli-hardening' is named twice" &&
+  ok "a section named twice stops the run" || no "a section named twice didn't stop the run (exit $rc)" "$out"
+out=$("$SH" "$W/guard/test/nofn.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'bats' has no function 'sec_batz'" &&
+  ok "and so does a section whose function doesn't exist" || no "a section with no function didn't stop the run (exit $rc)" "$out"
+out=$("$SH" "$SELF" --shard 40/40 --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "shard 40/40 has no sections" &&
+  ok "and so does a shard with no sections" || no "a shard with no sections didn't stop the run (exit $rc)" "$out"
 }
 section safeguards sec_safeguards
 
@@ -4032,6 +4050,7 @@ elif [ -n "$SHARD" ]; then
         s = 1; for (q = 2; q <= n; q++) if (load[q] < load[s]) s = q
         load[s] += w[b]; t[b] = s }
       for (k = 1; k <= m; k++) if (t[k] == i) print id[k] }')
+  [ -n "$PLAN" ] || { echo "test/run.sh: shard $SHARD has no sections (see --list)" >&2; exit 64; }
 fi
 # (shuffled by a Park-Miller generator, not awk's rand, which some awks seed from the clock whatever the seed)
 [ -z "$ORDER" ] || PLAN=$(printf '%s\n' "$PLAN" | awk -v s="$ORDER" '

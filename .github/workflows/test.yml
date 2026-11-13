@@ -104,7 +104,7 @@ jobs:
           git config --global user.email test@example.invalid
           git config --global init.defaultBranch main
       # (every shard needs dash, bats and ssh-keygen; only the first shard of each run does the parse and shard checks,
-      # which need zsh)
+      # and the parse check needs zsh)
       - name: Install dash, and zsh for the parse check (Linux)
         if: runner.os == 'Linux'
         run: |
