@@ -70,23 +70,17 @@ sk() { skip=$((skip+1)); echo "  skip $1"; times_note skip "$1"; }
 # its section's start), one "<ms><tab><section><tab><ok|FAIL|skip><tab><check>" line each in <file>, and the slowest
 # listed at the end; bats tests too, from bats --timing. Milliseconds where date has %N, whole seconds elsewhere. (It's
 # taken out of the environment, so the runs and tools the suite starts neither see it nor write to the file)
-TT=${TEST_TIMES:-}; unset TEST_TIMES; TSEC=""
-if [ -n "$TT" ]; then case $TT in (/*) ;; (*) TT="$PWD/$TT" ;; esac
-  : > "$TT" 2>/dev/null || { echo "FAIL TEST_TIMES: can't write '$TT'"; exit 1; }
-  case $(date +%N 2>/dev/null) in
-    (''|*[!0-9]*) now_ms() { echo $(( $(date +%s) * 1000 )); } ;;
-    (*) now_ms() { _nn=$(date +%s%N); echo "${_nn%??????}"; } ;;
-  esac; _tlast=$(now_ms)
-fi
+# (set up below, once tree and alive exist: the exit trap's cleanup needs them if the setup fails)
 # times_mark: a section starts (or a time already counted ends); times_note <status> <check>: one check's line
 times_mark() { [ -z "$TT" ] || _tlast=$(now_ms); }
 times_note() { [ -n "$TT" ] || return 0; _ttn=$(now_ms); _ttd=$((_ttn - _tlast)); [ "$_ttd" -ge 0 ] || _ttd=0
   printf '%s\t%s\t%s\t%s\n' "$_ttd" "${TSEC:--}" "$1" "$(printf '%s' "$2" | tr '\t\n\r' '   ')" >> "$TT"; _tlast=$_ttn; }
-# bats_times <section> < bats --timing output: a times line per test, from "ok <n> <name> in <ms>ms" (" # skip <why>"
-# after it for a skipped test, "not ok" for a failure); the last " in <ms>ms" is the time, whatever the name holds
-bats_times() { awk -v sec="$1" '/^(not )?ok [0-9]+ / && match($0, / in [0-9]+ms( # skip.*)?$/) {
+# bats_times <section> < bats --timing output: a times line per test, from "ok <n> <name> in <ms>ms", maybe with a
+# directive after it (" # skip <why>" for a skipped test, " # timeout after <n>s" on a "not ok"); "not ok" is a failure.
+# The last " in <ms>ms" is the time, whatever the name holds
+bats_times() { awk -v sec="$1" '/^(not )?ok [0-9]+ / && match($0, / in [0-9]+ms( # .*)?$/) {
     st = ($1 == "ok") ? "ok" : "FAIL"; tail = substr($0, RSTART); name = substr($0, 1, RSTART - 1)
-    sub(/^(not )?ok [0-9]+ /, "", name); gsub(/\t/, " ", name); if (tail ~ /^ in [0-9]+ms # skip/) st = "skip"
+    sub(/^(not )?ok [0-9]+ /, "", name); gsub(/\t/, " ", name); if (st == "ok" && tail ~ /^ in [0-9]+ms # [Ss][Kk][Ii][Pp]/) st = "skip"
     ms = tail; sub(/^ in /, "", ms); sub(/ms.*/, "", ms); printf "%s\t%s\t%s\t%s\n", ms, sec, st, name }'; }
 # times_summary: the slowest checks, at the end of a run with TEST_TIMES
 times_summary() { [ -n "$TT" ] && [ -s "$TT" ] || return 0
@@ -104,6 +98,16 @@ alive() { for _ap in "$@"; do kill -0 "$_ap" 2>/dev/null && return 0; done; retu
 kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
   kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
   for _kp in "$@"; do kill -0 "$_kp" 2>/dev/null && kill -KILL "$_kp" 2>/dev/null; done; return 0; }
+# TEST_TIMES' setup (see ok above). (Its file is opened in a subshell: a failed redirection on the : builtin would make
+# dash exit at once, before our FAIL line)
+TT=${TEST_TIMES:-}; unset TEST_TIMES; TSEC=""
+if [ -n "$TT" ]; then case $TT in (/*) ;; (*) TT="$PWD/$TT" ;; esac
+  ( : > "$TT" ) 2>/dev/null || { echo "FAIL TEST_TIMES: can't write '$TT'"; exit 1; }
+  case $(date +%N 2>/dev/null) in
+    (''|*[!0-9]*) now_ms() { echo $(( $(date +%s) * 1000 )); } ;;
+    (*) now_ms() { _nn=$(date +%s%N); echo "${_nn%??????}"; } ;;
+  esac; _tlast=$(now_ms)
+fi
 # time_cap <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything
 # it started, and return 124, saying so on stderr; otherwise its own exit. (Its names, and its variables' _t prefix, are
 # its own: the suite defines `within` and `bounded` for other jobs, and a function defined later replaces one of the
@@ -322,9 +326,9 @@ else sk "a run read through \$(...) returns as soon as it ends (no dash here)"; 
 # TEST_TIMES: each check's own time goes in the file, with its section; the summary lists them; what the run starts
 # doesn't see the variable; and without it, nothing is written or printed
 { sed -n '1,/^SUITE=\$\$$/p' "$0"
-  echo 'TSEC=demo; times_mark; ok first; sleep 1; ok second; sh -c '"'"'echo "child: ${TEST_TIMES:-nothing}"'"'"'; times_summary'; } > "$W/times.sh"
+  echo 'cd "$TMPDIR"; TSEC=demo; times_mark; ok first; sleep 1; ok second; sh -c '"'"'echo "child: ${TEST_TIMES:-nothing}"'"'"'; times_summary'; } > "$W/times.sh"
 mkdir -p "$W/tmpt"; rm -f "$W/t.tsv"
-# (a relative path, from the folder the run starts in)
+# (a relative path, from the folder the run starts in, which it then leaves: the file stays where it was named)
 out=$(cd "$W" && TMPDIR="$W/tmpt" TEST_TIMES=t.tsv time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
 ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
 [ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 10000 ] &&
@@ -334,12 +338,17 @@ ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W
 out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q 'slowest checks' && printf '%s\n' "$out" | grep -qx '  ok   second' &&
   ok "and without TEST_TIMES, a run's output is as before" || no "without TEST_TIMES, a run's output changed (exit $rc)" "$out"
+# TEST_TIMES naming a file that can't be written: the run fails at once, saying so, leaving nothing behind
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo "dir $RUNW"; echo started'; } > "$W/badtt.sh"
+out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/no such dir/t.tsv" time_cap 30 "$SH" "$W/badtt.sh" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^FAIL TEST_TIMES: can't write" && ! printf '%s\n' "$out" | grep -q -e started -e 'not found' &&
+  ok "TEST_TIMES naming a file it can't write fails the run at once, saying so" || no "an unwritable TEST_TIMES didn't fail cleanly (exit $rc)" "$out"
 # TEST_TIMES' bats lines: a fixed sample through the parser (a plain test, a skip, a name holding " in 5ms", a failure,
 # and lines that aren't results)
-want=$(printf '3\tsx\tok\tplain\n4\tsx\tskip\tskipped one\n3\tsx\tok\tname with in 5ms inside\n3\tsx\tFAIL\tfails')
+want=$(printf '3\tsx\tok\tplain\n4\tsx\tskip\tskipped one\n3\tsx\tok\tname with in 5ms inside\n3\tsx\tFAIL\tfails\n1333\tsx\tFAIL\tslow')
 got=$(printf '%s\n' '1..4' 'ok 1 plain in 3ms' 'ok 2 skipped one in 4ms # skip because' 'ok 3 name with in 5ms inside in 3ms' \
-  'not ok 4 fails in 3ms' '# (in test file x.bats, line 4)' '#   `false'"'"' failed' | bats_times sx)
-[ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip, a failure as FAIL, by the last \" in <ms>ms\"" ||
+  'not ok 4 fails in 3ms' 'not ok 5 slow in 1333ms # timeout after 1s' '# (in test file x.bats, line 4)' '#   `false'"'"' failed' | bats_times sx)
+[ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip, a failure or a timeout as FAIL, by the last \" in <ms>ms\"" ||
   no "TEST_TIMES misread bats' times" "$got"
 # a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
@@ -3997,7 +4006,7 @@ elif [ -z "$TT" ]; then
 else
   # (with TEST_TIMES: streamed as it runs, so a test that hangs still shows; each test's own time, from --timing, goes
   # in the file, and the bats line itself gets the rest: bats' own startup and the files' setup_file)
-  { TEST_SHELL="$SH" bats --timing "$ROOTDIR/test" 2>&1; echo $? > "$W/bats.rc"; } | tee "$W/bats.out"
+  { TEST_SHELL="$SH" bats -F tap --timing "$ROOTDIR/test" 2>&1; echo $? > "$W/bats.rc"; } | tee "$W/bats.out"
   _br=$(cat "$W/bats.rc" 2>/dev/null); _bt=$(bats_times "$TSEC" < "$W/bats.out")
   [ -z "$_bt" ] || printf '%s\n' "$_bt" >> "$TT"
   _tlast=$((_tlast + $(printf '%s\n' "$_bt" | awk -F '\t' '{ s += $1 } END { print s + 0 }')))
