@@ -15,7 +15,7 @@ git-replayed-releases 5
 pins-on-move 1
 watcher-lifecycle 6
 stop-hook 18
-rewake-hook 157
+rewake-hook 180
 received-headers 8
 send-stdin 2
 store-order 5
