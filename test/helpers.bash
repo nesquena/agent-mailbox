@@ -12,6 +12,9 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AG
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
   AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
 
+# every test is bounded: one that runs past BATS_TEST_TIMEOUT seconds (120 unless set) fails, rather than hanging the run
+export BATS_TEST_TIMEOUT="${BATS_TEST_TIMEOUT:-120}"
+
 # workdir: make and print a folder for this file's fixtures, with a space in its path, as in a macOS home folder like
 # "/Users/Jo Smith". bats removes it after the file's last test.
 workdir() { : "${BATS_FILE_TMPDIR:?test/*.bats needs bats-core 1.4 or later}"; mkdir -p "$BATS_FILE_TMPDIR/agent mailbox test" && printf '%s\n' "$BATS_FILE_TMPDIR/agent mailbox test"; }
@@ -26,7 +29,11 @@ expect() {
   if [ "$status" != "$code" ]; then
     printf 'exit %s, wanted %s\n%s\n' "$status" "$code" "$output" >&2; return 1
   fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$output" | grep -Eq -- "$pat"; then
-    printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1
+  # (the check's grep step exiting above 1 crashed or failed, grep or the shell running it, which isn't the output not
+  # matching: it's reported as what it is)
+  if [ "$pat" != - ]; then
+    local g=0; printf '%s\n' "$output" | grep -Eq -- "$pat" || g=$?
+    if [ "$g" -gt 1 ]; then printf "%s (the check's grep step failed, exit %s)\n%s\n" "${BATS_TEST_DESCRIPTION:-expect}" "$g" "$output" >&2; return 1; fi
+    if [ "$g" = 1 ]; then printf "output didn't match /%s/\n%s\n" "$pat" "$output" >&2; return 1; fi
   fi
 }

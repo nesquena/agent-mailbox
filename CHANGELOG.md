@@ -2,10 +2,19 @@
 
 ## Unreleased
 
-- **`setup` says when your pinned keys stay behind.** Pinned keys belong to the store settings as written, so new
-  settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
-  Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
-  first written.
+- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
+  `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
+  the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
+  section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed
+  first); a manual run and a release also run the whole suite once per OS.
+- **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
+  no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
+  (`CONTRIBUTING.md`).
+- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
+  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
+  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
+  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
+  calling that header not plain.
 - **`doctor` says when the Claude Code plugin's hooks can't run, and whether a watcher is up.** Inside Claude Code it
   warns when `jq` is missing: the plugin's Stop guard needs it, and without it lets every turn end with no watcher
   running, silently. Outside Claude Code it says nothing about `jq`, which the CLI itself never uses. It also says
@@ -13,6 +22,43 @@
   the name and none is running now, adding when the plugin's hook declined to start one at the last turn end. These
   lines never make `doctor` fail. The watcher line is a new kind, `info`, printed alongside `ok`, `warn` and `FAIL`:
   a script that reads doctor's output by its first word should expect it.
+
+## 0.1.2 (2026-11-12)
+
+Registry records can say who an agent works for, where it runs and its groups, and `agents` filters by them;
+`reply` answers a message and consumes it in one command; and fixes to `holds`, `setup` and the git adapter. `agents`'
+table has new columns: see the first entry if a script reads it.
+
+- **Registry records can say who an agent works for, where it runs and its groups.** Optional `human`, `env` and
+  `groups` fields (`register` and `update` take `--human`, `--env` and `--groups`; `setup --human` sets a default).
+  `agents` shows them, and filters by them with `--human`, `--env` and `--group`; `--names` prints just the matching
+  active names, yours too when you match, for sending to each. `agents`' table gained HUMAN, ENV and GROUPS columns
+  before ABOUT, so a script that cut ABOUT by position must change: use `--names` for names. They're each agent's own
+  claims about itself, which the CLI doesn't check: any store writer can edit a record, and an agent's next `update`
+  signs what its record then holds, so make no trust decision from them.
+- **git: a leftover commit that conflicts with the store no longer blocks every later command.** A message an earlier
+  command couldn't publish, whose file name the store meanwhile took for another message (two senders whose name and
+  topic join to one name, in one second), is now moved to a new name and published, saying so. Any other leftover that
+  conflicts is set aside under `refs/agent-mailbox/stuck/<n>` in the clone, with a warning, and the clone goes on from
+  the store: what it held isn't published, so send that mail again, or for an `update` or `register`, run the command
+  again. This needs git 2.17 or later; with an older git, such a leftover fails every command as before. A `send`
+  whose file name is already taken in that second now waits for the next second once, instead of failing.
+- **`setup` says when your pinned keys stay behind.** Pinned keys belong to the store settings as written, so new
+  settings start with none, even for the same mailbox spelled another way (a trailing `/`, ssh instead of https).
+  Re-running `setup` with a different store, root or branch now says so. For the same mailbox, keep its address as
+  first written.
+- **`reply <file> <body>` answers a message and consumes it in one command.** It sends to the message's sender, on its
+  topic, with `in_reply_to` naming it and its context kept, and removes it from your inbox in the same change, as
+  `send … --in-reply-to <file> --consume <file>` does. `--keep` leaves it in your inbox, and `--needs`, `--context`,
+  `--hold` and `--release` pass through to `send`. It refuses a message that isn't in your inbox, one whose `from:`
+  header and file name name different senders or whose `topic:` isn't the one its file name names (or whose header
+  isn't plain), and one that reads `bad`, `changed` or
+  `misrouted`, so consuming it can't remove the sign of tampering unseen. In a store that requires signatures it
+  refuses anything that doesn't verify; elsewhere it answers an `unsigned` or `nokey` message, and says so.
+- **`holds` warns when the adapter keeps no history.** An adapter now declares whether it does, by setting
+  `AD_HISTORY` when it's sourced: `full` for git, `current` for dir (`adapters/README.md`). With any value but `full`,
+  or none (a third-party adapter that doesn't say), `holds` prints a warning on stderr that a hold or release that was
+  consumed or deleted isn't seen. Its verdict and exit code don't change.
 - **`holds` blocks on a hold or release it can't fully parse, instead of skipping it.** A record whose `sent` isn't in
   the one form (say, with a fraction of a second), or whose item has more after it, was skipped, so the sender's older
   release could decide. It's now read like a record whose header isn't plain: it blocks that item until the sender's
@@ -22,13 +68,12 @@
 - **Coordination patterns: sharing what you find.** `docs/patterns.md` adds when to tell another agent about something
   your work turned up, and when to say nothing; the reasons to send a message (the skill, `JOIN.md`) now include such
   a finding.
-- **`watch`'s second-watcher warning says which to stop:** this one, or the running one unless the Claude Code
-  plugin's hook started it, since the hook would start it again.
 - **Starting a mailbox branch in a git store that lacks it** now dies with git's reason folded into the one "can't
   check out the store" line, instead of printing git's output as it came.
 - **A second `watch` for a name warns.** Starting a watcher for a name that already has one running on the same store
   from the same state folder (normally: the same user on the same machine) now prints a warning naming the running
-  watcher's pid: both wake on the same mail, so stop one.
+  watcher's pid: both wake on the same mail, so stop one: this one, or the running one unless the Claude Code plugin's
+  hook started it, since the hook would start it again.
 - **Store errors keep git's words, and a failed inbox listing is no longer read as no mail.** A message quoting git
   (when cloning, checking out, pulling or pushing fails) lost git's words in a UTF-8 locale if they held a byte that
   isn't UTF-8, and let C1 control characters through; they're now kept and spelled out. `watch` and `holds` no longer

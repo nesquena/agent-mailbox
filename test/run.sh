@@ -1,10 +1,19 @@
 #!/bin/sh
-# test/run.sh [adapter...]: end-to-end tests of bin/agent-mailbox against throwaway stores. Each simulated agent
-# gets its own HOME, so config, keys, pins and the store checkout are as separate as on two machines.
+# test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]: end-to-end tests of
+# bin/agent-mailbox against throwaway stores. Each simulated agent gets its own HOME, so config, keys, pins and the
+# store checkout are as separate as on two machines. The suite is a list of sections, each run in a folder of its own,
+# and each makes what it needs itself, so any of them runs alone or in any order. --list prints the ids of the sections
+# a run would run; --only runs the named ones; --shard i/n runs shard i of n, split by the times in
+# test/section-costs; --order <seed> shuffles them. Any other argument names an adapter.
 # Needs git; the signature tests need ssh-keygen (OpenSSH 8.1+) and are skipped without it. Exit 0 when all pass.
 # Run the CLI under a specific shell with TEST_SHELL: `TEST_SHELL=dash dash test/run.sh`, or
 # `TEST_SHELL=bash bash test/run.sh`.
+# TEST_TIMES=<file> writes each check's own time to <file> and lists the slowest at the end (see CONTRIBUTING.md).
+# (under zsh, as sh: it then splits words and keeps $0 in functions as the other shells do)
+[ -z "${ZSH_VERSION:-}" ] || emulate sh
 set -u
+NL='
+'
 ROOTDIR=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)
 CLI="$ROOTDIR/bin/agent-mailbox"
 SH="${TEST_SHELL:-sh}"
@@ -12,14 +21,148 @@ SH="${TEST_SHELL:-sh}"
 unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_CONFIG AGENT_MAILBOX_STATE AGENT_MAILBOX_NAME AGENT_MAILBOX_STORE \
   AGENT_MAILBOX_ADAPTER AGENT_MAILBOX_ROOT AGENT_MAILBOX_BRANCH AGENT_MAILBOX_KEY AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID \
   AI_AGENT CLAUDE_PID CLAUDE_CODE_ENTRYPOINT RWMAX
-ADAPTERS="${*:-git dir}"
+LIST="" ONLY="" SHARD="" ORDER="" ADAPTERS="" BAD=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    (--list) LIST=1 ;;
+    (--only|--shard|--order) [ -n "${2:-}" ] || { BAD=1; break; }
+      case $1 in (--only) ONLY=$2 ;; (--shard) SHARD=$2 ;; (*) ORDER=$2 ;; esac; shift ;;
+    (-*) BAD=1 ;;
+    (*) case " $ADAPTERS " in (*" $1 "*) ;; (*) ADAPTERS="${ADAPTERS:+$ADAPTERS }$1" ;; esac ;;
+  esac; shift
+done
+case $SHARD in
+  ('') ;;
+  (*[!0-9/]*|*/*/*|/*|*/) BAD=1 ;;
+  (*/*) [ "${SHARD%/*}" -ge 1 ] && [ "${SHARD%/*}" -le "${SHARD#*/}" ] && [ -z "$ONLY" ] || BAD=1 ;;
+  (*) BAD=1 ;;
+esac
+case $ORDER in (*[!0-9]*) BAD=1 ;; esac
+[ -z "$BAD" ] || { echo "usage: test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]" >&2; exit 64; }
+ADAPTERS="${ADAPTERS:-git dir}"
 # a space in every path, as in a macOS home folder like "/Users/Jo Smith"
-W=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
-CCD=""; trap 'rm -rf "$W" ${CCD:+"$CCD"}' EXIT
+RUNW=$(mktemp -d "${TMPDIR:-/tmp}/agent mailbox test.XXXXXX")
+# (every cleanup below stops what names this folder, so a run that couldn't make it stops here, before any of them)
+[ -n "$RUNW" ] && [ -d "$RUNW" ] || { echo "FAIL can't make the run's folder under ${TMPDIR:-/tmp}"; exit 1; }
+# (W, the folder tests make things in, is this one until each section gets its own in it, $RUNW/<id>)
+W=$RUNW
+# procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
+# with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
+# (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
+procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
+# folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
+# old with nothing running out of it is removed, since no run outlasts its 40-minute limit
+for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
+  [ -d "$d" ] && [ "$d" != "$RUNW" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+    [ -z "$(procs_naming "$d")" ] && rm -rf "$d"
+done
+# at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
+# background and missed, even one whose parent is gone), so no run leaves processes behind
+CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
+# (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
+leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
+    $(pgrep -P $$ 2>/dev/null); do tree "$_lp"; done); [ $# -gt 0 ] || return 0
+  kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 30 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
+  for _lp in "$@"; do kill -0 "$_lp" 2>/dev/null && kill -KILL "$_lp" 2>/dev/null; done; return 0; }
 pass=0 fail=0 skip=0
-ok() { pass=$((pass+1)); echo "  ok   $1"; }
-no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; }
-sk() { skip=$((skip+1)); echo "  skip $1"; }
+ok() { pass=$((pass+1)); echo "  ok   $1"; times_note ok "$1"; }
+no() { fail=$((fail+1)); echo "  FAIL $1"; [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/       | /'; times_note FAIL "$1"; }
+sk() { skip=$((skip+1)); echo "  skip $1"; times_note skip "$1"; }
+# TEST_TIMES=<file> (opt-in, to find the slow checks): each check's own time, counted from the result before it (or
+# its section's start), one "<ms><tab><section><tab><ok|FAIL|skip><tab><check>" line each in <file>, and the slowest
+# listed at the end; bats tests too, from bats --timing. Milliseconds where date has %N, whole seconds elsewhere. (It's
+# taken out of the environment, so the runs and tools the suite starts neither see it nor write to the file)
+# (set up below, once tree and alive exist: the exit trap's cleanup needs them if the setup fails)
+# times_mark: a section starts (or a time already counted ends); times_note <status> <check>: one check's line
+times_mark() { [ -z "$TT" ] || _tlast=$(now_ms); }
+times_note() { [ -n "$TT" ] || return 0; _ttn=$(now_ms); _ttd=$((_ttn - _tlast)); [ "$_ttd" -ge 0 ] || _ttd=0
+  printf '%s\t%s\t%s\t%s\n' "$_ttd" "${TSEC:--}" "$1" "$(printf '%s' "$2" | tr '\t\n\r' '   ')" >> "$TT"; _tlast=$_ttn; }
+# bats_times <section> < bats --timing output: a times line per test, from "ok <n> <name> in <ms>ms", maybe with a
+# directive after it (" # skip <why>" for a skipped test, " # timeout after <n>s" on a "not ok"); "not ok" is a failure.
+# The last " in <ms>ms" is the time, whatever the name holds. (bats 1.4 to 1.7 print a skip with no time, "ok <n> <name>
+# # skip <why>": that's a skip of 0 ms)
+bats_times() { awk -v sec="$1" '/^(not )?ok [0-9]+ / && match($0, / in [0-9]+ms( # .*)?$/) {
+    st = ($1 == "ok") ? "ok" : "FAIL"; tail = substr($0, RSTART); name = substr($0, 1, RSTART - 1)
+    sub(/^(not )?ok [0-9]+ /, "", name); gsub(/\t/, " ", name); if (st == "ok" && tail ~ /^ in [0-9]+ms # [Ss][Kk][Ii][Pp]/) st = "skip"
+    ms = tail; sub(/^ in /, "", ms); sub(/ms.*/, "", ms); printf "%s\t%s\t%s\t%s\n", ms, sec, st, name; next }
+  /^ok [0-9]+ .* # [Ss][Kk][Ii][Pp]/ { name = $0; sub(/^ok [0-9]+ /, "", name); sub(/ # [Ss][Kk][Ii][Pp].*$/, "", name)
+    gsub(/\t/, " ", name); printf "0\t%s\tskip\t%s\n", sec, name }'; }
+# times_summary: the slowest checks, at the end of a run with TEST_TIMES
+times_summary() { [ -n "$TT" ] && [ -s "$TT" ] || return 0
+  echo "== the slowest checks (all times in $TT)"
+  sort -t "$(printf '\t')" -k1,1nr "$TT" | head -n 15 | awk -F '\t' '{ printf "  %7.1f s  %-24s %s\n", $1 / 1000, $2, $4 }'; }
+
+# --- nothing waits forever. A step can lose what it waits for (a crashed shell, a send that never happened), so every
+# wait is bounded: a test fails, saying it timed out, instead of the run hanging until someone notices.
+# tree <pid>: that process and everything it started, deepest first
+tree() { for _tn in $(pgrep -P "$1" 2>/dev/null); do tree "$_tn"; done; echo "$1"; }
+# alive <pid>...: any of them still running
+alive() { for _ap in "$@"; do kill -0 "$_ap" 2>/dev/null && return 0; done; return 1; }
+# kill_tree <pid>: stop a process and everything it started: TERM, then up to 5 s for them to exit (their traps may clean
+# up), then KILL whatever is left (the pids are kept as arguments, so every shell splits them, zsh included)
+kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
+  kill -TERM "$@" 2>/dev/null; _kn=0; while [ $_kn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _kn=$((_kn+1)); done
+  for _kp in "$@"; do kill -0 "$_kp" 2>/dev/null && kill -KILL "$_kp" 2>/dev/null; done; return 0; }
+# TEST_TIMES' setup (see ok above). (Its file is opened in a subshell: a failed redirection on the : builtin would make
+# dash exit at once, before our FAIL line)
+TT=${TEST_TIMES:-}; unset TEST_TIMES; TSEC=""
+if [ -n "$TT" ]; then case $TT in (/*) ;; (*) TT="$PWD/$TT" ;; esac
+  ( : > "$TT" ) 2>/dev/null || { echo "FAIL TEST_TIMES: can't write '$TT'"; exit 1; }
+  case $(date +%N 2>/dev/null) in
+    (''|*[!0-9]*) now_ms() { echo $(( $(date +%s) * 1000 )); } ;;
+    (*) now_ms() { _nn=$(date +%s%N); echo "${_nn%??????}"; } ;;
+  esac; _tlast=$(now_ms)
+fi
+# time_cap <seconds> <command...>: run the command (its stdin kept), and once it has run that long stop it and everything
+# it started, and return 124, saying so on stderr; otherwise its own exit. (Its names, and its variables' _t prefix, are
+# its own: the suite defines `within` and `bounded` for other jobs, and a function defined later replaces one of the
+# same name for the rest of the run)
+# The command's output goes to files, passed on when it's done: a process it started that escapes the stop (one whose
+# parent died) can't hold the caller's pipe, and so a $(...) around time_cap, open
+time_cap() { _tl=$1; shift; _to=$(mktemp "$W/.tc.XXXXXX") && _te=$(mktemp "$W/.tc.XXXXXX") || return 125
+  # (an asynchronous command's stdin is /dev/null unless it's given one: fd 3 hands it the caller's)
+  # (with no stdin of its own, fd 0 closed, it gets /dev/null: 3<&0 would fail, and $! name an earlier job)
+  if ( : 3<&0 ) 2>/dev/null; then { "$@" <&3 3<&- >"$_to" 2>"$_te" & } 3<&0; else { "$@" >"$_to" 2>"$_te" </dev/null & }; fi; _tc=$!
+  ( n=0; while [ "$n" -lt "$_tl" ]; do sleep 1; kill -0 "$_tc" 2>/dev/null || exit 0; n=$((n+1)); done
+    : > "$W/.time_cap.$_tc"; kill_tree "$_tc" ) >/dev/null 2>&1 & _tw=$!
+  wait "$_tc"; _tr=$?; kill "$_tw" 2>/dev/null; wait "$_tw" 2>/dev/null
+  cat "$_to"; cat "$_te" >&2; rm -f "$_to" "$_te"
+  if [ -f "$W/.time_cap.$_tc" ]; then rm -f "$W/.time_cap.$_tc"; echo "(timed out: stopped after ${_tl} s)" >&2; return 124; fi
+  return "$_tr"; }
+# the whole run is bounded too (AGENT_MAILBOX_TEST_LIMIT seconds, 40 minutes by default; a full run takes about 15, 20 on macOS):
+# past that, a watchdog stops the run and everything it started, and the run fails, saying so. The last "==" line
+# printed names the section it was in
+TL=${AGENT_MAILBOX_TEST_LIMIT:-2400}
+case $TL in ''|*[!0-9]*) echo "FAIL AGENT_MAILBOX_TEST_LIMIT must be a number of seconds, not '$TL'"; exit 1 ;; esac
+# (each trap first ignores further signals, so a second one can't cut the exit trap's cleanup short)
+trap 'trap "" TERM INT HUP; echo "  FAIL the run was stopped (TERM): past its limit of $TL s (AGENT_MAILBOX_TEST_LIMIT), or killed; see the last section above"; exit 124' TERM
+# (stopped by hand, or its terminal gone: the exit trap still stops what it started and removes its folder)
+trap 'trap "" TERM INT HUP; echo "  stopped (interrupted)"; exit 130' INT HUP
+SUITE=$$
+# (started detached, a grandchild that isn't one of the run's jobs, so a test's bare `wait` never waits for it; it ends
+# on its own once the run is gone)
+# Every 5 s it touches the run's folder, so a folder the start-up sweep finds an hour old is a dead run's. At the deadline
+# the run's TERM trap only runs once the step in progress returns, and a step can't return while it waits on a process
+# (a $(...) whose pipe an escaped process holds, or a step that ignores TERM). So it TERMs the run first, its trap then
+# pending, then every process of the run's tree and every process naming its folder, waits up to 5 s for them, KILLs
+# what's left, and TERMs the run again. If the run is still there 5 s later (a step blocked on something that names no
+# folder of the run's), it KILLs the run: the run always ends, with exit 137 and no FAIL line of its own. A KILLed run
+# skips its exit trap, so the watchdog then stops what still names the run's folder and removes it. (It never holds
+# the run's output: a caller reading that to its end before reaping the run would see a zombie run still there)
+( ( wd=$(sh -c 'echo $PPID'); n=0
+  while [ "$n" -lt "$TL" ]; do sleep 5; kill -0 "$SUITE" 2>/dev/null || exit 0; touch -c "$RUNW" 2>/dev/null; n=$((n+5)); done
+  # (the list is a command's output, which every shell splits, zsh included)
+  set -- $(for _wp in $(tree "$SUITE"; for _wq in $(procs_naming "$RUNW" | awk '{ print $1 }'); do tree "$_wq"; done); do
+    [ "$_wp" = "$SUITE" ] || [ "$_wp" = "$wd" ] || echo "$_wp"; done)
+  kill -TERM "$SUITE" 2>/dev/null; [ $# -eq 0 ] || kill -TERM "$@" 2>/dev/null
+  _wn=0; while [ $_wn -lt 50 ] && alive "$@"; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
+  for _wp in "$@"; do kill -0 "$_wp" 2>/dev/null && kill -KILL "$_wp" 2>/dev/null; done
+  kill -TERM "$SUITE" 2>/dev/null; _wn=0
+  while [ $_wn -lt 50 ] && kill -0 "$SUITE" 2>/dev/null; do sleep 0.1 2>/dev/null || sleep 1; _wn=$((_wn+1)); done
+  kill -0 "$SUITE" 2>/dev/null || exit 0
+  kill -KILL "$SUITE" 2>/dev/null
+  for _wp in $(procs_naming "$RUNW" | awk '{ print $1 }'); do [ "$_wp" = "$wd" ] || kill_tree "$_wp"; done; rm -rf "$RUNW" ) >/dev/null 2>&1 & )
+# (end of the run's watchdog: the safeguards' checks copy the suite's start up to here)
 SSH=""; command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)' && SSH=1
 # On CI, signatures must be tested, never skipped (REQUIRE_SSH=1 turns a missing ssh-keygen into a failure)
 [ -n "$SSH" ] || [ -z "${REQUIRE_SSH:-}" ] || { echo "FAIL ssh-keygen -Y isn't available, and REQUIRE_SSH is set"; exit 1; }
@@ -50,11 +193,282 @@ expect() { # expect <description> <exit code> <grep pattern or -> <command...>
   d=$1 code=$2 pat=$3; shift 3
   out=$("$@" 2>&1); rc=$?
   if [ "$rc" != "$code" ]; then no "$d (exit $rc, wanted $code)" "$out"; return; fi
-  if [ "$pat" != - ] && ! printf '%s\n' "$out" | grep -Eq -- "$pat"; then no "$d (output didn't match /$pat/)" "$out"; return; fi
+  # (the check's grep step exiting above 1 crashed or failed, grep or the shell running it, which isn't the output not
+  # matching: it's reported as what it is)
+  if [ "$pat" != - ]; then printf '%s\n' "$out" | grep -Eq -- "$pat"; g=$?
+    [ "$g" -le 1 ] || { no "$d (the check's grep step failed, exit $g)" "$out"; return; }
+    [ "$g" = 0 ] || { no "$d (output didn't match /$pat/)" "$out"; return; }
+  fi
   ok "$d"
 }
+# fast_sleep, then fast <agent> <args...>: as, with a sleep that returns at once ($T/fast/sleep) first on PATH, so a
+# push's ten tries take no time
+fast_sleep() { mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"; }
+fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
+# old_ssh: $W/oldssh holds an ssh-keygen that is an OpenSSH without -Y
+old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' \
+  > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"; }
+# section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
+# and run in that order at the end (or as the options above pick)
+SECTIONS=""
+# (the id's letters are spelled out, not a-z: macOS sh, bash 3.2, matches a range by the locale's collation)
+section() { case $1 in (''|[!abcdefghijklmnopqrstuvwxyz0123456789]*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
+  case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
+  case $(LC_ALL=C; export LC_ALL; type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
+  SECTIONS="$SECTIONS$*$NL"; }
 
-for AD in $ADAPTERS; do
+sec_safeguards() {
+echo "== the suite's own safeguards: nothing waits forever"
+t0=$(date +%s); out=$(time_cap 2 sh -c 'sleep 30 & wait' 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 8 ] && printf '%s\n' "$out" | grep -q 'timed out: stopped after 2 s' &&
+  ok "time_cap stops a command that runs over its limit, saying so (exit 124)" || no "time_cap didn't stop a command (exit $rc, $((t1 - t0)) s)" "$out"
+expect "and returns the command's own exit when it finishes in time" 3 - time_cap 5 sh -c 'exit 3'
+[ "$(echo kept | time_cap 5 cat)" = kept ] && ok "and keeps the command's stdin" || no "time_cap lost the command's stdin"
+# a process the command started that escapes the stop (its parent killed) can't hold a $(...) around time_cap open
+# (the escaped process names this run's folder, so it's stopped by its own name, never by a pattern another run's
+# processes or the user's could match)
+t0=$(date +%s); out=$(time_cap 2 sh -c '( sh -c "sleep 30; :" "$1/escaped" & ); sleep 60' sh "$W" 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 10 ] && ok "and an escaped process can't keep its caller waiting" ||
+  no "an escaped process kept time_cap's caller waiting (exit $rc, $((t1 - t0)) s)" "$out"
+for _ep in $(procs_naming "$W/escaped" | awk '{ print $1 }'); do kill_tree "$_ep"; done
+# (the git section defines its own `within` and `bounded`: none of the names here is one of them)
+for f in tree alive kill_tree time_cap leftovers procs_naming; do [ "$(grep -c "^ *$f() {" "$0")" = 1 ] || no "the suite defines $f() more than once, and the later one would replace the safeguard"; done
+( time_cap 2 sh -c "sleep 60 & echo \$! > '$W/child'; wait" ) 2>/dev/null
+c=$(cat "$W/child" 2>/dev/null); i=0; while [ -n "$c" ] && kill -0 "$c" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.2; i=$((i+1)); done
+[ -n "$c" ] && ! kill -0 "$c" 2>/dev/null && ok "and stops what the command started, too" || no "time_cap left the command's child running" "pid $c"
+kill "$c" 2>/dev/null
+# a run past its limit stops even while its step can't return: (A) a $(...) whose pipe an escaped process holds, (B) a
+# step that ignores TERM. Each ends with exit 124, the FAIL line, no process left and no folder
+for c in A B; do
+  { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+    echo 'echo "dir $W"'
+    if [ $c = A ]; then echo 'x=$( ( "$SH" -c "sleep 600; :" sh "$W/orphan" & ); echo started )'
+    else echo '"$SH" -c '"'"'trap "" TERM; sleep 600; :'"'"' sh "$W/deaf"'; fi; } > "$W/stuck$c.sh"
+  mkdir -p "$W/tmp$c"; t0=$(date +%s); out=$(TMPDIR="$W/tmp$c" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/stuck$c.sh" 2>&1); rc=$?; t1=$(date +%s)
+  sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
+  [ "$rc" = 124 ] && [ $((t1 - t0)) -le 25 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)' && [ -n "$sd" ] &&
+    [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+    ok "a run past its limit stops even when its step can't return ($c), leaving nothing behind" ||
+    no "a run past its limit didn't stop cleanly with its step stuck ($c: exit $rc, $((t1 - t0)) s)" "$out"
+  for p in $(procs_naming "${sd:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+done
+# (a) a second TERM landing during the exit trap can't cut it short: the step's TERM trap starts a process naming the
+# run's folder that ignores TERM for 3 s, which the exit cleanup waits on while the watchdog's second TERM arrives.
+# Exactly one FAIL line, and the folder is removed
+printf '%s\n' 'w=$1' 'trap '"'"'sh -c "trap \"\" TERM; sleep 3; :" sh "$w/late" & exit 143'"'"' TERM' 'sleep 600 & wait' > "$W/lateStep.sh"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "dir $W"'; echo "\"\$SH\" \"$W/lateStep.sh\" \"\$W\""; } > "$W/late.sh"
+mkdir -p "$W/tmpl"; out=$(TMPDIR="$W/tmpl" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/late.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
+[ "$rc" = 124 ] && [ "$(printf '%s\n' "$out" | grep -c 'FAIL the run was stopped')" = 1 ] && [ -n "$sd" ] && [ ! -d "$sd" ] &&
+  ok "a second TERM during the exit cleanup can't cut it short (one FAIL line, the folder removed)" ||
+  no "a second TERM cut the exit cleanup short (exit $rc)" "$out"
+for p in $(procs_naming "${sd:-/nonexistent}/late" | awk '{ print $1 }'); do kill_tree "$p"; done
+# (b) a step held by an escaped process that names nothing of the run's: the watchdog ends the run anyway, TERM first,
+# then KILL, within the limit plus about 15 s
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "dir $W"'; echo "x=\$( ( sleep 40 & echo \$! > \"$W/esc.pid\" ); echo started )"; } > "$W/esc.sh"
+# (its own temp folder inside this run's: a KILLed run leaves its folder, which goes with this run's)
+rm -f "$W/esc.pid"; mkdir -p "$W/tmpb"; t0=$(date +%s)
+out=$(TMPDIR="$W/tmpb" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 90 "$SH" "$W/esc.sh" 2>&1); rc=$?; t1=$(date +%s)
+sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p'); i=0; while [ -n "$sd" ] && [ -d "$sd" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+{ { [ "$rc" = 124 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM)'; } ||
+  [ "$rc" = 137 ]; } && [ $((t1 - t0)) -le 25 ] &&
+  [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+  ok "a run held by an escaped process naming nothing of it still ends, its folder removed (exit $rc)" ||
+  no "a run held by an escaped process didn't end in time, or cleanly (exit $rc, $((t1 - t0)) s)" "$out"
+[ ! -s "$W/esc.pid" ] || kill_tree "$(cat "$W/esc.pid")"
+# (c) a run that ends on its own just before its deadline, its exit cleanup waiting on a process that ignores TERM:
+# the watchdog's TERM can't cut that cleanup short. Exit 0, no FAIL line, the folder removed, nothing naming it left
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "dir $W"'; echo '( "$SH" -c '"'"'trap "" TERM; sleep 8; :'"'"' sh "$W/deafx" & ); sleep 2.5'; } > "$W/endnear.sh"
+mkdir -p "$W/tmpc"; out=$(TMPDIR="$W/tmpc" AGENT_MAILBOX_TEST_LIMIT=4 time_cap 60 "$SH" "$W/endnear.sh" 2>&1); rc=$?; sd=$(printf '%s\n' "$out" | sed -n 's/^dir //p')
+[ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q FAIL && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+  ok "a run ending just before its deadline finishes its exit cleanup (exit 0, its folder removed)" ||
+  no "the deadline cut a finished run's exit cleanup short (exit $rc)" "$out"
+for p in $(procs_naming "${sd:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+# the start-up sweep keeps an hour-old folder that a live process names (a run whose folder age misleads), even one
+# whose path holds "grep"
+mkdir -p "$W/grep3/agent mailbox test.LIVExx"; touch -t 202001010000 "$W/grep3/agent mailbox test.LIVExx"
+"$SH" -c 'sleep 60; :' sh "$W/grep3/agent mailbox test.LIVExx/run" & lp=$!
+# (until ps shows it: a fork shows its parent's command line at first)
+i=0; while [ -z "$(procs_naming "$W/grep3/agent mailbox test.LIVExx/run")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo swept'; } > "$W/sweep.sh"
+# (in a subshell: under zsh's sh emulation, an assignment before a function call outlives the call, exported)
+( TMPDIR="$W/grep3" time_cap 30 "$SH" "$W/sweep.sh" ) >/dev/null 2>&1
+[ -d "$W/grep3/agent mailbox test.LIVExx" ] && ok "the sweep keeps an hour-old folder a live process names" ||
+  no "the sweep removed a folder a live process names"
+kill_tree "$lp"; wait "$lp" 2>/dev/null
+# a run that can't make its folder (TMPDIR missing) stops at once, before anything that stops processes; and an empty
+# name matches no process, so no cleanup can reach beyond the run
+{ sed -n '1,/^# (end of the run.s watchdog/p' "$0"; echo 'echo started'; } > "$W/nodir.sh"
+out=$(TMPDIR="$W/missing" time_cap 30 "$SH" "$W/nodir.sh" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL can't make the run's folder" && ! printf '%s\n' "$out" | grep -qx started &&
+  ok "a run that can't make its folder stops before it starts" || no "a run without its folder went on (exit $rc)" "$out"
+[ -z "$(procs_naming "")" ] && ok "an empty name matches no process" || no "procs_naming \"\" matched processes" "$(procs_naming "" | head -3)"
+# time_cap with no stdin (fd 0 closed) still runs the command
+out=$(time_cap 5 sh -c 'echo ran' <&- 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "time_cap runs a command when its own stdin is closed" || no "time_cap failed with stdin closed (exit $rc)" "$out"
+# a run stopped by a signal (HUP here; INT the same, from a terminal) still stops what it started and removes its
+# folder; and a later run sweeps a folder an hour old that a killed run left, keeping a recent one
+mkdir -p "$W/tmp2/agent mailbox test.OLDxxx" "$W/tmp2/agent mailbox test.NEWxxx"; touch -t 202001010000 "$W/tmp2/agent mailbox test.OLDxxx"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/sig.sh"
+TMPDIR="$W/tmp2" "$SH" "$W/sig.sh" > "$W/sig.out" 2>&1 & sp=$!
+i=0; while [ -z "$(sed -n 's/^dir //p' "$W/sig.out")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; sleep 1
+kill -HUP "$sp"; i=0; while kill -0 "$sp" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+! kill -0 "$sp" 2>/dev/null || kill -KILL "$sp" 2>/dev/null; wait "$sp"; rc=$?
+sd=$(sed -n 's/^dir //p' "$W/sig.out")
+[ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+  ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
+[ ! -d "$W/tmp2/agent mailbox test.OLDxxx" ] && [ -d "$W/tmp2/agent mailbox test.NEWxxx" ] &&
+  ok "a run sweeps an hour-old folder a killed run left, and keeps a recent one" || no "the sweep removed the wrong folders" "$(ls "$W/tmp2")"
+# a run read through dash's $(...), which reads the run's output to its end before reaping it, returns at once, with
+# no FAIL line: the watchdog never holds the run's output, so the read ends when the run does
+if command -v dash >/dev/null 2>&1; then
+  { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+    echo 'echo done; exit 0'; } > "$W/quick.sh"
+  mkdir -p "$W/tmpq"; t0=$(date +%s)
+  out=$(TMPDIR="$W/tmpq" AGENT_MAILBOX_TEST_LIMIT=8 time_cap 30 dash -c 'x=$("$1" "$2"); printf "%s\n" "$x"' sh "$SH" "$W/quick.sh" 2>&1); rc=$?; t1=$(date +%s)
+  [ "$rc" = 0 ] && [ $((t1 - t0)) -le 3 ] && printf '%s\n' "$out" | grep -qx done && ! printf '%s\n' "$out" | grep -q FAIL &&
+    ok "a run read through \$(...) returns as soon as it ends, with no FAIL line" ||
+    no "a run read through \$(...) was held after it ended (exit $rc, $((t1 - t0)) s)" "$out"
+else sk "a run read through \$(...) returns as soon as it ends (no dash here)"; fi
+# TEST_TIMES: each check's own time goes in the file, with its section; the summary lists them; what the run starts
+# doesn't see the variable; and without it, nothing is written or printed
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"
+  echo 'cd "$TMPDIR"; TSEC=demo; times_mark; ok first; sleep 1; ok second; sh -c '"'"'echo "child: ${TEST_TIMES:-nothing}"'"'"'; times_summary'; } > "$W/times.sh"
+mkdir -p "$W/tmpt"; rm -f "$W/t.tsv"
+# (a relative path, from the folder the run starts in, which it then leaves: the file stays where it was named)
+out=$(cd "$W" && TMPDIR="$W/tmpt" TEST_TIMES=t.tsv time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 9900 ] &&
+  printf '%s\n' "$out" | grep -qx 'child: nothing' && printf '%s\n' "$out" | grep -q '^== the slowest checks' &&
+  printf '%s\n' "$out" | grep -Eq '^ +(0\.9|[1-9]\.[0-9]) s  demo +second$' &&
+  ok "TEST_TIMES records each check's own time, with its section, and lists the slowest; what the run starts doesn't see it" ||
+  no "TEST_TIMES didn't record the checks' times as it should (exit $rc)" "$out$NL$(cat "$W/t.tsv" 2>/dev/null)"
+out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ! printf '%s\n' "$out" | grep -q 'slowest checks' && printf '%s\n' "$out" | grep -qx '  ok   second' &&
+  ok "and without TEST_TIMES, a run's output is as before" || no "without TEST_TIMES, a run's output changed (exit $rc)" "$out"
+# TEST_TIMES naming a file that can't be written: the run fails at once, saying so, leaving nothing behind
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'echo "dir $RUNW"; echo started'; } > "$W/badtt.sh"
+out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/no such dir/t.tsv" time_cap 30 "$SH" "$W/badtt.sh" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^FAIL TEST_TIMES: can't write" && ! printf '%s\n' "$out" | grep -q -e started -e 'not found' &&
+  [ ! -e "$W/no such dir" ] && [ -z "$(ls "$W/tmpt" | grep 'agent mailbox test')" ] &&
+  ok "TEST_TIMES naming a file it can't write fails the run at once, saying so, leaving nothing behind" || no "an unwritable TEST_TIMES didn't fail cleanly (exit $rc)" "$out"
+# TEST_TIMES' bats lines: a fixed sample through the parser (a plain test, a skip, a name holding " in 5ms", a failure,
+# a timeout, an old bats' skip with no time, and lines that aren't results)
+want=$(printf '3\tsx\tok\tplain\n4\tsx\tskip\tskipped one\n3\tsx\tok\tname with in 5ms inside\n3\tsx\tFAIL\tfails\n1333\tsx\tFAIL\tslow\n0\tsx\tskip\tan old bats skip')
+got=$(printf '%s\n' '1..4' 'ok 1 plain in 3ms' 'ok 2 skipped one in 4ms # skip because' 'ok 3 name with in 5ms inside in 3ms' \
+  'not ok 4 fails in 3ms' 'not ok 5 slow in 1333ms # timeout after 1s' 'ok 6 an old bats skip # skip why' '# (in test file x.bats, line 4)' '#   `false'"'"' failed' | bats_times sx)
+[ "$got" = "$want" ] && ok "TEST_TIMES reads bats' times: each test's, a skip as skip (an old bats' too), a failure or a timeout as FAIL, by the last \" in <ms>ms\"" ||
+  no "TEST_TIMES misread bats' times" "$got"
+# TEST_TIMES: a mark (a section's start) restarts the count, so a check's time is from its section's start, not the
+# previous section's last check
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'TSEC=one; times_mark; sleep 2; TSEC=two; times_mark; ok x'; } > "$W/mark.sh"
+rm -f "$W/m.tsv"; out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/m.tsv" time_cap 30 "$SH" "$W/mark.sh" 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "TEST_TIMES counts a check's time from its section's start (${ms} ms after a 2 s gap)" ||
+  no "TEST_TIMES counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/m.tsv" 2>/dev/null)"
+# TEST_TIMES with a stand-in bats (first on PATH; it takes 3 s and reports two tests of 1200 ms each, an ok and a
+# failure, so only their sum leaves the right rest): the tests' lines go in the file, its exit decides the bats line's ok
+# or FAIL, and the bats line gets the rest of the section's time, about 0.6 s (loose bounds: it's timed by sleep)
+mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 3' \
+  'printf "1..2\nok 1 aa in 1200ms\nnot ok 2 bb in 1200ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
+  echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
+_otd=${TMPDIR-unset}
+# (in a subshell each: under zsh's sh emulation, the assignments would outlive the call, exported to the run)
+for c in 0 1; do rm -f "$W/b$c.tsv"
+  ( TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" ) > "$W/b$c.out" 2>&1
+done
+lk=$(sh -c 'echo "${TEST_TIMES-}|${STUBRC-}|${STUBDIR-}"'); [ "$lk" = "||" ] && [ "${TMPDIR-unset}" = "$_otd" ] &&
+  ok "the stand-in's settings stay with its run (none reaches what this run starts)" ||
+  no "the stand-in's settings leaked into the run" "child sees: $lk; TMPDIR ${TMPDIR-unset} (was $_otd)"
+bl0=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b0.tsv" 2>/dev/null)
+bl1=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b1.tsv" 2>/dev/null)
+tl0=$(awk -F '\t' '$4 == "aa" || $4 == "bb" { printf "%s %s %s;", $1, $3, $4 }' "$W/b0.tsv" 2>/dev/null)
+[ "${bl0%% *}" = ok ] && [ "${bl1%% *}" = FAIL ] && [ "$tl0" = "1200 ok aa;1200 FAIL bb;" ] &&
+  ok "TEST_TIMES with bats: each test's line goes in the file, and bats' exit decides its own line" ||
+  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}${NL}exit 0's run:$NL$(cat "$W/b0.out" 2>/dev/null)${NL}exit 1's run:$NL$(cat "$W/b1.out" 2>/dev/null)"
+r=${bl0#* }; case $r in (''|*[!0-9]*) r=-1 ;; esac
+[ "$r" -ge 200 ] && [ "$r" -le 1700 ] && ok "and the bats line gets the rest of the section's time (${r} ms of about 3000, less the tests' 2400)" ||
+  no "the bats line's time isn't the rest of the section's (${r} ms; about 600 expected)" "$(cat "$W/b0.tsv" 2>/dev/null)"
+# TEST_TIMES: the run's own section loop marks each section's start. Two sections run by the suite's own loop: a's
+# check, then 2 s with no check, then b's; b's time is from its section's start, under 1.5 s (on a whole-seconds clock
+# it reads 0 or 1000; counted from a's check it would be 2000 or more)
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SECTIONS=""$/,/^  SECTIONS="\$SECTIONS\$\*\$NL"; }$/p' "$0"
+  echo 'sa() { echo "== a"; ok a1; sleep 2; }; section a sa; sb() { echo "== b"; ok b1; }; section b sb'
+  sed -n '/^PLAN=\$(printf /,$p' "$0"; } > "$W/loop.sh"
+rm -f "$W/l.tsv"; out=$( ( TMPDIR="$W/tmpt" TEST_TIMES="$W/l.tsv" time_cap 30 "$SH" "$W/loop.sh" ) 2>&1); rc=$?
+ms=$(awk -F '\t' '$2 == "b" && $4 == "b1" { print $1 }' "$W/l.tsv" 2>/dev/null)
+[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "the run's section loop starts each section's count afresh (${ms} ms after a 2 s gap)" ||
+  no "the run's section loop counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/l.tsv" 2>/dev/null)"
+# a test's bare `wait` (it waits for every job of the run) returns at once: the watchdog isn't one of them
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'sleep 1 & wait; echo returned'; } > "$W/bare.sh"
+t0=$(date +%s); out=$(time_cap 60 "$SH" "$W/bare.sh" 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" = 0 ] && [ $((t1 - t0)) -le 10 ] && printf '%s\n' "$out" | grep -qx returned &&
+  ok "a bare wait in a test doesn't wait for the run's watchdog" || no "a bare wait waited for the watchdog (exit $rc, $((t1 - t0)) s)" "$out"
+# the run's own watchdog: a copy of this suite's start with a limit of 1 s and a step that never ends stops, failing
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^SUITE=\$\$$/,/^# (end of the run.s watchdog/p' "$0" | sed 1d
+  echo 'echo "hang-dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/hang.sh"
+mkdir -p "$W/tmph"; t0=$(date +%s); out=$(TMPDIR="$W/tmph" AGENT_MAILBOX_TEST_LIMIT=1 time_cap 60 "$SH" "$W/hang.sh" 2>&1); rc=$?; t1=$(date +%s)
+hw=$(printf '%s\n' "$out" | sed -n 's/^hang-dir //p')
+[ "$rc" = 124 ] && [ $((t1 - t0)) -le 20 ] && printf '%s\n' "$out" | grep -q 'FAIL the run was stopped (TERM): past its limit of 1 s' &&
+  ok "a run that goes over its limit stops itself, failing (exit 124)" || no "the run's watchdog didn't stop it (exit $rc, $((t1 - t0)) s)" "$out"
+sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ] &&
+  ok "and stops what it left running, even a process whose parent is gone, and removes its folder" ||
+  no "a stopped run left a process or its folder behind" "$(if [ -n "$hw" ]; then procs_naming "$hw"; else printf '(it printed no folder) %s' "$out"; fi)"
+for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
+# a section named twice, or one whose function doesn't exist, stops the run before it starts (either would drop a
+# section with every shard still listing each id once); so does a shard with no sections
+mkdir -p "$W/guard/test" "$W/guard/tmp"
+sed 's/^section capability-probe sec_capability_probe$/section cli-hardening sec_capability_probe/' "$0" > "$W/guard/test/twice.sh"
+sed 's/^section bats sec_bats$/section bats sec_batz/' "$0" > "$W/guard/test/nofn.sh"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/twice.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'cli-hardening' is named twice" &&
+  ok "a section named twice stops the run" || no "a section named twice didn't stop the run (exit $rc)" "$out"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/nofn.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'bats' has no function 'sec_batz'" &&
+  ok "and so does a section whose function doesn't exist" || no "a section with no function didn't stop the run (exit $rc)" "$out"
+n=$(( $(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --list | wc -l) + 1 ))
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --shard "$n/$n" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "shard $n/$n has no sections" &&
+  ok "and so does a shard with no sections" || no "a shard with no sections didn't stop the run (exit $rc)" "$out"
+sed 's/^section bats sec_bats$/section Bats sec_bats/' "$0" > "$W/guard/test/badid.sh"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/badid.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section id 'Bats' isn't lowercase" &&
+  ok "and so does a section id that isn't lowercase letters, digits and -" || no "a bad section id didn't stop the run (exit $rc)" "$out"
+# the suite run by zsh (when it's here; the CLI under sh, as zsh isn't a shell the CLI supports): a run of several
+# sections runs each of them
+if command -v zsh >/dev/null 2>&1; then
+  out=$(TMPDIR="$W/guard/tmp" TEST_SHELL=sh time_cap 120 zsh "$0" --only pins-on-move,loose-plain-header 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^== setup says when pinned' && printf '%s\n' "$out" | grep -q "^== a signed record whose header" &&
+    ok "under zsh, a run of two sections runs both" || no "under zsh, a run of two sections didn't run both (exit $rc)" "$out"
+else sk "under zsh, a run of two sections runs both (no zsh here)"; fi
+# each section's function is its own and defined once (a copy defined later would run under both names, and a function
+# shared by two ids runs one section's checks twice); sec_adapter alone takes an argument and serves each adapter
+d=$(printf '%s' "$SECTIONS" | awk '$2 != "sec_adapter" { print $2 }' | sort | uniq -d
+  for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do
+    [ "$(grep -c "^[[:space:]]*$f[[:space:]]*()" "$0")" = 1 ] || echo "$f"; done)
+[ -z "$d" ] && ok "each section's function is its own, defined once" || no "a section's function is shared or defined more than once" "$d"
+# a section that runs no check (here bats, made empty after it's registered) fails the run, as one whose function is
+# gone would
+sed 's/^section bats sec_bats$/section bats sec_bats; sec_bats() { :; }/' "$0" > "$W/guard/test/hollow.sh"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only bats 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL section bats ran no checks" &&
+  ok "a section that runs no checks fails the run" || no "a section that ran no checks passed (exit $rc)" "$out"
+# an adapter given twice runs once, and --only won't take ids with spaces (it would run only those it could match)
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
+  ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --only 'bats, safeguards' --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "no spaces" &&
+  ok "--only refuses ids with spaces" || no "--only took ids with spaces (exit $rc)" "$out"
+}
+section safeguards sec_safeguards
+
+sec_adapter() { AD=$1
   echo "== adapter: $AD (shell: $SH)"
   T="$W/$AD"; mkdir -p "$T"
   if [ "$AD" = git ]; then git init -q --bare "$T/store.git"; STORE="$T/store.git"; else STORE="$T/store"; fi
@@ -150,14 +564,16 @@ x-trace:abc
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
   printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
     no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
-  for f in 20200101T000008Z-carol-hdr8 20200101T000009Z-alice-ops-x 2020-alice-hdr0; do
-    printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
-      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
+  # (the note says what the name should be, not which part is off: names may hold '-', so alice-ops-x could be
+  # alice about ops-x or alice-ops about x)
+  for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
+    printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
+      ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
     expect "a signed copy under another sender's file name reads verified as its real signer, pointed out" 0 \
-      "carol-copy\.md \[verified: from alice; its file name doesn't name alice as the sender\]$" as bob read
+      "carol-copy\.md \[verified: from alice; its file name doesn't name it as from alice about review-1\]$" as bob read
   fi
   tamper "rm -f mailbox/inbox/bob/20200101T0000* mailbox/inbox/bob/2020-alice-hdr0.md"
   # read takes each message once: a store file swapped right after its signature is checked (a stand-in ssh-keygen
@@ -561,10 +977,12 @@ notes.md"'
     [ "$(git -C "$C" config --local user.name)" = stale ] && ok "commands don't rewrite the checkout's git config" ||
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
-done
+}
+for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
 
 # --- cases that need their own store -------------------------------------------------------------------------------
 case " $ADAPTERS " in *" git "*)
+  sec_git_default_branch() {
   echo "== git: a store whose default branch isn't the mailbox branch"
   T="$W/branch"; mkdir -p "$T"; git init -q --bare "$T/store.git"
   git clone -q "$T/store.git" "$T/seed" 2>/dev/null && (cd "$T/seed" && git config user.email s@s && git config user.name s &&
@@ -578,7 +996,10 @@ case " $ADAPTERS " in *" git "*)
   expect "init on a branch with a / in its name" 0 initialized as e2 init
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
+  }
+  section git-default-branch sec_git_default_branch
 
+  sec_git_exact_branch() {
   echo "== git: the mailbox branch is matched by its exact name"
   # ls-remote matches a pattern against the end of ref names: a store whose only ref is x/refs/heads/main has no main
   T="$W/nested"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -596,7 +1017,10 @@ case " $ADAPTERS " in *" git "*)
   [ "$tok" = "$(git --git-dir="$T/store.git" rev-parse refs/heads/main)" ] && ok "the poll token is the exact branch's tip" ||
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
+  }
+  section git-exact-branch sec_git_exact_branch
 
+  sec_git_take_turns() {
   echo "== git: commands under one name take turns in its clone"
   T="$W/lock"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in lp lr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -605,7 +1029,7 @@ case " $ADAPTERS " in *" git "*)
   echo hi > "$T/m"; errs=""
   for t in 1 2 3 4 5 6 7 8; do
     as lr send lp q$t-a "$T/m" >/dev/null 2>&1; as lr send lp q$t-b "$T/m" >/dev/null 2>&1
-    fa=$(as lp list 2>/dev/null | grep -- "-lr-q$t-a\.md$"); fb=$(as lp list 2>/dev/null | grep -- "-lr-q$t-b\.md$")
+    ls_=$(as lp list 2>/dev/null); fa=$(printf '%s\n' "$ls_" | grep -- "-lr-q$t-a\.md$"); fb=$(printf '%s\n' "$ls_" | grep -- "-lr-q$t-b\.md$")
     as lp send lr re-$t-a "$T/m" --in-reply-to "$fa" --consume "$fa" > "$T/o1" 2>&1 & p1=$!
     as lp send lr re-$t-b "$T/m" --in-reply-to "$fb" --consume "$fb" > "$T/o2" 2>&1 & p2=$!
     wait $p1 || errs="$errs [$t-a: $(tail -n 1 "$T/o1")]"; wait $p2 || errs="$errs [$t-b: $(tail -n 1 "$T/o2")]"
@@ -660,8 +1084,15 @@ case " $ADAPTERS " in *" git "*)
   else sk "a holder and a waiter that disagree on the boot's id (no /proc here)"; fi
   # (the lock again as a holder with the boot's id writes it, for the doctor test below)
   printf '%s %s %s %s\n' "$sp" "$(( $(date +%s) - 50 ))" "$host" "$(started "$sp")" > "$lk"
-  # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing
-  within 30 "doctor says the store is busy while another command holds the lock" 0 "^busy the store wasn't checked" alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor
+  # doctor waits only briefly for a lock another command holds, then says the store is busy, not failing. (Where
+  # ssh-keygen has no -Y, doctor exits 1 for that alone: then that must be its only FAIL line)
+  out=$(time_cap 30 alp AGENT_MAILBOX_LOCK_WAIT= "$SH" "$CLI" doctor 2>&1); rc=$?
+  fl=$(printf '%s\n' "$out" | grep '^FAIL ')
+  if printf '%s\n' "$out" | grep -q "^busy the store wasn't checked" &&
+     { [ "$rc" = 0 ] || { [ "$rc" = 1 ] && [ -z "$SSH" ] && [ "$(printf '%s\n' "$fl" | wc -l | tr -d ' ')" = 1 ] &&
+       case $fl in ("FAIL ssh-keygen -Y is available"*) true ;; (*) false ;; esac; }; }; then
+    ok "doctor says the store is busy while another command holds the lock"
+  else no "doctor says the store is busy while another command holds the lock (exit $rc)" "$out"; fi
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
   # a holder on another host (or under this machine's earlier name) can't be checked: it's waited for, and the message
   # says which file to delete if nothing is running there
@@ -711,10 +1142,15 @@ case " $ADAPTERS " in *" git "*)
     chmod u+w "$ld"; rm -f "$lk" "$ld/break"
   fi
   # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
-  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0
-  while [ $n -lt 30 ] && ! grep -q "^$wpid " "$W/home-lp/.local/state/agent-mailbox/run/lp.pid" 2>/dev/null; do sleep 1; n=$((n+1)); done
-  within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
-  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
+  # (it's running once its pid file names a process of the one started here: $! is the subshell `as` runs in, and the
+  # watch a child of it, so the file never holds $! itself)
+  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0; wf="$W/home-lp/.local/state/agent-mailbox/run/lp.pid"; wp=""
+  while [ $n -lt 300 ]; do wp=$(cut -d' ' -f1 "$wf" 2>/dev/null)
+    [ -n "$wp" ] && tree "$wpid" | grep -qx -- "$wp" && break; wp=""; sleep 0.1; n=$((n+1)); done
+  if [ -n "$wp" ]; then
+    within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
+  else no "while watch runs, a send under its name doesn't wait for it" "watch didn't start within 30 s: $(cat "$T/lwatch")"; fi
+  kill_tree "$wpid"; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
   # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, a consume never
   # committed, a file it wrote but never added, and git's own lock on the index
   mkdir -p "$ck/.git/rebase-merge"; : > "$ck/.git/rebase-merge/autostash"
@@ -729,7 +1165,10 @@ case " $ADAPTERS " in *" git "*)
   expect "nor is one the store's .gitignore names" 3 "no mail" as lp list
   as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
   expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
+  }
+  section git-take-turns sec_git_take_turns
 
+  sec_git_first_init() {
   echo "== git: a first init whose push failed is published by the next command"
   # the store's objects and refs are read-only for the init, so its fetches work and its push fails
   T="$W/firstinit"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -750,6 +1189,9 @@ case " $ADAPTERS " in *" git "*)
   git --git-dir="$T/store.git" update-ref -d refs/heads/main
   expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
   [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
+  }
+  section git-first-init sec_git_first_init
+  sec_git_foreign_history() {
   echo "== git: a clone whose history the store doesn't share fails, saying how to recover"
   # an init left unpublished (the store's folders read-only for its push), then another agent's init wins
   T="$W/initrace"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
@@ -1048,15 +1490,16 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "an init at a/./b/. that loses the race to one at a/b says so" 1 "another agent initialized the mailbox at .* first.*title: winner" \
     env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
       RACE_CMD="HOME='$W/home-dn2' '$SH' '$CLI' init --title winner" HOME="$W/home-dn1" "$SH" "$CLI" init --title loser
+  }
+  section git-foreign-history sec_git_foreign_history
 
+  sec_git_unpublished() {
   echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
   T="$W/left"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
   for a in xq1 xq2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq1 init >/dev/null; for a in xq1 xq2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
-  # (fast: a sleep that returns at once, so the push's ten tries take no time)
-  mkdir -p "$T/fast"; printf '#!/bin/sh\nexit 0\n' > "$T/fast/sleep"; chmod +x "$T/fast/sleep"
-  fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
+  fast_sleep
   echo hi > "$T/m"
   expect "a send the store won't take is saved locally, not published" 4 "written locally, not published" fast xq1 send xq2 first "$T/m"
   expect "the next send says it wrote nothing" 4 "this command wrote nothing: an earlier command's change is saved locally" fast xq1 send xq2 second "$T/m"
@@ -1070,15 +1513,30 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "an AD_LEFTOVER in the environment doesn't change what a command says of its own change" 4 "written locally, not published" \
     env AD_LEFTOVER=1 PATH="$T/fast:$PATH" HOME="$W/home-xq1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
       CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send xq2 third "$T/m"
+  # nor does an exported AD_UNSTICK: a command whose own push meets a conflicting edit keeps its change and says
+  # don't resend, rather than setting it aside as an earlier command's. A fresh agent with nothing left over; the
+  # first retry's wait lets a writer edit the record the command is changing
+  rm -f "$T/store.git/hooks/pre-receive"; as xq9 setup --store "$T/store.git" --name xq9 >/dev/null
+  as xq9 register --kind t --about t --no-key >/dev/null
+  U="$T/unstick"; mkdir -p "$U"; git clone -q "$T/store.git" "$U/w"
+  git -C "$U/w" config user.email w@w; git -C "$U/w" config user.name w
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  printf '#!/bin/sh\n[ -e "%s/done" ] || { : > "%s/done"; rm -f "%s/store.git/hooks/pre-receive"\n' "$U" "$U" "$T" > "$U/sleep"
+  printf '  cd "%s/w" && git pull -q && sed -i.b "s/^about: .*/about: theirs/" mailbox/agents/xq9.md && rm -f mailbox/agents/xq9.md.b &&\n' "$U" >> "$U/sleep"
+  printf '    git commit -qam theirs && git push -q; } >/dev/null 2>&1\nexit 0\n' >> "$U/sleep"; chmod +x "$U/sleep"
+  expect "an AD_UNSTICK in the environment doesn't set a command's own change aside" 4 "written locally, not published" \
+    env AD_UNSTICK=1 PATH="$U:$PATH" HOME="$W/home-xq9" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+      CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
   # on a store with no mailbox branch yet: a first init the store won't take, then the next command
-  T="$W/left2"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
+  T="$W/left2"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; as xq3 setup --store "$T/store.git" --name xq3 >/dev/null
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "a first init the store won't take is saved locally, not published" 4 "written locally, not published" fast xq3 init
   expect "and the next command, which only publishes it, says it wrote nothing" 4 "this command wrote nothing" fast xq3 agents
   # an update run again after its exit 4: its sync publishes the earlier change, and it says so, not just "nothing"
-  T="$W/left3"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
+  T="$W/left3"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; as xq4 setup --store "$T/store.git" --name xq4 >/dev/null
   as xq4 init >/dev/null; as xq4 register --kind t --about t --no-key >/dev/null 2>&1
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
   expect "an update the store won't take exits 4" 4 "written locally, not published" fast xq4 update --about again
@@ -1087,8 +1545,8 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     "^update: nothing new to update for xq4 \(active\): the earlier change is now published$" as xq4 update --about again
   # a command whose sync publishes what an earlier one left, then can't publish its own change, says its own change
   # isn't published (don't resend), not that it wrote nothing: the leftover mark ends with the leftover's push
-  T="$W/left4"; mkdir -p "$T/fast"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
-  cp "$W/left/fast/sleep" "$T/fast/sleep"; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  T="$W/left4"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; for a in xq5 xq6; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
   as xq5 init >/dev/null; for a in xq5 xq6; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"; echo hi > "$T/m"
   expect "(a first send the store won't take)" 4 "written locally, not published" fast xq5 send xq6 first "$T/m"
@@ -1098,7 +1556,151 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     "^agent-mailbox: written locally, not published" fast xq5 send xq6 second "$T/m"
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  }
+  section git-unpublished sec_git_unpublished
 
+  sec_git_leftover_conflict() {
+  echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
+  T="$W/stuck"; mkdir -p "$T"; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+  fast_sleep; for a in ga ga-x gb; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+  nk=--no-key; [ -z "$SSH" ] || nk=""
+  as ga init >/dev/null; for a in ga ga-x gb; do as $a register --kind t --about t $nk >/dev/null 2>&1; done
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  echo from-ga > "$T/a"; echo from-ga-x > "$T/b"
+  expect "(ga's send to gb, topic x-y1, the store won't take)" 4 "written locally, not published" fast ga send gb x-y1 "$T/a"
+  rm -f "$T/store.git/hooks/pre-receive"
+  ck=$(ls -d "$W/home-ga/.local/state/agent-mailbox/checkouts/"*-ga)
+  n=$(git -C "$ck" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-ga-x-y1\.md$')
+  # ga-x sends gb topic y1 in that same second: its message has the same file name (placed here by a store writer, as
+  # the two sends racing in one second would have it)
+  as ga-x send gb y1 "$T/b" >/dev/null
+  git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+    o=$(ls mailbox/inbox/gb/*-ga-x-y1.md) && { [ "$o" = "$n" ] || { git mv "$o" "$n" &&
+      { [ ! -f "$o.sig" ] || git mv "$o.sig" "$n.sig"; }; }; } && git commit -qm same-second && git push -q origin HEAD:main)
+  # (with an editor that fails in the environment, as one git would open: the CLI never opens one)
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "moved ${n##*/} to [0-9T]*Z-ga-x-y1\.md (published with this clone's next push): the store already had another message by that name" &&
+    ok "a leftover message whose name the store took meanwhile is published under a new one, saying so" ||
+    no "a leftover message whose name the store took wedged the clone, or wasn't renamed (exit $rc)" "$out"
+  out=$(as gb read 2>&1)
+  [ "$(printf '%s\n' "$out" | grep -c -e '^from-ga$' -e '^from-ga-x$')" = 2 ] &&
+    { [ -z "$SSH" ] || [ "$(printf '%s\n' "$out" | grep -c -e '\[verified: from ga\]$' -e '\[verified: from ga-x\]$')" = 2 ]; } &&
+    ok "and the recipient gets both messages${SSH:+, each verified}" || no "the recipient didn't get both messages" "$out"
+  out=$(as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && [ -z "$(printf '%s\n' "$out" | grep -e published -e 'set aside')" ] && ok "and the next command says nothing more" ||
+    no "the next command didn't work quietly (exit $rc)" "$out"
+  # any other conflicting leftover (here: an update to ga's record, which a store writer edited meanwhile) is set aside
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(ga's update the store won't take)" 4 "written locally, not published" fast ga update --about mine
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && sed 's/^about: .*/about: theirs/' mailbox/agents/ga.md > ga.t &&
+    mv ga.t mailbox/agents/ga.md && git commit -qam edit && git push -q origin HEAD:main)
+  out=$(GIT_EDITOR=false; export GIT_EDITOR; as ga list 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: ga updates), which conflicts with the store: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as refs/agent-mailbox/stuck/1 in .*-ga); this clone goes on from the store" &&
+    git -C "$ck" rev-parse -q --verify refs/agent-mailbox/stuck/1 >/dev/null &&
+    ok "a leftover that conflicts otherwise is set aside under refs/agent-mailbox/stuck/, saying so" ||
+    no "a conflicting leftover wedged the clone, or wasn't set aside (exit $rc)" "$out"
+  for c in list agents; do out=$(as ga $c 2>&1); rc=$?
+    { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep -e 'set aside' -e "can't update")" ] &&
+      ok "and every later command works ($c)" || no "a later command failed after a leftover was set aside ($c, exit $rc)" "$out"; done
+  [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "and the store keeps its own version" || no "the set-aside commit reached the store" "$(git --git-dir="$T/store.git" show main:mailbox/agents/ga.md)"
+  # a consume of a message the store then changed (a removal against an edit) is set aside, never moved to a new name:
+  # only a message the leftover added is
+  c1=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-x-y1\.md$' | head -n 1)")
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's consume the store won't take)" 4 "written locally, not published" fast gb consume "$c1"
+  # (as a run cut short after making the ref, before skipping the commit, would leave it)
+  git -C "$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)" update-ref refs/agent-mailbox/stuck/1 HEAD
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && printf 'edited\n' >> "mailbox/inbox/gb/$c1" && git commit -qam edit-msg && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-gb): consumed ${c1%.md}), which conflicts with the store: .*so run again the command that made it" &&
+    [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] && printf '%s\n' "$out" | grep -q -- "/$c1\$" &&
+    ok "a consume of a message the store changed is set aside, not renamed, and the message stays" ||
+    no "a consume of a message the store changed wasn't set aside, or was renamed (exit $rc)" "$out"
+  # a set-aside run cut short, before its skip, leaves a ref for the commit: a later run keeps it, adding none
+  ckb=$(ls -d "$W/home-gb/.local/state/agent-mailbox/checkouts/"*-gb)
+  [ "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/ | wc -l | tr -d ' ')" = 1 ] &&
+    ok "a run that finds a stuck ref for the commit already keeps it, adding none" ||
+    no "a set-aside commit has more than one stuck ref" "$(git -C "$ckb" for-each-ref refs/agent-mailbox/stuck/)"
+  # a reply quoting in full the message it consumes, left unpublished while the store loses that message (consumed from
+  # another clone, say): git takes the reply for the message renamed, and reports the conflict at the reply's path,
+  # which the store lacks. That's no name taken: the commit is set aside, never moved
+  awk 'BEGIN { for (i = 1; i <= 40; i++) print "line " i " of a message the reply quotes in full" }' > "$T/qtext"
+  as ga send gb q1 "$T/qtext" >/dev/null 2>&1
+  q=$(basename "$(as gb list 2>/dev/null | grep -- '-ga-q1\.md$')")
+  git --git-dir="$T/store.git" show "main:mailbox/inbox/gb/$q" > "$T/qbody"
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(gb's reply, consuming it, the store won't take)" 4 "written locally, not published" fast gb send ga re-q1 "$T/qbody" --consume "$q"
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && git rm -q "mailbox/inbox/gb/$q" "mailbox/inbox/gb/$q.sig" 2>/dev/null || git rm -q "mailbox/inbox/gb/$q"
+    git commit -qm drop-q && git push -q origin HEAD:main)
+  out=$(as gb list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && [ -z "$(printf '%s\n' "$out" | grep 'the store already had another message')" ] &&
+    printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mail(to-ga): re-q1)" &&
+    [ -z "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/ga | grep -- '-gb-re-q1\.md$')" ] &&
+    ok "a reply quoting the message it consumes, which the store lost meanwhile, is set aside, not moved" ||
+    no "a reply quoting the message it consumes was moved, not set aside (exit $rc)" "$out"
+  # two registers of one name: the one left unpublished is set aside, never moved into agents/
+  as rr setup --store "$T/store.git" --name rr >/dev/null
+  printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+  expect "(rr's register the store won't take)" 4 "written locally, not published" fast rr register --kind t --about mine $nk
+  rm -f "$T/store.git/hooks/pre-receive"
+  (cd "$T/w" && git pull -q --rebase origin main && mkdir -p mailbox/inbox/rr && : > mailbox/inbox/rr/.keep &&
+    printf -- '---\nname: rr\nkind: t\nabout: theirs\nruns_on: \nwatch: \nstatus: active\nkey: \nregistered: 2026-01-01T00:00:00Z\n---\n' > mailbox/agents/rr.md &&
+    git add -A && git commit -qm other-rr && git push -q origin HEAD:main)
+  out=$(as rr list 2>&1); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 3 ]; } && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished (mailbox: rr registers)" &&
+    [ "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents | grep -c '^rr')" = 1 ] &&
+    [ "$(git --git-dir="$T/store.git" show main:mailbox/agents/rr.md | sed -n 's/^about: //p')" = theirs ] &&
+    ok "a register that lost to another of the same name is set aside, not moved" ||
+    no "a register that lost to another of the same name wasn't set aside (exit $rc)" "$out$NL$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/agents)"
+  # an existing clone that meets a store path it can't check out (a name too long for the file system) fails, as
+  # before: it isn't taken for a clone that's up to date
+  long=$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "x"; print ".md" }')
+  echo hi | as ga send gb late - >/dev/null 2>&1
+  (cd "$T/w" && git pull -q --rebase origin main && b=$(git hash-object -w --stdin < /dev/null) &&
+    git update-index --add --cacheinfo "100644,$b,mailbox/inbox/gb/$long" && git commit -qm long && git push -q origin HEAD:main)
+  expect "a clone that can't check out the store's latest fails, rather than reading an old inbox" 1 "can't update from the store" as gb list
+  # a signed leftover moved past an unsigned message of the same name: its .sig goes with it, never staying beside the
+  # unsigned one
+  if [ -n "$SSH" ]; then
+    T="$W/stuckmix"; mkdir -p "$T"; fast_sleep; git init -q --bare "$T/store.git"; git --git-dir="$T/store.git" symbolic-ref HEAD refs/heads/main
+    for a in gs gs-x gr; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
+    as gs init >/dev/null; as gs register --kind t --about t >/dev/null 2>&1
+    for a in gs-x gr; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+    printf '#!/bin/sh\nexit 1\n' > "$T/store.git/hooks/pre-receive"; chmod +x "$T/store.git/hooks/pre-receive"
+    echo signed > "$T/a"; echo unsigned > "$T/b"
+    expect "(gs's signed send the store won't take)" 4 "written locally, not published" fast gs send gr x-z "$T/a"
+    rm -f "$T/store.git/hooks/pre-receive"
+    n=$(git -C "$(ls -d "$W/home-gs/.local/state/agent-mailbox/checkouts/"*-gs)" diff-tree --no-commit-id --name-only -r HEAD | grep -- '-gs-x-z\.md$')
+    as gs-x send gr z "$T/b" >/dev/null 2>&1
+    git clone -q -b main "$T/store.git" "$T/w" && (cd "$T/w" && git config user.email e@e && git config user.name e &&
+      o=$(ls mailbox/inbox/gr/*-gs-x-z.md) && { [ "$o" = "$n" ] || git mv "$o" "$n"; } && git commit -qm same-second && git push -q origin HEAD:main)
+    out=$(as gs list 2>&1)
+    out2=$(as gr read 2>&1)
+    printf '%s\n' "$out" | grep -q "moved ${n##*/} to " &&
+      ! git --git-dir="$T/store.git" cat-file -e "main:$n.sig" 2>/dev/null &&
+      printf '%s\n' "$out2" | grep -q "^===== $n \[unsigned\]$" && printf '%s\n' "$out2" | grep -q '\[verified: from gs\]$' &&
+      ok "a signed message moved past an unsigned one of its name takes its .sig with it" ||
+      no "a moved message's .sig stayed on the unsigned one, or didn't go with it" "$out$NL$out2$NL$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
+  fi
+  # a send whose file name the store already has in this second (another sender's whose name and topic join to it, or
+  # a message moved there) waits for the next second once, rather than failing (a dir store, where a file planted
+  # lands at once)
+  T="$W/taken"; mkdir -p "$T"
+  for a in da db; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+  as da init >/dev/null; for a in da db; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  s0=$(date -u +%Y%m%dT%H%M%SZ); while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.05; done
+  s1=$(date -u +%Y%m%dT%H%M%SZ); printf 'taken\n' > "$T/store/mailbox/inbox/db/$s1-da-t1.md"
+  out=$(echo hi | as da send db t1 - 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
+    [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
+    ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
+  }
+  section git-leftover-conflict sec_git_leftover_conflict
+  sec_git_planted() {
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
   for a in p1 p2 p3 p4 p5; do as $a setup --store "$S" --name $a >/dev/null; done
@@ -1291,7 +1893,10 @@ exec "%s" "$@"
   env HOME="$W/home-p6" AGENT_MAILBOX_BRANCH=empty "$SH" "$CLI" list >/dev/null 2>&1
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
+  }
+  section git-planted sec_git_planted
 
+  sec_git_shared_home() {
   echo "== git: names sharing one HOME (a config each)"
   T="$W/pername"; mkdir -p "$T"; git init -q --bare "$T/s.git"; PH="$W/home-pername"
   pn() { n=$1; shift; HOME="$PH" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
@@ -1311,9 +1916,12 @@ exec "%s" "$@"
   [ "$(pn pn1 list | grep -c -- '-r[12]\.md$')" = 6 ] && [ "$(pn pn2 list | grep -c -- '-r[12]\.md$')" = 2 ] &&
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
+  }
+  section git-shared-home sec_git_shared_home
 
+  sec_git_replayed_releases() {
+  echo "== git: replayed releases and required signatures"
   if [ -n "$SSH" ]; then
-    echo "== git: replayed releases and required signatures"
     T="$W/strict"; mkdir -p "$T"; git init -q --bare "$T/store.git"
     for a in g1 g2 g3; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
     expect "init a store that requires signatures" 0 "require_signatures: true" as g1 init --require-signatures
@@ -1342,11 +1950,15 @@ exec "%s" "$@"
       ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-g3/.config/agent-mailbox/keys/g3" "$f" &&
       git add -A && git commit -qm inject && git push -q origin HEAD:main)
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
-  fi ;;
+  else sk "git-replayed-releases (no ssh-keygen -Y)"; fi
+  }
+  section git-replayed-releases sec_git_replayed_releases
+  ;;
 esac
 
-if [ -n "$SSH" ]; then
+sec_pins_on_move() {
 echo "== setup says when pinned keys stay with the old store settings (dir)"
+if [ -n "$SSH" ]; then
 T="$W/pinmove"; mkdir -p "$T"
 as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
 as pm1 register --kind t --about t >/dev/null
@@ -1372,8 +1984,11 @@ out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
   sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
 expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
-fi
+else sk "pins-on-move (no ssh-keygen -Y)"; fi
+}
+section pins-on-move sec_pins_on_move
 
+sec_watcher_lifecycle() {
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
@@ -1406,7 +2021,10 @@ if [ -n "$SSH" ]; then
   expect "later sends are signed with it" 0 "^sent" sh -c "echo hi | HOME='$W/home-w2' '$SH' '$CLI' send w1 signed-own -"
   expect "and verify" 0 "signed-own.md \\[verified: from w2\\]" as w1 read
 fi
+}
+section watcher-lifecycle sec_watcher_lifecycle
 
+sec_stop_hook() {
 echo "== the Claude Code Stop hook (dir)"
 # PATH without any folder holding an agent-mailbox, so the hook prints this checkout's CLI and nothing installed runs
 NOPATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -z "$d" ] || [ -e "$d/agent-mailbox" ] ||
@@ -1466,7 +2084,10 @@ if PATH=$NOPATH command -v jq >/dev/null 2>&1; then
 else
   sk "the Claude Code Stop hook (no jq)"
 fi
+}
+section stop-hook sec_stop_hook
 
+sec_rewake_hook() {
 echo "== the Claude Code asyncRewake hook (dir)"
 T="$W/rewake"; P="$T/plug 'in'"; mkdir -p "$P/hooks"
 cp "$ROOTDIR/hooks/claude-rewake.sh" "$ROOTDIR/hooks/claude-watch-guard.sh" "$P/hooks/"; ln -s "$ROOTDIR/bin" "$P/bin"
@@ -1478,7 +2099,11 @@ woken() { find "$RS/rewake" \( -name woke -o -name pending \) -type f -exec cat 
 # wakes <description> <file> <command...>: the command wakes the session for new mail (exit 2), and <file> is recorded.
 # The mail is there before the hook starts, so its run's limit is a minute, not the usual 2 s: on a loaded machine the
 # watcher's first check can take longer than 2 s, and the run ends as soon as it finds the mail anyway
-wakes() { d=$1 f=$2; shift 2; out=$(RWMAX=60 "$@" 2>&1); rc=$?
+# The mail is checked first, so a send that failed before it (a crashed shell, say) fails the test at once, saying so,
+# rather than leaving the hook to wait out its limit; and the hook gets 120 s at most (time_cap), whatever its limit
+wakes() { d=$1 f=$2; shift 2
+  [ -n "$(find "$T" -path '*/mailbox/inbox/rw/*' -name "*$f" 2>/dev/null)" ] || { no "$d (the mail it waits for, $f, was never sent)"; return; }
+  out=$(RWMAX=60 time_cap 120 "$@" 2>&1); rc=$?
   if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^agent-mailbox: new mail for ' && woken "$f"; then ok "$d"
   else no "$d (exit $rc, or $f not recorded)" "$out"; fi; }
 # cc.sh <session JSON> [args...]: a stand-in Claude Code, started with <args> (what its command line shows), that runs
@@ -1525,7 +2150,7 @@ R1="$RS/rewake/rw/r1@$(cut -d' ' -f1 "$RS/session-stores/r1")"
 mkdir -p "$RS/sessions/sub"; cp "$RS/sessions/r1" "$RS/sessions/sub/r1"
 expect "or for a session id holding a /" 0 '^$' rewake sub/r1
 expect "or for a session id of .." 0 '^$' rewake ..
-expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1
+expect "with no mail it wakes the session at its limit, with a note" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 echo hi | as rx send rw rw-1 - >/dev/null 2>&1
 # a Claude Code older than 2.1.69 would run the hook as an ordinary Stop hook, so it exits at once there, mail or not
 rm -f "$R1/out"
@@ -1582,7 +2207,7 @@ expect "a hook Claude Code waited for at this prompt steps aside the next time" 
 expect "leaving the guard a note" 0 - grep -qx p-7 "$R1/declined"
 if command -v node >/dev/null 2>&1; then
   # an npm install runs under node, and renames its process to claude, so without AI_AGENT nothing tells its version
-  CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc"
+  CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; mkdir -p "$CCD/cc"
   printf '%s\n' "process.title = 'claude'; if (process.argv.includes('--version')) { console.log('2.1.80 (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
@@ -1595,7 +2220,8 @@ if command -v node >/dev/null 2>&1; then
 else sk "an npm install that doesn't say its version is left to the guard (no node)"; fi
 CC=$(command -v cc || command -v gcc || command -v clang)
 if [ -n "$CC" ]; then
-  [ -n "$CCD" ] || CCD=$(mktemp -d /tmp/amcc.XXXXXX); mkdir -p "$CCD/cc" "$CCD/claude/versions"
+  [ -n "$CCD" ] || { CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; }
+  mkdir -p "$CCD/cc" "$CCD/claude/versions"
   # (with this stop's prompt id, PRID, when set)
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
     'printf '"'"'{"session_id":"r1","prompt_id":"%s"}'"'"' "${PRID:-}" | env HOME="$RH" "$RSH" "$RHOOK" 2>&1 >/dev/null' \
@@ -1679,7 +2305,7 @@ a, b = socket.socketpair(); sys.exit(subprocess.call(sys.argv[1:], stdin=a))' "$
     else sk "a slow version check doesn't make the guard ask for a re-arm (no jq)"; fi
   else sk "a native Claude Code is told by asking it (the stand-in didn't build)"; fi
 else sk "a native Claude Code is told by asking it (no C compiler)"; fi
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--as rw read") ok "new mail wakes the session with a count and the read command" ;;
   (*) no "new mail wakes the session with a count and the read command" "$rc $r" ;; esac
 # (the notice holds none of the store's text, file names included: they're read as mail)
@@ -1690,12 +2316,12 @@ expect "the read command it prints works from anywhere" 0 "rw-1\.md" sh -c "cd /
 # a plugin folder whose name holds a backslash sequence (\c ends echo's output in dash) still gets the whole command
 P3="$T/plug\\cache"; mkdir -p "$P3/hooks"; cp "$P/hooks/claude-rewake.sh" "$P3/hooks/"; ln -s "$ROOTDIR/bin" "$P3/bin"
 echo hi | as rx send rw rw-b - >/dev/null 2>&1
-r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh")
+r=$(rewake r1 RHOOK="$P3/hooks/claude-rewake.sh" AGENT_MAILBOX_REWAKE_MAX=60)
 c=$(printf '%s\n' "$r" | sed -n '1s/.*Read it: //p')
 expect "a plugin path with a backslash prints a read command that works" 0 "rw-b\.md" sh -c "cd / && HOME='$W/home-rw' $c"
-expect "mail it already woke the session for doesn't wake it again" 2 "daily limit" rewake r1
+expect "mail it already woke the session for doesn't wake it again" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 echo hi | as rx send rw rw-2 - >/dev/null 2>&1
-r=$(rewake r1); rc=$?
+r=$(rewake r1 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) grep -q rw-2 "$R1/woke" && ok "new mail beside old wakes it with only the new" ||
     no "new mail beside old wakes it with only the new" "$(cat "$R1/woke")" ;;
   (*) no "new mail beside old wakes it with only the new" "$rc $r" ;; esac
@@ -1705,11 +2331,11 @@ expect "consumed mail drops off its list" 1 - grep -q rw-1 "$R1/woke"
 expect "mail still in the inbox stays on it" 0 - grep -q rw-2 "$R1/woke"
 # a stale pid file naming a live process that isn't the hook (a pid reused after a restart) doesn't stop it
 sleep 30 & sp=$!; echo "$sp r1" > "$R1/pid"
-expect "a pid file naming another process doesn't count" 2 "daily limit" rewake r1
+expect "a pid file naming another process doesn't count" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 kill "$sp" 2>/dev/null
 # nor does a hook left running by another session (it stops itself once its own session is gone)
 "$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r0" > "$R1/pid"
-expect "another session's hook doesn't hold the lock" 2 "daily limit" rewake r1
+expect "another session's hook doesn't hold the lock" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 if command -v jq >/dev/null 2>&1; then echo "$sp r0" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
@@ -1718,7 +2344,7 @@ else sk "nor does it satisfy this session's Stop guard (no jq)"; fi
 echo "$sp r1" > "$R1/pid"
 expect "this session's does" 0 '^$' rewake r1
 sleep 1 & dp=$!; wait "$dp"; echo "$sp r1 $dp" > "$R1/pid"
-expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit" rewake r1
+expect "but not once the Claude Code it ran under is gone (a crash)" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
 if command -v jq >/dev/null 2>&1; then echo "$sp r1 $dp" > "$R1/pid"; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/declined" "$R1/last" "$R1/start"
   g=$(printf '{"session_id":"r1"}' | env HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_STATE= \
     "$SH" "$P/hooks/claude-watch-guard.sh" | jq -r .reason)
@@ -1787,7 +2413,7 @@ rm -f "$R1/claiming"
 # a watcher that can't go on (here its config file is gone) says so once, then retries quietly
 RC=$(cat "$RS/session-configs/r1"); mv "$RC" "$RC.off"
 expect "a watcher that can't go on wakes the session, naming the command that shows why" 2 \
-  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1
+  "can't go on \(exit 1\)\. See why: .* --as rw agents, or the watcher's last output in .*/out'?\. It keeps retrying quietly; tell your human\.$" rewake r1 AGENT_MAILBOX_REWAKE_MAX=60
 # the same error again doesn't wake it: the hook keeps retrying, quietly, and wakes for mail once it can go on
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 sleep 3; [ ! -s "$T/bg.out" ] && kill -0 "$bg" 2>/dev/null && ok "the same error again doesn't wake it" ||
@@ -1807,7 +2433,7 @@ printf '%s\n' '#!/bin/sh' 'case " $* " in (*" list "*) exit 3 ;; esac' '[ -z "${
   'sed "s/{}/$n/g" "$FAKEERR" >&2; exit 1' > "$P2/bin/agent-mailbox"; chmod +x "$P2/bin/agent-mailbox"
 echo "agent-mailbox: watch: can't reach the store after {} ms ({} tries in a row)" > "$T/fakeerr"; rm -f "$R1/error" "$RS/run/rw.pid"
 fk() { rewake r1 RHOOK="$P2/hooks/claude-rewake.sh" FAKEERR="$T/fakeerr" FAKEN="$T/faken" "$@"; }
-expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk
+expect "an error wakes the session" 2 "can't go on \(exit 1\)" fk AGENT_MAILBOX_REWAKE_MAX=60
 # (with a minute's limit, so the error is recorded however slow the machine: the run ends at the notice anyway)
 rm -f "$R1/error"; out=$(RWMAX=60 fk 2>&1)
 case "$out" in (*"can't reach"*|*"after 1 ms"*|*"tries in a row"*) no "and none of the error's own text is in the notice" "$out" ;;
@@ -1835,24 +2461,27 @@ case "$rc $(cat "$T/bg.out")" in (*"HTTP 404"*) no "but a different error does" 
   ("2 "*"can't go on"*) ok "but a different error does" ;; (*) no "but a different error does" "exit $rc: $(cat "$T/bg.out")" ;; esac
 rm -f "$R1/error"
 # a warning watch prints before its listing (a commit left from an earlier command, published) isn't counted as mail
-r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md); rc=$?
+r=$(fk FAKEMAIL=20260101T000000Z-rx-fm.md AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20260101T000000Z-rx-fm.md &&
     ok "a warning watch prints before its listing isn't counted as mail" || no "a warning watch prints before its listing isn't counted as mail" "not recorded" ;;
   (*) no "a warning watch prints before its listing isn't counted as mail" "$rc $r" ;; esac
 # a watch that hangs (a fetch over a dead connection) can't run the hook past the day: at its deadline (here the 2 s
-# limit, an interval and 15 s: 18 s after it starts) the session hears the daily note, and nothing it started lingers
+# limit, an interval and its 2 s check: 5 s after it starts) the session hears the daily note, and nothing it started
+# lingers
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG="99$$" CCOUT="$T/bg.out" & bg=$!; n=0
-while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
+fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0 sawh=0
+while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
 if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
   kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
 else wait "$bg"; rc=$?
-  case "$rc $(cat "$T/bg.out")" in ("2 "*"daily limit"*) ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
-    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "exit $rc: $(cat "$T/bg.out")" ;; esac
-  # (the deadline is 18 s out: a watchdog that slept its 15 s past it would end at 30)
-  [ "$n" -le 24 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 18s"
+  # (the hang must have started: the hook prints the same note when its day ran out before any watcher did)
+  case "$sawh $rc $(cat "$T/bg.out")" in ("1 2 "*"reached its daily limit; it starts again at this turn's end."*)
+      ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
+    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; exit $rc: $(cat "$T/bg.out")" ;; esac
+  # (the deadline is 5 s out: a watchdog that slept a 15 s check past it would end at 17 or later)
+  [ "$n" -le 10 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 5s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
@@ -1866,13 +2495,13 @@ if up "$RS/run/rw.pid"; then w1=$(cut -d' ' -f1 "$RS/run/rw.pid"); kill -KILL "$
   kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; wait "$bg"
 else no "a watcher killed by a signal is started again, quietly" "no watcher started"; kill "$bg" 2>/dev/null; fi
 rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
-# a hook whose session's shell is gone (Claude Code stopped only that) stops itself, within its 15 s check
+# a hook whose session's shell is gone (Claude Code stopped only that) stops itself, within its check (here 2 s)
 printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID=$$ \
-  AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 "$RSH" "$RHOOK" 2>/dev/null >/dev/null' > "$T/wrap.sh"
+  AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 AGENT_MAILBOX_REWAKE_CHECK=2 "$RSH" "$RHOOK" 2>/dev/null >/dev/null' > "$T/wrap.sh"
 bgterm "$T/wpid" "$T/wrap.sh"
 if up "$R1/pid" && up "$T/wpid"; then hp=$(cut -d' ' -f1 "$R1/pid"); kill -TERM "$(cat "$T/wpid")"; n=0
-  while [ $n -lt 25 ] && kill -0 "$hp" 2>/dev/null; do sleep 1; n=$((n+1)); done
-  kill -0 "$hp" 2>/dev/null && { no "a hook whose shell is gone stops itself" "still running after 25 s"; kill "$hp"; } ||
+  while [ $n -lt 100 ] && kill -0 "$hp" 2>/dev/null; do sleep 0.1; n=$((n+1)); done
+  kill -0 "$hp" 2>/dev/null && { no "a hook whose shell is gone stops itself" "still running after 10 s (its check is 2 s)"; kill "$hp"; } ||
     ok "a hook whose shell is gone stops itself"
   expect "and frees the lock" 1 - test -e "$R1/pid"
 else no "a hook whose shell is gone stops itself" "it didn't start"; fi
@@ -1920,14 +2549,20 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 else sk "the two Stop hooks at one turn end (no jq)"; fi
 # a Claude Code that died but hasn't been reaped (a zombie) doesn't hold the lock
 "$SH" -c 'sleep 0 & echo $! > "$1"; exec sleep 30' sh "$T/zpid" & zp=$!; sleep 1
-"$SH" -c 'sleep 30; :' claude-rewake.sh & sp=$!; echo "$sp r1 $(cat "$T/zpid")" > "$R1/pid"
-expect "a lock whose Claude Code is a zombie doesn't count" 2 "daily limit" rewake r1
-kill "$sp" "$zp" 2>/dev/null; rm -f "$R1/pid"
+"$SH" -c 'sleep 30; :' claude-rewake.sh > /dev/null 2>&1 & sp=$!; echo "$sp r1 $(cat "$T/zpid")" > "$R1/pid"
+expect "a lock whose Claude Code is a zombie doesn't count" 2 "daily limit with no new mail" rewake r1 AGENT_MAILBOX_REWAKE_MAX=5
+kill_tree "$sp"; kill "$zp" 2>/dev/null; rm -f "$R1/pid"
 # an interval that isn't whole seconds is the default, not a watcher that can't start
 echo hi | as rx send rw rw-i - >/dev/null 2>&1
 wakes "a bad interval falls back to the default" "rw-i.md" rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=0
 echo hi | as rx send rw rw-j - >/dev/null 2>&1
 wakes "and so does a bad limit" "rw-j.md" rewake r1 AGENT_MAILBOX_REWAKE_MAX=x
+# and a check interval out of its range (0, empty, 16, not a number) is the default 15 s: the hook's own line, with each
+ckl=$(grep '^ck=' "$P/hooks/claude-rewake.sh"); got=""
+for v in 0 '' 16 2x 2; do got="$got $(AGENT_MAILBOX_REWAKE_CHECK=$v "$SH" -c "$ckl"'; echo "$ck"')"; done
+[ "$(printf '%s\n' "$ckl" | wc -l | tr -d ' ')" = 1 ] && [ "$got" = " 15 15 15 15 2" ] &&
+  ok "and so does a check interval out of range (0, empty, 16, not a number), while 2 is kept" ||
+  no "a check interval out of range didn't fall back to 15" "values 0 '' 16 2x 2 gave:$got; the line: $ckl"
 # an interval over an hour, or a limit of 00, is the default too: the watcher it starts says so
 for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done; rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 rewake r1 AGENT_MAILBOX_REWAKE_INTERVAL=86400 AGENT_MAILBOX_REWAKE_MAX=00 > /dev/null & bg=$!
@@ -1952,10 +2587,10 @@ regs() { s=$1; shift; HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_M
 reg() { regs r9 "$@"; }
 # (a plain watch makes this the session's only store, as before; another store, or another name, replaces it)
 regs r7 --as rx; regs r7 --as rw; echo hi | as rw send rx rx-q - >/dev/null 2>&1
-expect "a plain watch under another name stops the earlier name's wakes" 2 "daily limit" rewake r7
+expect "a plain watch under another name stops the earlier name's wakes" 2 "daily limit with no new mail" rewake r7 AGENT_MAILBOX_REWAKE_MAX=5
 as rx consume "$(as rx list | grep rx-q | sed 's#.*/##')" >/dev/null 2>&1
 regs r7 --config "$C2"; echo hi | as rx send rw rx-p - >/dev/null 2>&1
-expect "and a plain watch on another store stops the earlier store's" 2 "daily limit" rewake r7
+expect "and a plain watch on another store stops the earlier store's" 2 "daily limit with no new mail" rewake r7 AGENT_MAILBOX_REWAKE_MAX=5
 as rw consume "$(as rw list | grep rx-p | sed 's#.*/##')" >/dev/null 2>&1
 # (a watcher the hook starts isn't the agent registering: a hook already running when a store is added with --also,
 # restarting its watcher, leaves that store watched)
@@ -1971,11 +2606,11 @@ kill -TERM "$(cut -d' ' -f1 "$RS/rewake/rw/r6@$S6/pid" 2>/dev/null)" 2>/dev/null
 # later keeps it)
 mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r5"
 printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r5"
-rm -f "$RS/session-stores/r5"; rewake r5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
+rm -f "$RS/session-stores/r5"; rewake r5 AGENT_MAILBOX_REWAKE_MAX=5 >/dev/null 2>&1; ALSO=--also; regs r5 --config "$C2"; ALSO=
 expect "a session an older CLI registered keeps its store when another is added with --also" 0 - \
   test "$(grep -vc ' -$' "$RS/session-stores/r5" 2>/dev/null)" = 2
 # (first on one store, which woke it for mail it still holds: adding the second store doesn't wake it again for that)
-reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 >/dev/null 2>&1
+reg; echo hi | as rx send rw rx-0 - >/dev/null 2>&1; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 >/dev/null 2>&1
 ALSO=--also; reg --config "$C2"; reg --config "$C2"; reg; ALSO=
 expect "watch --also on a second store adds a line for it, and again adds none" 0 - test "$(grep -c . "$RS/session-stores/r9")" = 2
 # (two stores registered at once, as two background commands started together would: neither is lost)
@@ -1984,7 +2619,7 @@ n=0 lost=""; while [ $n -lt 5 ]; do rm -f "$RS/session-stores/r8"
 [ -z "$lost" ] && ok "two stores registered at once are both recorded" || no "two stores registered at once are both recorded" "lost in rounds:$lost"
 S2=$(grep -F /second "$RS/session-stores/r9" | cut -d' ' -f1); S1=$(grep -vF /second "$RS/session-stores/r9" | cut -d' ' -f1)
 echo hi | as rz send rw rz-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--config "*second*" --as rw read")
   ok "mail on the second store wakes the session with that store's read command" ;;
   (*) no "mail on the second store wakes the session with that store's read command" "$rc $r" ;; esac
@@ -1993,7 +2628,7 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
 [ "$(printf '%s\n' "$r" | grep -c 'new mail')" = 1 ] && ok "mail it woke for on one store before adding another doesn't wake it again" ||
   no "mail it woke for on one store before adding another doesn't wake it again" "$r"
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail on the first store wakes it, and mail it woke for on the other doesn't" ||
@@ -2005,10 +2640,10 @@ op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null)
   no "and the other store's run is stopped with it" "$(ps -o pid=,args= -p "$op")"
 # mail on both at once: all of it is passed on, in this wake or, if one store's run was stopped first, the next
 echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >/dev/null 2>&1
-r=$(rewake r9); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9)"
+r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60)"
 [ "$rc" = 2 ] && woken rx-2.md && woken rz-2.md && ok "mail on both stores at once is all passed on" ||
   no "mail on both stores at once is all passed on" "$rc $r"
-expect "with no mail on either it wakes once at the day's limit" 2 "daily limit" rewake r9
+expect "with no mail on either it wakes once at the day's limit" 2 "daily limit with no new mail" rewake r9 AGENT_MAILBOX_REWAKE_MAX=5
 # a watcher the agent started by hand on one store doesn't count for the other, though it's for the same name
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
@@ -2095,11 +2730,13 @@ if command -v jq >/dev/null 2>&1; then rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rew
 else sk "a stop the guard kept going isn't taken for one Claude Code waited at (no jq)"; fi
 # another hook holding one store (its mail pending, not yet passed on): a wake on the other store doesn't record that
 # mail as woken for, which is the other hook's to do
-"$SH" -c 'sleep 60; :' claude-rewake.sh & oh=$!; echo "$oh r9" > "$RS/rewake/rw/r9@$S1/pid"; echo x-other.md > "$RS/rewake/rw/r9@$S1/pending"
+# (its output goes nowhere, and it's stopped with its sleep, by its pid: a sleep left behind would hold the run's output
+# open for up to a minute after the run ends, and names nothing of the run's for the exit cleanup to find)
+"$SH" -c 'sleep 60; :' claude-rewake.sh > /dev/null 2>&1 & oh=$!; echo "$oh r9" > "$RS/rewake/rw/r9@$S1/pid"; echo x-other.md > "$RS/rewake/rw/r9@$S1/pending"
 echo hi | as rz send rw rz-o - >/dev/null 2>&1
 wakes "a wake on one store wakes for its mail" "rz-o.md" rewake r9
 expect "and leaves another hook's pending mail to that hook" 1 - grep -qx x-other.md "$RS/rewake/rw/r9@$S1/woke"
-kill "$oh" 2>/dev/null; wait "$oh" 2>/dev/null; rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S1/pending"
+kill_tree "$oh"; wait "$oh" 2>/dev/null; rm -f "$RS/rewake/rw/r9@$S1/pid" "$RS/rewake/rw/r9@$S1/pending"
 # the hook stopped just as a store's run has found mail: that mail is passed on, or wakes the next run, never neither
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
@@ -2110,12 +2747,12 @@ if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2
   kill -TERM "$hp" 2>/dev/null; wait "$bg"; rc=$?
   if [ "$rc" = 2 ] && grep -q "new mail" "$T/bg.out" && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke"; then
     ok "mail found as the hook stops is passed on, or wakes the next run"
-  else r=$(rewake r9); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
+  else r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; [ "$rc" = 2 ] && grep -q rx-7 "$RS/rewake/rw/r9@$S1/woke" &&
     ok "mail found as the hook stops is passed on, or wakes the next run" || no "mail found as the hook stops is passed on, or wakes the next run" "$rc $r"; fi
 else no "mail found as the hook stops is passed on, or wakes the next run" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
 # a store whose watcher can't go on says so once; the other store's mail still wakes the session after that
 mv "$C2" "$C2.off"
-expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9
+expect "a store that can't be watched wakes the session with its error" 2 "can't go on" rewake r9 AGENT_MAILBOX_REWAKE_MAX=60
 : > "$T/bg.out"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
 if up "$RS/rewake/rw/r9@$S1/pid"; then sleep 2; echo hi | as rx send rw rx-3 - >/dev/null 2>&1
   n=0; while [ $n -lt 20 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; wait "$bg"; rc=$?
@@ -2132,10 +2769,20 @@ expect "retiring the name on one store records it in the session's list" 0 - tes
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
 wakes "and the hook then watches only the other store" "rx-r.md" rewake r9
+# (at the end, every hook and watcher the section left running is stopped, with what it started, by the pid its pid file
+# holds: their command lines name the plugin, not this run's folder, so the exit cleanup wouldn't find them, and one
+# still running holds the run's output open until its 60 s limit)
+for f in "$RS"/run/*.pid "$RS"/rewake/*/*/pid; do [ -f "$f" ] || continue
+  p=$(cut -d' ' -f1 "$f" 2>/dev/null); case $p in (''|*[!0-9]*) continue ;; esac
+  # (only while that pid is still a hook or the CLI: a pid the system gave to something else since is left alone)
+  case $(ps -o args= -p "$p" 2>/dev/null) in (*claude-rewake*|*agent-mailbox*) kill_tree "$p" ;; esac; done
 
 elif [ -n "${CI:-}" ]; then no "the Claude Code asyncRewake hook" "no python3 3.9 or later for a terminal on CI"
 else sk "the Claude Code asyncRewake hook (no python3 3.9 or later for a terminal)"; fi
+}
+section rewake-hook sec_rewake_hook
 
+sec_received_headers() {
 echo "== received headers (dir)"
 T="$W/hdr"; mkdir -p "$T/store"
 for a in h1 h2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2232,7 +2879,10 @@ if [ -n "$SSH" ]; then
     env HOME="$W/home-h2b" "$SH" "$CLI" doctor
   tamper_dir "sed -i.bak 's|^key: .*|key: |' mailbox/agents/h2.md && rm -f mailbox/agents/h2.md.bak"
 else sk "doctor tells a retired name apart by key (no ssh-keygen -Y)"; fi
+}
+section received-headers sec_received_headers
 
+sec_send_stdin() {
 echo "== send - reads the body from stdin (dir)"
 T="$W/stdin"; mkdir -p "$T"; echo "from a file" > "$T/b"
 for a in i1 i2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2296,7 +2946,10 @@ else
   chmod -R u+w "$NR"
   expect "and the message is delivered" 0 "^x$" block i2 norec
 fi
+}
+section send-stdin sec_send_stdin
 
+sec_store_order() {
 echo "== send and consume change the store in a safe order (dir)"
 T="$W/order"; mkdir -p "$T/out"; echo x > "$T/b"
 for a in m1 m2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2478,9 +3131,12 @@ if [ -n "$SSH" ]; then
     no "a linked temp was published" "$(ls -lA "$N/n2")"
   rm -f "$N"/n2/*.tmp.*
 fi
+}
+section store-order sec_store_order
 
-if [ -n "$SSH" ]; then
+sec_key_change() {
 echo "== after a key change: holds' advice and trust's message, open or strict (git)"
+if [ -n "$SSH" ]; then
 # a sender holds an item, then its registered key is swapped. What its old key signed stops counting after trust only
 # in a store that requires signatures; elsewhere the old hold reads bad and still counts, and both messages say which.
 # Mode f is a store seen strict whose store.md is then edited to stop requiring signatures: a reader that saw it strict
@@ -2520,10 +3176,13 @@ for mode in o s f; do
       "z#1 is held by ko2 .*nokey: .*its old key's holds still count after that" as ko1 holds "z#1" --version v1
   fi
 done
-fi
+else sk "key-change (no ssh-keygen -Y)"; fi
+}
+section key-change sec_key_change
 
-if [ -n "$SSH" ]; then
+sec_strict_stores() {
 echo "== strict stores fail closed (git)"
+if [ -n "$SSH" ]; then
 T="$W/strict2"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in k1 k2 k3 k4; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
 as k1 init --require-signatures >/dev/null; for a in k1 k2 k3 k4; do as $a register --kind t --about t >/dev/null; done
@@ -2552,6 +3211,9 @@ expect "a hold whose sender's key was swapped still holds, pointing at agents fo
 sg k2 29990101T000100Z-k2-hg.md hg "hold: g#1 v1" "needs: none
 "
 expect "a hold whose header isn't plain, from a sender whose key was swapped, blocks, with the key advice" 5 "g#1 has a record from k2 whose header isn't plain .*changed: confirm k2's new key .*out of band \(.agents. shows its fingerprint\) and ask" as k1 holds "g#1" --version v1
+sg k2 29990101T000100Z-k2-hyy.md hyy "hold: yy#1 v1 "
+expect "one whose hold line doesn't parse, from that sender, says so, with the key advice" 5 \
+  "yy#1 has a record from k2 whose hold: or release: line doesn't parse \(29990101T000100Z-k2-hyy\.md, changed: confirm k2's new key" as k1 holds "yy#1" --version v1
 sg k3 29990101T000100Z-k3-hf1.md hf1 "hold:f1#1 v1"
 sg k3 29990101T000100Z-k3-hf2.md hf2 "hold: f2#1 v1" "x-trace: abc
 "
@@ -2574,9 +3236,14 @@ expect "a same-time pair where one header isn't plain blocks" 5 "q#1 has a recor
 # a signed hold whose sent, or item, doesn't parse blocks over the sender's older release, rather than being skipped
 for x in s t u w; do echo r | as k3 send k1 "r$x" - --release "$x#1 v1" >/dev/null; done
 SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hs.md hs "hold: s#1 v1"
-expect "a signed hold whose sent has a fraction of a second blocks over an older release" 5 "s#1 has a record from k3" as k1 holds "s#1" --version v1
+expect "a signed hold whose sent has a fraction of a second blocks over an older release, saying its sent doesn't parse" 5 \
+  "s#1 has a record from k3 whose sent: time doesn't parse \(20261112T235959Z-k3-hs\.md\); ask k3 to send it again" as k1 holds "s#1" --version v1
 sg k3 29990101T000100Z-k3-ht.md ht "hold: t#1 v1 "
-expect "a signed hold whose item doesn't parse (a trailing space) blocks" 5 "t#1 has a record from k3" as k1 holds "t#1" --version v1
+expect "a signed hold whose item doesn't parse (a trailing space) blocks, saying so" 5 \
+  "t#1 has a record from k3 whose hold: or release: line doesn't parse \(29990101T000100Z-k3-ht\.md\); ask k3 to send it again" as k1 holds "t#1" --version v1
+SGSENT=2026-11-12T23:59:59.500Z sg k3 20261112T235959Z-k3-hzz.md hzz "hold: zz#1 v1 "
+expect "one whose sent and item both don't parse says both" 5 \
+  "zz#1 has a record from k3 whose sent: and hold: or release: lines don't parse \(20261112T235959Z-k3-hzz\.md\)" as k1 holds "zz#1" --version v1
 # it's placed in delivery order, so it counts until that sender's next record
 SGSENT=2999-01-02T00:00:00Z sg k3 29990102T000000Z-k3-rs2.md rs2 "release: s#1 v1"
 expect "a later release from the same sender clears an odd-sent hold" 0 "s#1 released by k3" as k1 holds "s#1" --version v1
@@ -2620,8 +3287,13 @@ expect "or a shallow checkout can't fetch its full history" 1 "can't read this s
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+else sk "strict-stores (no ssh-keygen -Y)"; fi
+}
+section strict-stores sec_strict_stores
 
+sec_loose_plain_header() {
 echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
+if [ -n "$SSH" ]; then
 T="$W/loose"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in j1 j2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
 as j1 init >/dev/null; for a in j1 j2; do as $a register --kind t --about t >/dev/null; done
@@ -2632,8 +3304,11 @@ git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom:
   ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-j2/.config/agent-mailbox/keys/j2" "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
   git -C "$T/w" add -A && git -C "$T/w" -c user.name=e -c user.email=e@e commit -qm w && git -C "$T/w" push -q origin HEAD:main
 expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
-fi
+else sk "loose-plain-header (no ssh-keygen -Y)"; fi
+}
+section loose-plain-header sec_loose_plain_header
 
+sec_install_link() {
 echo "== installed link (install.sh)"
 T="$W/inst"; mkdir -p "$T"
 expect "install.sh links the CLI" 0 "linked" env HOME="$W/home-i1" "$SH" "$ROOTDIR/install.sh" --prefix "$T/prefix"
@@ -2687,6 +3362,9 @@ for a in r1 r2; do (cd "$T/rel" && HOME="$W/home-$a" "$SH" "$CLI" setup --store 
 (cd "$T/rel" && HOME="$W/home-r1" "$SH" "$CLI" init >/dev/null && HOME="$W/home-r1" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null &&
   HOME="$W/home-r2" "$SH" "$CLI" register --kind t --about t --no-key >/dev/null && echo hi | HOME="$W/home-r1" "$SH" "$CLI" send r2 rel -)  >/dev/null 2>&1
 expect "watch on a relative dir store ignores CDPATH" 0 "r1-rel.md" sh -c "cd '$T/rel' && HOME='$W/home-r2' CDPATH='$T/rel/other' '$SH' '$CLI' watch 1 3"
+}
+section install-link sec_install_link
+sec_doctor_odd_values() {
 echo "== doctor, messages and odd values (dir)"
 T="$W/odd/O'Brien"; mkdir -p "$T"
 for a in o1 o2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2763,7 +3441,10 @@ wait
 # a git store given by a path starting with '-' is a path, never an option to git clone
 mkdir -p "$T/rel3"; git init -q --bare "$T/rel3/-st.git"
 expect "a git store at a relative path starting with - works" 0 "initialized" in_dir "$T/rel3" env HOME="$W/home-g9" AGENT_MAILBOX_STORE=-st.git "$SH" "$CLI" init
+}
+section doctor-odd-values sec_doctor_odd_values
 
+sec_terminal_escapes() {
 echo "== text from the store is shown, never obeyed by the terminal (dir)"
 T="$W/esc"; mkdir -p "$T"
 for a in x1 x2 x3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -2825,7 +3506,7 @@ xrec() { printf -- '---\nname: x3\nkind: %s\nabout: %s\nruns_on: \nwatch: \nstat
 xrec "$(printf '\033[31mOWNER\033[0m')" "$(printf 'x\rx1                       active   human      no   Owner')"
 lacks "agents doesn't print a record's carriage return raw" "$CRB" as x1 agents
 lacks "or its terminal escapes" "$ESCB" as x1 agents
-has "it spells them out" 'x3                       active   \x1b[31mOWNER\x1b[0m no   x\x0dx1 ' as x1 agents
+has "it spells them out" 'x3                       active   \x1b[31mOWNER\x1b[0m no   -                -        -                        x\x0dx1 ' as x1 agents
 long=$(printf '%0300d' 0 | tr 0 A); cjk=a; i=0; while [ $i -lt 100 ]; do cjk="${cjk}漢"; i=$((i+1)); done
 xrec t "$long"
 row=$(as x1 agents | grep '^x3 ')
@@ -2849,6 +3530,9 @@ expect "and by a path relative to the current folder" 6 "^misrouted$" in_dir "$I
 expect "verify by path reads a message in the right inbox as before" 6 "^unsigned$" as x1 verify "$I/20260101T000004Z-x2-md.md"
 cp "$I/20260101T000012Z-x2-mis.md" "$T/mis-copy.md"
 expect "and a copy outside any inbox as before" 6 "^unsigned$" as x1 verify "$T/mis-copy.md"
+}
+section terminal-escapes sec_terminal_escapes
+sec_holds_rules() {
 echo "== holds and header rules (git)"
 T="$W/rules"; mkdir -p "$T"; git init -q --bare "$T/store.git"
 for a in u1 u2; do as $a setup --store "$T/store.git" --name $a >/dev/null; done
@@ -2996,7 +3680,10 @@ echo h | as u2 send u1 h-18 - --hold "item#18 v1" >/dev/null; mv "$T/store.git" 
 expect "holds won't decide while the store can't be reached" 1 "can't update from the store" as u1 holds "item#18" --version v1
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
+}
+section holds-rules sec_holds_rules
 
+sec_send_secrets() {
 echo "== send refuses obvious secrets (dir)"
 T="$W/sec"; mkdir -p "$T"
 for a in sec1 sec2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3178,10 +3865,16 @@ echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
 expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
+}
+section send-secrets sec_send_secrets
 
+sec_capability_probe() {
 echo "== capability probe"
-mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"
+old_ssh
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+}
+section capability-probe sec_capability_probe
+sec_cli_hardening() {
 echo "== CLI hardening: update --key, register --key's config, line breaks, the passphrase prompt"
 T="$W/harden"; mkdir -p "$T/store"
 for a in hp1 hp2 hp3; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3252,6 +3945,9 @@ if [ -n "$SSH" ]; then
   : > "$T/asklog"; runner 10.2 pp4; "$T/r.sh" < /dev/null >/dev/null 2>&1
   [ "$(asked)" = unset ] && ok "with no terminal, signing leaves SSH_ASKPASS_REQUIRE alone" || no "no terminal, yet SSH_ASKPASS_REQUIRE was set" "$(cat "$T/asklog")"
 fi
+}
+section cli-hardening sec_cli_hardening
+sec_dir_name_race() {
 echo "== dir: two sends that pick the same file name at once can't overwrite each other"
 # one name, one topic, one recipient, one second (the clock shim pins it): sender A pauses at its first publish step
 # (the shim stops ln or mv onto the message or its .sig until told to go) while sender B sends in full. Separate state
@@ -3322,6 +4018,9 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
+}
+section dir-name-race sec_dir_name_race
+sec_second_watcher() {
 echo "== a second watcher for a name on a machine warns"
 T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
 as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
@@ -3372,6 +4071,9 @@ rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p3=$(wpid)
 out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
 stopw "$p3"
+}
+section second-watcher sec_second_watcher
+sec_dir_store_gone() {
 echo "== dir: watch notices a store that's gone"
 T="$W/vanish"; mkdir -p "$T/store"
 for a in vw1 vw2; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
@@ -3428,12 +4130,60 @@ expect "and so does holds on one whose store.md goes during the listing" 1 "can'
   env PATH="$T/shim-md2:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
 mv "$T/store.md.gone" "$T/store/mailbox/store.md"
 # install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+old_ssh
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
+}
+section dir-store-gone sec_dir_store_gone
+sec_bats() {
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"
 elif ! [ "$(bats --count "$ROOTDIR/test" 2>/dev/null)" -gt 0 ] 2>/dev/null; then no "test/*.bats (bats found no tests)"
-elif TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"
-else no "test/*.bats (its failures are above)"; fi
+elif [ -z "$TT" ]; then
+  if TEST_SHELL="$SH" bats "$ROOTDIR/test"; then ok "test/*.bats"; else no "test/*.bats (its failures are above)"; fi
+else
+  # (with TEST_TIMES: streamed as it runs, so a test that hangs still shows; each test's own time, from --timing, goes
+  # in the file, and the bats line itself gets the rest: bats' own startup, the files' setup_file, and each test's own
+  # overhead outside its timed body)
+  { TEST_SHELL="$SH" bats -F tap --timing "$ROOTDIR/test" 2>&1; echo $? > "$W/bats.rc"; } | tee "$W/bats.out"
+  _br=$(cat "$W/bats.rc" 2>/dev/null); _bt=$(bats_times "$TSEC" < "$W/bats.out")
+  [ -z "$_bt" ] || printf '%s\n' "$_bt" >> "$TT"
+  _tlast=$((_tlast + $(printf '%s\n' "$_bt" | awk -F '\t' '{ s += $1 } END { print s + 0 }')))
+  if [ "$_br" = 0 ]; then ok "test/*.bats"; else no "test/*.bats (its failures are above)"; fi
+fi
+}
+section bats sec_bats
+
+PLAN=$(printf '%s' "$SECTIONS" | awk '{ print $1 }')
+if [ -n "$ONLY" ]; then
+  case $ONLY in (*[!,abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: --only takes ids joined by commas, with no spaces (see --list)" >&2; exit 64 ;; esac
+  for _sid in $(printf '%s\n' "$ONLY" | tr ',' ' '); do
+    printf '%s\n' "$PLAN" | grep -qxF -- "$_sid" || { echo "test/run.sh: no section '$_sid' (see --list)" >&2; exit 64; }
+  done
+  PLAN=$(printf '%s\n' "$PLAN" | awk -v o=",$ONLY," 'index(o, "," $1 ",")')
+  [ -n "$PLAN" ] || { echo "test/run.sh: --only names no section (see --list)" >&2; exit 64; }
+elif [ -n "$SHARD" ]; then
+  # (the longest first, each to the shard with the least so far, the first of them on a tie: every shard of n runs
+  # the same split. A section with no time there counts 1 s)
+  PLAN=$(printf '%s\n' "$PLAN" | awk -v i="${SHARD%/*}" -v n="${SHARD#*/}" -v f="$ROOTDIR/test/section-costs" '
+    BEGIN { while ((getline l < f) > 0) if (l ~ /^[a-z0-9][a-z0-9-]* [0-9]+$/) { split(l, a, " "); c[a[1]] = a[2] + 0 } }
+    { id[++m] = $1; w[m] = ($1 in c) ? c[$1] : 1 }
+    END { for (k = 1; k <= m; k++) { b = 0; for (j = 1; j <= m; j++) if (!t[j] && (!b || w[j] > w[b])) b = j
+        s = 1; for (q = 2; q <= n; q++) if (load[q] < load[s]) s = q
+        load[s] += w[b]; t[b] = s }
+      for (k = 1; k <= m; k++) if (t[k] == i) print id[k] }')
+  [ -n "$PLAN" ] || { echo "test/run.sh: shard $SHARD has no sections (see --list)" >&2; exit 64; }
+fi
+# (shuffled by a Park-Miller generator, not awk's rand, which some awks seed from the clock whatever the seed)
+[ -z "$ORDER" ] || PLAN=$(printf '%s\n' "$PLAN" | awk -v s="$ORDER" '
+  BEGIN { x = s % 2147483647; if (x < 1) x = 1; for (i = 0; i < 9 + s % 97; i++) x = x * 16807 % 2147483647 }
+  NF { x = x * 16807 % 2147483647; print x, $0 }' | sort -n | cut -d' ' -f2)
+if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
+[ -z "$ORDER" ] || echo "order: seed $ORDER"
+# (a section that runs no check, or whose function is gone, fails: it would otherwise pass having tested nothing)
+for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"; TSEC=$_sid; times_mark; _sn=$((pass + fail + skip))
+  set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; _sr=$?
+  [ $((pass + fail + skip)) -gt "$_sn" ] || no "section $_sid ran no checks (exit $_sr)"; done
+times_summary
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]

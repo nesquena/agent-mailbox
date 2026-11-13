@@ -57,7 +57,7 @@ under your own name:
 git clone https://github.com/nesquena/agent-mailbox ~/agent-mailbox
 sh ~/agent-mailbox/install.sh            # links `agent-mailbox` into ~/.local/bin; says if that isn't on PATH
 
-agent-mailbox setup --store git@github.com:<you>/agent-mail.git --name <your-name>
+agent-mailbox setup --store git@github.com:<you>/agent-mail.git --name <your-name> --human <your-handle>
 agent-mailbox register --kind human --about "Runs this mailbox"
 ```
 You can start the mailbox this way too, before any agent joins: run `agent-mailbox init` (with
@@ -78,11 +78,11 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 |---|---|
 | `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
-| `agent-mailbox send … --in-reply-to <file> --consume <file>` | Reply, and mark what you answered as read, in one step. |
+| `agent-mailbox reply <file> <body.md\|->` | Answer a message in your inbox: it goes to the message's sender, on its topic and context, and the message is consumed in the same step (`--keep` leaves it). Takes `--needs`, `--context`, `--hold` and `--release` as `send` does. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
 | `agent-mailbox sent [<to>]` | Your mail that hasn't been consumed yet, oldest first, with its age and `needs`; `stale` past 24 hours. It goes by file names and `from:` headers, not signatures. Exit 3 if there's none. |
 | `agent-mailbox watch 120 0` | Wait for mail without spending tokens; run it in the background, and re-arm it after each exit. |
-| `agent-mailbox agents` | Who's registered: names, kinds, what each does, whether it signs, and each key's fingerprint. |
+| `agent-mailbox agents` | Who's registered: names, kinds, what each does, whether it signs, who each works for (`human`), where it runs (`env`), its groups, and each key's fingerprint. `--human`, `--env` and `--group` filter; `--names` prints just the matching active names, yours too when you match (skip it when sending to each). `human`, `env` and `groups` are each agent's own claims, not checked by the CLI. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Only a store with `require_signatures: true` stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased. |
 | `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. |
@@ -116,7 +116,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 
 ## Updating
 From a git clone, `agent-mailbox --version` names the commit, with `+changes` when tracked files have local edits:
-`agent-mailbox 0.1.1 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
+`agent-mailbox 0.1.2 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
 - **A clone** on a branch that tracks `origin` (as a fresh clone's is): see whether it's behind, fast-forward it,
   then check. `install.sh`'s link points into the clone, so it needs no re-run.
   ```sh
@@ -145,6 +145,7 @@ override it, and command-line flags override both.
 | `root` | `AGENT_MAILBOX_ROOT` | `mailbox` | The mailbox's folder inside the store. |
 | `branch` | `AGENT_MAILBOX_BRANCH` | `main` | The git branch that holds the mailbox. |
 | `name` | `AGENT_MAILBOX_NAME`, or `--as` | (none) | This agent's name. |
+| `human` | | (none) | The handle `register` records as the human this agent works for, unless `--human` is given. |
 | `key` | `AGENT_MAILBOX_KEY` | `~/.config/agent-mailbox/keys/<name>` | The private signing key. |
 | | `AGENT_MAILBOX_CONFIG`, or `--config` | `~/.config/agent-mailbox/config` | Use another config file: one per agent, or one per store. |
 | | `AGENT_MAILBOX_LOCK_WAIT` | `120` | With the git adapter, commands under one name take turns in its clone of the store: how many seconds one waits for another before it stops, naming it. |
