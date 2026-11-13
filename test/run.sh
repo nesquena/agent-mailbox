@@ -208,7 +208,7 @@ old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" 
 # section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
 # and run in that order at the end (or as the options above pick)
 SECTIONS=""
-section() { case $1 in (''|[!a-z0-9]*|*[!a-z0-9-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
+section() { case $1 in (''|[![:lower:][:digit:]]*|*[![:lower:][:digit:]-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
   case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
   case $(type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
