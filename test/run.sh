@@ -929,7 +929,7 @@ case " $ADAPTERS " in *" git "*)
   echo hi > "$T/m"; errs=""
   for t in 1 2 3 4 5 6 7 8; do
     as lr send lp q$t-a "$T/m" >/dev/null 2>&1; as lr send lp q$t-b "$T/m" >/dev/null 2>&1
-    fa=$(as lp list 2>/dev/null | grep -- "-lr-q$t-a\.md$"); fb=$(as lp list 2>/dev/null | grep -- "-lr-q$t-b\.md$")
+    ls_=$(as lp list 2>/dev/null); fa=$(printf '%s\n' "$ls_" | grep -- "-lr-q$t-a\.md$"); fb=$(printf '%s\n' "$ls_" | grep -- "-lr-q$t-b\.md$")
     as lp send lr re-$t-a "$T/m" --in-reply-to "$fa" --consume "$fa" > "$T/o1" 2>&1 & p1=$!
     as lp send lr re-$t-b "$T/m" --in-reply-to "$fb" --consume "$fb" > "$T/o2" 2>&1 & p2=$!
     wait $p1 || errs="$errs [$t-a: $(tail -n 1 "$T/o1")]"; wait $p2 || errs="$errs [$t-b: $(tail -n 1 "$T/o2")]"
@@ -1035,10 +1035,15 @@ case " $ADAPTERS " in *" git "*)
     chmod u+w "$ld"; rm -f "$lk" "$ld/break"
   fi
   # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
-  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0
-  while [ $n -lt 30 ] && ! grep -q "^$wpid " "$W/home-lp/.local/state/agent-mailbox/run/lp.pid" 2>/dev/null; do sleep 1; n=$((n+1)); done
-  within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
-  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
+  # (it's running once its pid file names a process of the one started here: $! is the subshell `as` runs in, and the
+  # watch a child of it, so the file never holds $! itself)
+  as lp watch 1 60 > "$T/lwatch" 2>&1 & wpid=$!; n=0; wf="$W/home-lp/.local/state/agent-mailbox/run/lp.pid"; wp=""
+  while [ $n -lt 300 ]; do wp=$(cut -d' ' -f1 "$wf" 2>/dev/null)
+    [ -n "$wp" ] && tree "$wpid" | grep -qx -- "$wp" && break; wp=""; sleep 0.1; n=$((n+1)); done
+  if [ -n "$wp" ]; then
+    within 20 "while watch runs, a send under its name doesn't wait for it" 0 "^sent " as lp send lr while-watching "$T/m"
+  else no "while watch runs, a send under its name doesn't wait for it" "watch didn't start within 30 s: $(cat "$T/lwatch")"; fi
+  kill_tree "$wpid"; wait "$wpid" 2>/dev/null; unset AGENT_MAILBOX_LOCK_WAIT
   # what a command cut off part-way left in the clone is cleared at the next one: a half-removed rebase, a consume never
   # committed, a file it wrote but never added, and git's own lock on the index
   mkdir -p "$ck/.git/rebase-merge"; : > "$ck/.git/rebase-merge/autostash"
@@ -2354,19 +2359,20 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20
     ok "a warning watch prints before its listing isn't counted as mail" || no "a warning watch prints before its listing isn't counted as mail" "not recorded" ;;
   (*) no "a warning watch prints before its listing isn't counted as mail" "$rc $r" ;; esac
 # a watch that hangs (a fetch over a dead connection) can't run the hook past the day: at its deadline (here the 2 s
-# limit, an interval and 15 s: 18 s after it starts) the session hears the daily note, and nothing it started lingers
+# limit, an interval and its 2 s check: 5 s after it starts) the session hears the daily note, and nothing it started
+# lingers
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG="99$$" CCOUT="$T/bg.out" & bg=$!; n=0
+fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0
 while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
 if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
   kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
 else wait "$bg"; rc=$?
   case "$rc $(cat "$T/bg.out")" in ("2 "*"daily limit"*) ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
     (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "exit $rc: $(cat "$T/bg.out")" ;; esac
-  # (the deadline is 18 s out: a watchdog that slept its 15 s past it would end at 30)
-  [ "$n" -le 24 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 18s"
+  # (the deadline is 5 s out: a watchdog that slept a 15 s check past it would end at 17 or later)
+  [ "$n" -le 10 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 5s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
@@ -2380,13 +2386,13 @@ if up "$RS/run/rw.pid"; then w1=$(cut -d' ' -f1 "$RS/run/rw.pid"); kill -KILL "$
   kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; wait "$bg"
 else no "a watcher killed by a signal is started again, quietly" "no watcher started"; kill "$bg" 2>/dev/null; fi
 rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
-# a hook whose session's shell is gone (Claude Code stopped only that) stops itself, within its 15 s check
+# a hook whose session's shell is gone (Claude Code stopped only that) stops itself, within its check (here 2 s)
 printf '%s\n' 'printf '"'"'{"session_id":"r1"}'"'"' | env HOME="$RH" AI_AGENT=claude-code_2-1-318_harness CLAUDE_PID=$$ \
-  AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 "$RSH" "$RHOOK" 2>/dev/null >/dev/null' > "$T/wrap.sh"
+  AGENT_MAILBOX_REWAKE_INTERVAL=1 AGENT_MAILBOX_REWAKE_MAX=60 AGENT_MAILBOX_REWAKE_CHECK=2 "$RSH" "$RHOOK" 2>/dev/null >/dev/null' > "$T/wrap.sh"
 bgterm "$T/wpid" "$T/wrap.sh"
 if up "$R1/pid" && up "$T/wpid"; then hp=$(cut -d' ' -f1 "$R1/pid"); kill -TERM "$(cat "$T/wpid")"; n=0
-  while [ $n -lt 25 ] && kill -0 "$hp" 2>/dev/null; do sleep 1; n=$((n+1)); done
-  kill -0 "$hp" 2>/dev/null && { no "a hook whose shell is gone stops itself" "still running after 25 s"; kill "$hp"; } ||
+  while [ $n -lt 100 ] && kill -0 "$hp" 2>/dev/null; do sleep 0.1; n=$((n+1)); done
+  kill -0 "$hp" 2>/dev/null && { no "a hook whose shell is gone stops itself" "still running after 10 s (its check is 2 s)"; kill "$hp"; } ||
     ok "a hook whose shell is gone stops itself"
   expect "and frees the lock" 1 - test -e "$R1/pid"
 else no "a hook whose shell is gone stops itself" "it didn't start"; fi
