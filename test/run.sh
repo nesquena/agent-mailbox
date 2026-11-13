@@ -211,7 +211,7 @@ SECTIONS=""
 # (the id's letters are spelled out, not a-z: macOS sh, bash 3.2, matches a range by the locale's collation)
 section() { case $1 in (''|[!abcdefghijklmnopqrstuvwxyz0123456789]*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
   case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
-  case $(type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
+  case $(LC_ALL=C; export LC_ALL; type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
 
 sec_safeguards() {
@@ -392,16 +392,6 @@ sed 's/^section bats sec_bats$/section Bats sec_bats/' "$0" > "$W/guard/test/bad
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/badid.sh" --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section id 'Bats' isn't lowercase" &&
   ok "and so does a section id that isn't lowercase letters, digits and -" || no "a bad section id didn't stop the run (exit $rc)" "$out"
-# each section has its own function, defined once (a second definition, or a function shared by two ids, would run one
-# section's checks under both ids and the other's never); sec_adapter alone takes an argument and serves each adapter
-d=$(printf '%s' "$SECTIONS" | awk '$2 != "sec_adapter" { print $2 }' | sort | uniq -d
-  printf '%s' "$SECTIONS" | awk '$2 == "sec_adapter" && $1 != "adapter-" $3 { print $1 " runs adapter " $3 }'
-  for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do
-    [ "$(grep -c "^[[:space:]]*$f[[:space:]]*()" "$0")" = 1 ] || echo "$f"; done
-  for f in $(sed -n 's/^[[:space:]]*\(sec_[a-z0-9_]*\)[[:space:]]*().*/\1/p' "$0" | sort -u); do
-    printf '%s' "$SECTIONS" | awk -v f="$f" '$2 == f { n++ } END { exit !n }' || echo "$f (never registered)"; done)
-[ -z "$d" ] && ok "each section has its own function, defined once, and each sec_ function is a section's" ||
-  no "a section's function is shared, defined more than once, or not registered" "$d"
 # the suite run by zsh (when it's here; the CLI under sh, as zsh isn't a shell the CLI supports): a run of several
 # sections runs each of them
 if command -v zsh >/dev/null 2>&1; then
@@ -409,6 +399,19 @@ if command -v zsh >/dev/null 2>&1; then
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^== setup says when pinned' && printf '%s\n' "$out" | grep -q "^== a signed record whose header" &&
     ok "under zsh, a run of two sections runs both" || no "under zsh, a run of two sections didn't run both (exit $rc)" "$out"
 else sk "under zsh, a run of two sections runs both (no zsh here)"; fi
+# a section that runs no check (here bats, made empty after it's registered) fails the run, as one whose function is
+# gone would
+sed 's/^section bats sec_bats$/section bats sec_bats; sec_bats() { :; }/' "$0" > "$W/guard/test/hollow.sh"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only bats 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL section bats ran no checks" &&
+  ok "a section that runs no checks fails the run" || no "a section that ran no checks passed (exit $rc)" "$out"
+# an adapter given twice runs once, and --only won't take ids with spaces (it would run only those it could match)
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
+  ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --only 'bats, safeguards' --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "no spaces" &&
+  ok "--only refuses ids with spaces" || no "--only took ids with spaces (exit $rc)" "$out"
 }
 section safeguards sec_safeguards
 
@@ -1880,7 +1883,7 @@ exec "%s" "$@"
       ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-g3/.config/agent-mailbox/keys/g3" "$f" &&
       git add -A && git commit -qm inject && git push -q origin HEAD:main)
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
-  fi
+  else sk "git-replayed-releases (no ssh-keygen -Y)"; fi
   }
   section git-replayed-releases sec_git_replayed_releases
   ;;
@@ -1914,7 +1917,7 @@ out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
   sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
 expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
-fi
+else sk "pins-on-move (no ssh-keygen -Y)"; fi
 }
 section pins-on-move sec_pins_on_move
 
@@ -3088,7 +3091,7 @@ for mode in o s f; do
       "z#1 is held by ko2 .*nokey: .*its old key's holds still count after that" as ko1 holds "z#1" --version v1
   fi
 done
-fi
+else sk "key-change (no ssh-keygen -Y)"; fi
 }
 section key-change sec_key_change
 
@@ -3191,7 +3194,7 @@ expect "or a shallow checkout can't fetch its full history" 1 "can't read this s
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
-fi
+else sk "strict-stores (no ssh-keygen -Y)"; fi
 }
 section strict-stores sec_strict_stores
 
@@ -3208,7 +3211,7 @@ git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom:
   ssh-keygen -Y sign -q -n agent-mailbox -f "$W/home-j2/.config/agent-mailbox/keys/j2" "$T/w/mailbox/inbox/j1/29990101T000100Z-j2-rm.md" &&
   git -C "$T/w" add -A && git -C "$T/w" -c user.name=e -c user.email=e@e commit -qm w && git -C "$T/w" push -q origin HEAD:main
 expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
-fi
+else sk "loose-plain-header (no ssh-keygen -Y)"; fi
 }
 section loose-plain-header sec_loose_plain_header
 
@@ -4083,8 +4086,10 @@ fi
   NF { x = x * 16807 % 2147483647; print x, $0 }' | sort -n | cut -d' ' -f2)
 if [ -n "$LIST" ]; then [ -z "$PLAN" ] || printf '%s\n' "$PLAN"; exit 0; fi
 [ -z "$ORDER" ] || echo "order: seed $ORDER"
-for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"; TSEC=$_sid; times_mark
-  set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; done
+# (a section that runs no check, or whose function is gone, fails: it would otherwise pass having tested nothing)
+for _sid in $PLAN; do W="$RUNW/$_sid"; mkdir -p "$W"; TSEC=$_sid; times_mark; _sn=$((pass + fail + skip))
+  set -- $(printf '%s' "$SECTIONS" | awk -v id="$_sid" '$1 == id { print; exit }'); shift; "$@"; _sr=$?
+  [ "$_sr" != 127 ] && [ $((pass + fail + skip)) -gt "$_sn" ] || no "section $_sid ran no checks (exit $_sr)"; done
 times_summary
 echo "passed $pass, failed $fail, skipped $skip"
 [ "$fail" -eq 0 ]
