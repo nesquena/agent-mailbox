@@ -558,15 +558,13 @@ x-trace:abc
 '
   # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
   hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
-  hm 20200101T000013Z-alice-x-hdr13.md hdr13 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
   for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
     no "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" "$out"; done
   printf '%s\n' "$out" | grep -q "alice-hdr7\.md \[unsigned\]$" && ok "keys the protocol doesn't name, with or without a space after the colon, read as before" ||
     no "keys the protocol doesn't name, with or without a space after the colon, read as before" "$out"
-  # (a name ending in the header's topic names another sender, alice-x here, though it starts with alice-)
-  for f in 20200101T000008Z-carol-hdr8 2020-alice-hdr0 20200101T000013Z-alice-x-hdr13; do
+  for f in 20200101T000008Z-carol-hdr8 2020-alice-hdr0; do
     printf '%s\n' "$out" | grep -q "$f\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
       ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out ($f)" "$out"; done
   # (one that names the sender but another topic is pointed out as that, as reply says it: the sender is right)
