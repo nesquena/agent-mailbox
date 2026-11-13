@@ -15,6 +15,13 @@
   <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
   `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
   calling that header not plain.
+- **`list` and `read`: sender, topic and age, filters, and stale mail.** `list --long` shows each message's sender,
+  topic, age and `needs`, and marks it `stale` once it has waited over 24 hours, with the same age rule as `sent`, so
+  the recipient can raise stale mail too (`PROTOCOL.md` section 5). Its values come from the header, unverified, with
+  control characters spelled out; a sender or topic that isn't a plain name shows `?`, and a file name that doesn't
+  name the header's sender is marked, as `read` marks it. `--from`, `--topic` and `--context` on `list` and `read` keep
+  only mail whose unverified header has that value, and `read <file>...` reads just the messages named, refusing any
+  that isn't in your inbox. Plain `list` prints exactly what it did before.
 
 ## 0.1.2 (2026-11-12)
 

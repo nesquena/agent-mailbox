@@ -29,11 +29,17 @@
 #   reply <file> <body.md|-> [--needs <text>] [--context <c>] [--hold|--release "<item> <version>"] [--keep]
 #                                       answer a message in your inbox: send to its sender, on its topic and context,
 #                                       and consume it in the same change (--keep: leave it in your inbox)
-#   list                                your inbox, oldest first (exit 0: some, 3: none)
+#   list [--long] [--from <name>] [--topic <t>] [--context <c>]
+#                                       your inbox, oldest first (exit 0: some, 3: none); --long adds each message's
+#                                       from, topic, age and needs, and stale past 24 h, from its header (unverified)
 #   sent [<to>]                         your mail still waiting in recipients' inboxes (not yet consumed), oldest first,
 #                                       with its age and needs, and stale past 24 h (exit 0 / 3); it goes by file
 #                                       names and from: headers, not signatures
-#   read [--except <file>]...           every message in full, with its signature status (exit 0 / 3)
+#   read [<file>...] [--except <file>]... [--from <name>] [--topic <t>] [--context <c>]
+#                                       every message in full, or just the files named (in your inbox), with its
+#                                       signature status (exit 0 / 3). On list and read, --from, --topic and --context
+#                                       keep only mail whose header has that value: unverified headers, so only read's
+#                                       status says who signed it
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
@@ -236,7 +242,45 @@ other_watcher() { set -- $(cat "$1" 2>/dev/null); [ "${3:-}" = "$STORE_ID" ] || 
 # wrong name (another store's, or the one a session's watch recorded) than no mail (exit 1). A retired name has its record
 no_mail() { [ -f "$(record "$ME")" ] ||
   die "'$ME' isn't registered in this mailbox: check the name (pass --as, or see whoami for the one in use), or register"
-  echo "no mail for $ME"; exit 3; }
+  echo "no mail for $ME${1:-}"; exit 3; }
+# AGE_AWK: awk functions for a message's age, shared by sent and list --long. age(<sent>, <now>) sets AGE to the time
+# from sent to now, both UTC (as "45s", "12m", "3h", "1d2h"), and returns 1 when that's over 24 h (stale mail,
+# PROTOCOL.md section 5). A sent that isn't a real time in the form send writes (pass "?" for one that isn't SENT_RE),
+# or that's ahead of now by more than a minute of clock skew, reads "?". Days come from the civil date (no date -d,
+# which BSD date lacks)
+AGE_AWK='
+  function ok(s,  y, m, d, n) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+    n = m == 2 ? (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31)
+    return m >= 1 && m <= 12 && d >= 1 && d <= n && substr(s, 12, 2) + 0 <= 23 && substr(s, 15, 2) + 0 <= 59 && substr(s, 18, 2) + 0 <= 60 }
+  function t(s,  y, m, e, d) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; if (m <= 2) y--; e = y % 400
+    d = int(y / 400) * 146097 + e * 365 + int(e / 4) - int(e / 100) + int((153 * ((m + 9) % 12) + 2) / 5) + substr(s, 9, 2) - 719469
+    return d * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2) }
+  function age(s, now,  a) { a = s == "?" || !ok(s) ? -1 : t(now) - t(s)
+    if (a < 0 && a >= -60 && ok(s)) a = 0
+    AGE = a < 0 ? "?" : a < 60 ? a "s" : a < 3600 ? int(a / 60) "m" : a < 86400 ? int(a / 3600) "h" : int(a / 86400) "d" int(a % 86400 / 3600) "h"
+    return a > 86400 }'
+# mail filters (list and read: --from, --topic, --context), each a name or empty. picked <file>: the message passes
+# them all; with any set, only a message whose header is plain (hdr_ok) can pass, compared by its header's value
+MF="" MT="" MC=""
+picked() { [ -n "$MF$MT$MC" ] || return 0; hdr_ok "$1" || return 1
+  [ -z "$MF" ] || [ "$(field from "$1")" = "$MF" ] || return 1
+  [ -z "$MT" ] || [ "$(field topic "$1")" = "$MT" ] || return 1
+  [ -z "$MC" ] || [ "$(field context "$1")" = "$MC" ]; }
+# one_name <option> <value>: refuse an option value that isn't one name; agents', setup's, register's, update's, list's
+# and read's name options all check with this, so the rule and its message are the same everywhere
+one_name() { matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'"; }
+# filter_opt <option> <value>: take one of list's and read's filters, once each; the value must be a name, as send
+# writes them
+filter_opt() { once "$1"; one_name "$1" "$2"
+  case "$1" in (--from) MF=$2 ;; (--topic) MT=$2 ;; (--context) MC=$2 ;; esac; }
+# names_sender <file name> <from> <topic>: the file name is <stamp>-<from>-<topic>.md, as send writes it (only
+# <stamp>-<from>- when the topic isn't a name). The header, not the file name, says who sent a message, so read and
+# list --long point out a file name that names another sender. Call it only for a from that is a name
+names_sender() { ns='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
+  if matches "$NAME_RE" "$3"; then case "$1" in ($ns-"$2-$3".md) return 0 ;; esac
+  else case "$1" in ($ns-"$2"-*) return 0 ;; esac; fi; return 1; }
+# what the filters ask for, for "no mail for <me>..."
+filter_note() { printf '%s' "${MF:+ from $MF}${MT:+ on topic $MT}${MC:+ in context $MC}"; }
 stamp_iso() { echo "$1" | sed -E 's/^(....)(..)(..)T(..)(..)(..)Z$/\1-\2-\3T\4:\5:\6Z/'; }
 # OpenSSH 8.1+ lists `ssh-keygen -Y sign` in its usage; older versions don't (ERE, so BSD grep reads it the same)
 have_ssh() { command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -Y 2>&1 | grep -Eq 'ssh-keygen -Y (sign|verify)'; }
@@ -252,7 +296,7 @@ claim() { cv=$(field "$1" "$2" 2>/dev/null); case "$1" in (groups) matches "$GRO
 # valid_claim <option> <value>: refuse a --human, --env or --groups value that isn't well formed (empty clears it)
 valid_claim() { [ -n "$2" ] || return 0
   case "$1" in (--groups) matches "$GROUPS_RE" "$2" || die "--groups takes up to 16 names (lowercase a-z, 0-9, '.', '-'; up to 63 each), separated by spaces, not '$2'" ;;
-    (*) matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'" ;; esac; }
+    (*) one_name "$1" "$2" ;; esac; }
 # write $2 to $1 atomically: a temp file in the same directory, then a rename
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
 # temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
@@ -736,7 +780,7 @@ agents)
     case "$1" in --names) names=1; shift; continue ;; --human|--env|--group) ;; *) misplaced "$1"; unknown "$1" ;; esac
     [ $# -ge 2 ] || die "$1 needs a value"
     # (each value is one name: one with spaces or a pattern would be split or expanded below)
-    matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'"
+    one_name "$1" "$2"
     case "$1" in --human) once "$1"; fh=$2 ;; --env) once "$1"; fe=$2 ;; --group) fg="$fg $2" ;; esac; shift 2
   done
   load_adapter; ad_sync; need_store
@@ -886,10 +930,33 @@ send)
   ad_commit "mail(to-$to): $topic" $paths
   echo "sent $(rel "$f")" ;;
 list)
-  [ $# -eq 0 ] || unknown "$1"
+  long="" seen=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --long) long=1; shift ;;
+      --from|--topic|--context) [ $# -ge 2 ] || die "$1 needs a name"; filter_opt "$1" "$2"; shift 2 ;;
+      *) unknown "$1" ;; esac
+  done
   need_me; load_adapter; ad_sync; need_store
-  mail=$(inbox_files "$ME"); [ -n "$mail" ] || no_mail
-  printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean ;;
+  mail=$(inbox_files "$ME" | while IFS= read -r p; do picked "$p" && printf '%s\n' "$p"; done)
+  [ -n "$mail" ] || no_mail "$(filter_note)"
+  [ -n "$long" ] || { printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean; exit 0; }
+  # --long: <path> from <from> topic <topic> age <age>[ stale][ <mark>][ needs: <needs>], from the header as written
+  # (not checked against a signature: read does that). A from or topic that isn't a name shows "?", so no header can
+  # spell out a row of its own; a file name that doesn't name the header's sender is marked, as read marks it; and
+  # needs, the only free text, comes last. Each message goes to awk as six lines (path, from, topic, sent, needs, and
+  # ok, bad or mismatch), so no header value can shift another; a header that isn't plain (hdr_ok) is read as no values
+  printf '%s\n' "$mail" | while IFS= read -r p; do
+    if hdr_ok "$p"; then s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
+      fr=$(field from "$p"); tp=$(field topic "$p"); mk=ok
+      if matches "$NAME_RE" "$fr"; then names_sender "${p##*/}" "$fr" "$tp" || mk=mismatch; else fr=""; fi
+      matches "$NAME_RE" "$tp" || tp=""
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$(rel "$p")" "$fr" "$tp" "$s" "$(field needs "$p")" "$mk"
+    else printf '%s\n\n\n?\n\nbad\n' "$(rel "$p")"; fi
+  done | LC_ALL=C sed "$CAP" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
+    { r[NR % 6] = $0 } NR % 6 == 0 { st = age(r[4], now)
+      print r[1] " from " (r[2] == "" ? "?" : r[2]) " topic " (r[3] == "" ? "?" : r[3]) " age " AGE (st ? " stale" : "") \
+        (r[0] == "bad" ? " header not plain (see read)" : r[0] == "mismatch" ? " name mismatch (see read)" : "") \
+        (r[5] != "" && r[5] != "none" ? " needs: " r[5] : "") }' | clean ;;
 sent)
   for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
   [ $# -le 1 ] || die "usage: sent [<to>]"
@@ -909,43 +976,44 @@ sent)
       done
     done | LC_ALL=C sort)
   [ -n "$rows" ] || { echo "no mail from $ME waiting${to:+ for $to}"; exit 3; }
-  # age from sent to now, both UTC, by days from the civil date (no date -d, which BSD date lacks)
-  printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-    function ok(s,  y, m, d, n) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
-      n = m == 2 ? (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31)
-      return m >= 1 && m <= 12 && d >= 1 && d <= n && substr(s, 12, 2) + 0 <= 23 && substr(s, 15, 2) + 0 <= 59 && substr(s, 18, 2) + 0 <= 60 }
-    function t(s,  y, m, e, d) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; if (m <= 2) y--; e = y % 400
-      d = int(y / 400) * 146097 + e * 365 + int(e / 4) - int(e / 100) + int((153 * ((m + 9) % 12) + 2) / 5) + substr(s, 9, 2) - 719469
-      return d * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2) }
-    { n = $0; sub(/^[^ ]* [^ ]* [^ ]* [^ ]* ?/, "", n); a = $4 == "?" || !ok($4) ? -1 : t(now) - t($4)
-      # a sent time ahead of now (a skewed clock, or a planted file) shows "?", allowing a minute of skew
-      if (a < 0 && a >= -60 && ok($4)) a = 0
-      g = a < 0 ? "?" : a < 60 ? a "s" : a < 3600 ? int(a / 60) "m" : a < 86400 ? int(a / 3600) "h" : int(a / 86400) "d" int(a % 86400 / 3600) "h"
-      print $2 " to " $3 " age " g (a > 86400 ? " stale" : "") (n != "" && n != "none" ? " needs: " n : "") }' | clean ;;
+  printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
+    { n = $0; sub(/^[^ ]* [^ ]* [^ ]* [^ ]* ?/, "", n); st = age($4, now)
+      print $2 " to " $3 " age " AGE (st ? " stale" : "") (n != "" && n != "none" ? " needs: " n : "") }' | clean ;;
 read)
-  except=""
+  except="" ids="" e="" seen=""
+  # read <file>... reads only those messages in your inbox, by file name (a path's last part, as consume takes it); an
+  # argument starting with '-' that isn't an option is a file name when it's a message file name, and every argument
+  # after the first -- is one
   while [ $# -gt 0 ]; do
-    case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
-                 *) unknown "$1" ;; esac
+    if [ -z "$e" ]; then
+      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2; continue ;;
+        --from|--topic|--context) [ $# -ge 2 ] || die "$1 needs a name"; filter_opt "$1" "$2"; shift 2; continue ;;
+        --) e=1; shift; continue ;; (-*) matches "$MSG_RE" "$1" || unknown "$1" ;; esac
+    fi
+    b=$(basename -- "$1"); [ "$b" != .keep ] || die "an inbox's .keep isn't a message"; valid_msg "$b"
+    ids="$ids $b"; shift
   done
   need_me; load_adapter; ad_sync; need_store
+  if [ -n "$ids" ]; then all="$NL$(inbox_files "$ME")$NL"
+    for b in $ids; do case "$all" in (*"$NL$M/inbox/$ME/$b$NL"*) ;; (*) die "not in your inbox: $b" ;; esac; done; fi
   # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
-  # file swapped in the store meanwhile can't be shown under another's status
+  # file swapped in the store meanwhile can't be shown under another's status; the filters are checked on that copy too
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
+    [ -z "$ids" ] || case " $ids " in (*" ${p##*/} "*) ;; (*) continue ;; esac
     cat -- "$p" > "$rt/m" 2>/dev/null || continue
+    picked "$rt/m" || continue
     if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
     v=$(verify_file "$rt/m" "$ME")
     # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
     # name other than <stamp>-<from>-<topic>.md is pointed out (names may hold '-', so which part is off can't always
     # be told: the note says what the name should be)
     fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); b=${p##*/}
-    st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
     if matches "$NAME_RE" "$fr"; then
       [ "$v" != verified ] || v="verified: from $fr"
-      if matches "$NAME_RE" "$tp"; then case "$b" in ($st-"$fr-$tp".md) ;; (*) v="$v; its file name doesn't name it as from $fr about $tp" ;; esac
-      else case "$b" in ($st-"$fr"-*) ;; (*) v="$v; its file name doesn't name $fr as the sender" ;; esac; fi
+      names_sender "$b" "$fr" "$tp" || if matches "$NAME_RE" "$tp"; then v="$v; its file name doesn't name it as from $fr about $tp"
+        else v="$v; its file name doesn't name $fr as the sender"; fi
     fi
     printf '===== %s [%s]\n' "$(rel "$p")" "$v"
     # a body line can't pass for a boundary: a line whose first = comes after nothing but non-printing characters (no
@@ -954,7 +1022,7 @@ read)
     clean 's/^[^ -~]*=/ &/' < "$rt/m"; [ -z "$(tail -c 1 < "$rt/m" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
   rm -rf "$rt"
-  [ -n "$shown" ] || no_mail
+  [ -n "$shown" ] || no_mail "$(filter_note)"
   printf '%s\n' "$shown" ;;
 consume)
   # an argument starting with '-' is a name when it's a message file name, and every argument after the first -- is one
