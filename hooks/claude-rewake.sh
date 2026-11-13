@@ -24,7 +24,8 @@
 # the first that has something to say, with anything another has said by then. It finds those records through the
 # same state path the CLI uses (AGENT_MAILBOX_STATE, else XDG_STATE_HOME, else ~/.local/state).
 # AGENT_MAILBOX_REWAKE_INTERVAL and AGENT_MAILBOX_REWAKE_MAX set watch's interval and limit in seconds (120 and 86100,
-# five minutes under the timeout).
+# five minutes under the timeout). AGENT_MAILBOX_REWAKE_CHECK (1 to 15 s, default 15) is how often the hook checks that
+# its session is still there and its deadline not passed; the tests set it low.
 input=$(cat 2>/dev/null)
 if command -v jq >/dev/null 2>&1; then sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 else sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
@@ -275,11 +276,12 @@ trap cleanup EXIT
 top=$PPID
 here() { live "$top" && { [ -z "$ccpid" ] || live "$ccpid"; }; }
 hook=$$
-dl=$((start + max + iv + 15)); rm -f "$run/deadline"
-# (it checks every 15 s, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
+ck=${AGENT_MAILBOX_REWAKE_CHECK:-15}; case "$ck" in ([1-9]|1[0-5]) ;; (*) ck=15 ;; esac
+dl=$((start + max + iv + ck)); rm -f "$run/deadline"
+# (it checks every ck seconds, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
     now=$(date +%s); [ "$now" -lt "$dl" ] || { : > "$run/deadline"; break; }
-    ds=$((dl - now)); [ "$ds" -le 15 ] || ds=15; sleep "$ds"; done
+    ds=$((dl - now)); [ "$ds" -le "$ck" ] || ds=$ck; sleep "$ds"; done
   kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!
 
