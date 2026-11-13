@@ -342,7 +342,7 @@ out=$(cd "$W" && TMPDIR="$W/tmpt" TEST_TIMES=t.tsv time_cap 30 "$SH" "$W/times.s
 ms=$(awk -F '\t' '$2 == "demo" && $3 == "ok" && $4 == "second" { print $1 }' "$W/t.tsv" 2>/dev/null)
 [ "$rc" = 0 ] && [ "$(wc -l < "$W/t.tsv" 2>/dev/null | tr -d ' ')" = 2 ] && [ -n "$ms" ] && [ "$ms" -ge 900 ] && [ "$ms" -le 10000 ] &&
   printf '%s\n' "$out" | grep -qx 'child: nothing' && printf '%s\n' "$out" | grep -q '^== the slowest checks' &&
-  printf '%s\n' "$out" | grep -Eq '^ +[0-9]+\.[0-9] s  demo +second$' &&
+  printf '%s\n' "$out" | grep -Eq '^ +(0\.9|[1-9]\.[0-9]|10\.0) s  demo +second$' &&
   ok "TEST_TIMES records each check's own time, with its section, and lists the slowest; what the run starts doesn't see it" ||
   no "TEST_TIMES didn't record the checks' times as it should (exit $rc)" "$out$NL$(cat "$W/t.tsv" 2>/dev/null)"
 out=$(TMPDIR="$W/tmpt" time_cap 30 "$SH" "$W/times.sh" 2>&1); rc=$?
@@ -363,10 +363,10 @@ got=$(printf '%s\n' '1..4' 'ok 1 plain in 3ms' 'ok 2 skipped one in 4ms # skip b
   no "TEST_TIMES misread bats' times" "$got"
 # TEST_TIMES: a mark (a section's start) restarts the count, so a check's time is from its section's start, not the
 # previous section's last check
-{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'TSEC=one; times_mark; sleep 1; TSEC=two; times_mark; ok x'; } > "$W/mark.sh"
+{ sed -n '1,/^SUITE=\$\$$/p' "$0"; echo 'TSEC=one; times_mark; sleep 2; TSEC=two; times_mark; ok x'; } > "$W/mark.sh"
 rm -f "$W/m.tsv"; out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/m.tsv" time_cap 30 "$SH" "$W/mark.sh" 2>&1); rc=$?
 ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
-[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 900 ] && ok "TEST_TIMES counts a check's time from its section's start (${ms} ms after a 1 s gap)" ||
+[ "$rc" = 0 ] && [ -n "$ms" ] && [ "$ms" -lt 1500 ] && ok "TEST_TIMES counts a check's time from its section's start (${ms} ms after a 2 s gap)" ||
   no "TEST_TIMES counted a check's time across a section's start (exit $rc, ${ms:-no} ms)" "$out$NL$(cat "$W/m.tsv" 2>/dev/null)"
 # TEST_TIMES with a stand-in bats (first on PATH; it takes 2 s and reports two tests, 1500 ms between them): the
 # tests' lines go in the file, its exit decides the bats line's ok or FAIL, and the bats line gets the rest of the
@@ -376,14 +376,14 @@ mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; ex
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
   echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
 for c in 0 1; do rm -f "$W/b$c.tsv"
-  out=$(TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" 2>&1)
-  eval "bl$c=\$(awk -F '\t' '\$4 ~ /^test\\/\\*\\.bats/ { print \$3, \$1 }' \"\$W/b$c.tsv\" 2>/dev/null)"
-  eval "tl$c=\$(awk -F '\t' '\$4 == \"aa\" || \$4 == \"bb\" { printf \"%s %s %s;\", \$1, \$3, \$4 }' \"\$W/b$c.tsv\" 2>/dev/null)"
-  eval "bo$c=\$out"
+  TMPDIR="$W/tmpt" TEST_TIMES="$W/b$c.tsv" STUBDIR="$W/stub" STUBRC=$c time_cap 30 "$SH" "$W/batsstub.sh" > "$W/b$c.out" 2>&1
 done
+bl0=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b0.tsv" 2>/dev/null)
+bl1=$(awk -F '\t' '$4 ~ /^test\/\*\.bats/ { print $3, $1 }' "$W/b1.tsv" 2>/dev/null)
+tl0=$(awk -F '\t' '$4 == "aa" || $4 == "bb" { printf "%s %s %s;", $1, $3, $4 }' "$W/b0.tsv" 2>/dev/null)
 [ "${bl0%% *}" = ok ] && [ "${bl1%% *}" = FAIL ] && [ "$tl0" = "1000 ok aa;500 FAIL bb;" ] &&
   ok "TEST_TIMES with bats: each test's line goes in the file, and bats' exit decides its own line" ||
-  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}$NL$bo1"
+  no "TEST_TIMES with a stand-in bats: the lines or the exit went wrong" "exit 0: ${bl0:-no line}; exit 1: ${bl1:-no line}; tests: ${tl0:-none}$NL$(cat "$W/b1.out" 2>/dev/null)"
 r=${bl0#* }; case $r in (''|*[!0-9]*) r=-1 ;; esac
 [ "$r" -ge 200 ] && [ "$r" -le 1500 ] && ok "and the bats line gets the rest of the section's time (${r} ms of about 2000, less the tests' 1500)" ||
   no "the bats line's time isn't the rest of the section's (${r} ms; about 500 expected)" "$(cat "$W/b0.tsv" 2>/dev/null)"
