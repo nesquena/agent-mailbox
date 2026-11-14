@@ -533,11 +533,11 @@ if [ "$cmd" = reply ]; then
   rfrom=$(field from "$rp") rtopic=$(field topic "$rp")
   matches "$NAME_RE" "$rfrom" || die "$rf has no valid from: header, so reply can't tell who sent it"
   matches "$NAME_RE" "$rtopic" || die "$rf has no valid topic: header to reply on"
-  # the header says who sent a message, and its file name (<stamp>-<from>-<topic>.md) must agree, as read checks
+  # the header says who sent a message, and its file name (<stamp>-<from>-<topic>.md) must agree, as read checks (names
+  # may hold '-', so which part is off can't always be told: the note says what the name should be, as read's does)
   st='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
   case "$rf" in ($st-"$rfrom-$rtopic".md) ;;
-    ($st-"$rfrom"-*) die "$rf: its topic: header ($rtopic) isn't the topic its file name names; answer with send if you mean to" ;;
-    (*) die "$rf: its from: header names $rfrom, but its file name doesn't name $rfrom as the sender; answer with send if you mean to" ;;
+    (*) die "$rf: its file name doesn't name it as from $rfrom about $rtopic; answer with send if you mean to" ;;
   esac
   # its signature, as read shows it. In a strict store only verified mail counts (as for holds), so reply answers only a
   # message that verifies. Elsewhere a message that reads bad, changed or misrouted is refused too, since consuming it

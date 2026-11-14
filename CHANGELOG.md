@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`reply` says what a refused message's file name should be.** For a message whose file name doesn't match its
+  header, `reply` now says "its file name doesn't name it as from <from> about <topic>", as `read` does, rather than
+  guessing whether the sender or the topic is off (names may hold '-', so which part is off can't always be told).
+- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
+  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
+  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
+  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
+  calling that header not plain.
 - **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
@@ -10,11 +18,6 @@
 - **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
   no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
   (`CONTRIBUTING.md`).
-- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
-  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
-  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
-  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
-  calling that header not plain.
 
 ## 0.1.2 (2026-11-12)
 
