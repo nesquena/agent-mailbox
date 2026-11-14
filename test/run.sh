@@ -208,13 +208,16 @@ fast() { ( PATH="$T/fast:$PATH"; export PATH; as "$@" ); }
 # old_ssh: $W/oldssh holds an ssh-keygen that is an OpenSSH without -Y
 old_ssh() { mkdir -p "$W/oldssh"; printf '#!/bin/sh\necho "unknown option -- Y" >&2\necho "usage: ssh-keygen [-q] [-b bits] [-t dsa | ecdsa | ed25519 | rsa]" >&2\nexit 1\n' \
   > "$W/oldssh/ssh-keygen"; chmod +x "$W/oldssh/ssh-keygen"; }
-# section <id> <function> [<arg>]: the suite's sections, each run by its function, are named here as they're defined,
-# and run in that order at the end (or as the options above pick)
+# section <id> <function> [<adapter>]: the suite's sections, each run by its function, are named here as they're
+# defined, and run in that order at the end (or as the options above pick). A section for one adapter names it: it's
+# passed to the function, and the section is left out of a run that doesn't test that adapter (here, the one place
+# that's decided, so --list, --only and --shard all go by it)
 SECTIONS=""
 # (the id's letters are spelled out, not a-z: macOS sh, bash 3.2, matches a range by the locale's collation)
 section() { case $1 in (''|[!abcdefghijklmnopqrstuvwxyz0123456789]*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
   case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
   case $(LC_ALL=C; export LC_ALL; type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
+  [ -z "${3:-}" ] || case " $ADAPTERS " in (*" $3 "*) ;; (*) return 0 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
 
 sec_safeguards() {
@@ -447,7 +450,7 @@ if command -v zsh >/dev/null 2>&1; then
     ok "under zsh, a run of two sections runs both" || no "under zsh, a run of two sections didn't run both (exit $rc)" "$out"
 else sk "under zsh, a run of two sections runs both (no zsh here)"; fi
 # each section's function is its own and defined once (a copy defined later would run under both names, and a function
-# shared by two ids runs one section's checks twice); sec_adapter alone takes an argument and serves each adapter
+# shared by two ids runs one section's checks twice); sec_adapter alone serves each adapter
 d=$(printf '%s' "$SECTIONS" | awk '$2 != "sec_adapter" { print $2 }' | sort | uniq -d
   for f in $(printf '%s' "$SECTIONS" | awk '{ print $2 }' | sort -u); do
     [ "$(grep -c "^[[:space:]]*$f[[:space:]]*()" "$0")" = 1 ] || echo "$f"; done)
@@ -462,6 +465,14 @@ out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only b
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
   ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
+# a section for one adapter is left out of a run that doesn't test it, and kept in one that does
+gs="holds-rules key-change loose-plain-header strict-stores"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && [ -z "$(printf '%s\n' "$out" | grep -xE "$(echo $gs | tr ' ' '|')")" ] &&
+  ok "a run of the dir adapter leaves out the git-only sections" || no "a run of the dir adapter didn't leave out the git-only sections (exit $rc)" "$out"
+for a in "" git; do out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" $a --list 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -xE "$(echo $gs | tr ' ' '|')" | sort | tr '\n' ' ')" = "$gs " ] &&
+    ok "a run of ${a:-every} adapter keeps them" || no "a run of ${a:-every} adapter didn't keep the git-only sections (exit $rc)" "$out"; done
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --only 'bats, safeguards' --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "no spaces" &&
   ok "--only refuses ids with spaces" || no "--only took ids with spaces (exit $rc)" "$out"
@@ -3178,7 +3189,7 @@ for mode in o s f; do
 done
 else sk "key-change (no ssh-keygen -Y)"; fi
 }
-section key-change sec_key_change
+section key-change sec_key_change git
 
 sec_strict_stores() {
 echo "== strict stores fail closed (git)"
@@ -3289,7 +3300,7 @@ expect "a failed signature lookup still lists every version" 5 "a#1 is held by k
 expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
 else sk "strict-stores (no ssh-keygen -Y)"; fi
 }
-section strict-stores sec_strict_stores
+section strict-stores sec_strict_stores git
 
 sec_loose_plain_header() {
 echo "== a signed record whose header isn't plain blocks where signatures aren't required too (git)"
@@ -3306,7 +3317,7 @@ git clone -q -b main "$T/store.git" "$T/w" && printf -- '---\nprotocol: 1\nfrom:
 expect "a newer signed release whose header isn't plain blocks in a store that doesn't require signatures" 5 "m#1 has a record from j2 whose header isn't plain" as j1 holds "m#1" --version v1
 else sk "loose-plain-header (no ssh-keygen -Y)"; fi
 }
-section loose-plain-header sec_loose_plain_header
+section loose-plain-header sec_loose_plain_header git
 
 sec_install_link() {
 echo "== installed link (install.sh)"
@@ -3681,7 +3692,7 @@ expect "holds won't decide while the store can't be reached" 1 "can't update fro
 mv "$T/store.away" "$T/store.git"
 expect "and decides again once it can" 5 "item#18 is held by u2" as u1 holds "item#18" --version v1
 }
-section holds-rules sec_holds_rules
+section holds-rules sec_holds_rules git
 
 sec_send_secrets() {
 echo "== send refuses obvious secrets (dir)"

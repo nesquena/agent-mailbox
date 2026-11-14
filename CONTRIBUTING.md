@@ -45,7 +45,8 @@ it needs itself (its own store, homes and helper files), so any of them runs alo
 shuffles them, to check that none leans on what another did. A shuffled run prints its seed first (`order: seed N`):
 the same options with `--order N` run that order again. `--shard i/n` runs shard i of n, the sections split so the
 shards take about as long: by the seconds each takes alone, in `test/section-costs`, one `<id> <seconds>` line each.
-A new section needs a line there (time `test/run.sh --only <id>`). `sh test/shards-cover.sh` checks that the shards
+A new section needs a line there (time `test/run.sh --only <id>`). A section that tests one adapter names it
+(`section <id> <function> git`), so a run of only the other adapters (`test/run.sh dir`) leaves it out. `sh test/shards-cover.sh` checks that the shards
 of 4, and of 3, run every section once between them, and that `test/section-costs` has a well-formed line for each
 section, and nothing else; `sh test/shards-cover.sh --logs <whole run's output> <each shard's output>...` checks that
 the shards printed the same checks as a whole run.
