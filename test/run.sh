@@ -1120,6 +1120,19 @@ case " $ADAPTERS " in *" git "*)
   ( PATH="$T/slow:$PATH"; while [ $i -lt 60 ]; do "$SH" "$LT/taker" "$ROOTDIR/adapters/git.sh" "$LT" 2>/dev/null & i=$((i+1)); done; wait ) 2>/dev/null
   [ ! -s "$LT/overlaps" ] && [ ! -s "$LT/dies" ] && ok "sixty takers, a quarter killed holding the lock, are never two inside at once" ||
     no "sixty takers, a quarter killed holding the lock, are never two inside at once" "overlaps: $(wc -l < "$LT/overlaps"); $(cat "$LT/dies")"
+  # another taker's lock that comes and goes between the two tries (the first finds one held, the retry finds it gone,
+  # and a third taker's lock is gone again by the check after) isn't a lock that can't be made: the taker waits, and
+  # takes it once it's free. (A stand-in reports no lock at those two checks, while a live holder still has it)
+  RT="$T/lrace"; mkdir -p "$RT/state/locks/x"; "$SH" -c 'sleep 30; :' "$RT/holder" & rp=$!
+  printf '%s %s %s %s\n' "$rp" "$(date +%s)" "$host" "$(started "$rp")" > "$RT/state/locks/x/lock"
+  printf '%s\n' 'BRANCH=main; . "$1"; RT=$2; die() { echo "$*" >> "$RT/dies"; exit 1; }' \
+    'n=0; ad_lock_there() { n=$((n+1)); [ "$n" -gt 2 ] && { [ -e "$lk" ] || [ -L "$lk" ]; }; }' \
+    'STATE=$RT/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=20; ad_lock; echo took' > "$RT/taker"
+  : > "$RT/dies"; ( sleep 2; rm -f "$RT/state/locks/x/lock" ) & fp=$!
+  out=$(time_cap 30 "$SH" "$RT/taker" "$ROOTDIR/adapters/git.sh" "$RT" 2>&1); rc=$?; wait "$fp" 2>/dev/null; kill_tree "$rp"
+  [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] &&
+    ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
+    no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc: $out; $(cat "$RT/dies")"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \

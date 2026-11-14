@@ -301,6 +301,8 @@ ad_same_start() {
   { [ "${1#* }" = "$1" ] || [ "${2#* }" = "$2" ]; } && [ "${1%% *}" = "${2%% *}" ]
 }
 AD_LOCK="" AD_LOCKED=""
+# ad_lock_there: a lock file (or a link where it goes) is there
+ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
   lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
@@ -310,10 +312,12 @@ ad_lock() {
   while :; do
     stale=""
     (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-    # (no lock there, so it couldn't be created: try once more, in case one was released just then)
-    if [ ! -e "$lk" ] && [ ! -L "$lk" ]; then
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and the
+    # folder can't be written: it can't be made. One that can is another taker's lock, come and gone between the two
+    # tries: wait, and try again)
+    if ! ad_lock_there; then
       (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-      [ -e "$lk" ] || [ -L "$lk" ] || die "can't create the lock $lk"
+      ad_lock_there || [ -w "$ld" ] || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
@@ -336,6 +340,12 @@ ad_lock() {
       [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
     fi
     [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
+      # (no lock there at the end of the wait: a last try, and if that fails too with still none there, it's this
+      # command that can't make one, whoever else was taking turns)
+      if ! ad_lock_there; then
+        (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+        ad_lock_there || die "can't create the lock $lk"
+      fi
       case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
       if [ -n "$hh" ] && [ "$hh" != "$host" ]; then
         die "another agent-mailbox command (pid ${hp:-unknown} on $hh) has been working in this name's copy of the store$age: if none is running on $hh (or this machine's name has changed), delete $lk, then run this again"
