@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <!-- The link-preview image (docs/social.png is rendered from this): the site's envelope mark over a git history,
+       since the mail travels as commits. Render: rsvg-convert -w 1200 -h 1200 docs/social.svg -o docs/social.png -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#818cf8" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#818cf8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="1200" fill="url(#bg)"/>
+  <rect width="1200" height="1200" fill="url(#glow)"/>
+
+  <!-- a git history: the main line, and a branch that leaves and merges back -->
+  <g fill="none" stroke="#c7d2fe" stroke-width="14" stroke-linecap="round" stroke-opacity="0.55">
+    <path d="M140 930 H1060"/>
+    <path d="M420 930 C 480 930, 500 820, 600 820 S 720 930, 780 930"/>
+  </g>
+  <g fill="#312e81" stroke="#c7d2fe" stroke-width="14" stroke-opacity="0.9">
+    <circle cx="240" cy="930" r="26"/>
+    <circle cx="420" cy="930" r="26"/>
+    <circle cx="600" cy="820" r="26"/>
+    <circle cx="780" cy="930" r="26"/>
+    <circle cx="960" cy="930" r="26"/>
+  </g>
+
+  <!-- the envelope -->
+  <g transform="translate(600 470)">
+    <rect x="-300" y="-205" width="600" height="410" rx="44" fill="#000" opacity="0.18" transform="translate(0 22)"/>
+    <rect x="-300" y="-205" width="600" height="410" rx="44" fill="#ffffff"/>
+    <path d="M-262 -172 L0 30 L262 -172" fill="none" stroke="#4338ca" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-262 172 L-78 -12 M262 172 L78 -12" fill="none" stroke="#c7d2fe" stroke-width="22" stroke-linecap="round"/>
+  </g>
+</svg>
