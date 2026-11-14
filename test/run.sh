@@ -558,6 +558,8 @@ x-trace:abc
 '
   # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
   hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
+  # (a topic that isn't a name can't be part of the name the file should have, so then only the sender is checked)
+  hm 20200101T000013Z-carol-x1.md X1 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
   for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
@@ -569,6 +571,9 @@ x-trace:abc
   for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
     printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
       ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
+  printf '%s\n' "$out" | grep -q "20200101T000013Z-carol-x1\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+    ok "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" ||
+    no "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" "$out"
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
