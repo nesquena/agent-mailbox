@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
+  command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
+  It now stops only when the lock's folder can't be written (or no lock can be made by the end of its wait), and
+  otherwise waits its turn.
 - **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
