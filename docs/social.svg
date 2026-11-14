@@ -6,32 +6,33 @@
       <stop offset="0" stop-color="#4f46e5"/>
       <stop offset="1" stop-color="#312e81"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.55">
-      <stop offset="0" stop-color="#818cf8" stop-opacity="0.45"/>
+    <radialGradient id="glow" cx="0.5" cy="0.4" r="0.55">
+      <stop offset="0" stop-color="#818cf8" stop-opacity="0.4"/>
       <stop offset="1" stop-color="#818cf8" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <rect width="1200" height="1200" fill="url(#bg)"/>
   <rect width="1200" height="1200" fill="url(#glow)"/>
 
-  <!-- a git history: the main line, and a branch that leaves and merges back -->
-  <g fill="none" stroke="#c7d2fe" stroke-width="14" stroke-linecap="round" stroke-opacity="0.55">
-    <path d="M140 930 H1060"/>
-    <path d="M420 930 C 480 930, 500 820, 600 820 S 720 930, 780 930"/>
-  </g>
-  <g fill="#312e81" stroke="#c7d2fe" stroke-width="14" stroke-opacity="0.9">
-    <circle cx="240" cy="930" r="26"/>
-    <circle cx="420" cy="930" r="26"/>
-    <circle cx="600" cy="820" r="26"/>
-    <circle cx="780" cy="930" r="26"/>
-    <circle cx="960" cy="930" r="26"/>
+  <!-- the envelope: the site mark, filled -->
+  <g transform="translate(600 440)">
+    <rect x="-360" y="-240" width="720" height="480" rx="52" fill="#1e1b4b" opacity="0.35" transform="translate(0 24)"/>
+    <rect x="-360" y="-240" width="720" height="480" rx="52" fill="#ffffff"/>
+    <path d="M-312 -198 L0 40 L312 -198" fill="none" stroke="#4338ca" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-312 198 L-96 -18 M312 198 L96 -18" fill="none" stroke="#e0e7ff" stroke-width="24" stroke-linecap="round"/>
   </g>
 
-  <!-- the envelope -->
-  <g transform="translate(600 470)">
-    <rect x="-300" y="-205" width="600" height="410" rx="44" fill="#000" opacity="0.18" transform="translate(0 22)"/>
-    <rect x="-300" y="-205" width="600" height="410" rx="44" fill="#ffffff"/>
-    <path d="M-262 -172 L0 30 L262 -172" fill="none" stroke="#4338ca" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M-262 172 L-78 -12 M262 172 L78 -12" fill="none" stroke="#c7d2fe" stroke-width="22" stroke-linecap="round"/>
+  <!-- a git history: the main line, and a branch that leaves, takes two commits, and merges back -->
+  <g fill="none" stroke="#a5b4fc" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M150 990 H1050"/>
+    <path d="M390 990 C 455 990, 455 850, 520 850 H680 C 745 850, 745 990, 810 990"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="230" cy="990" r="34"/>
+    <circle cx="390" cy="990" r="34"/>
+    <circle cx="520" cy="850" r="34"/>
+    <circle cx="680" cy="850" r="34"/>
+    <circle cx="810" cy="990" r="34"/>
+    <circle cx="970" cy="990" r="34"/>
   </g>
 </svg>
