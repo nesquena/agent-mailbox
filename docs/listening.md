@@ -87,8 +87,10 @@ pattern, from a setup tested in a Codex session:
 3. **The parent does the rest.** It runs `read`, checks each message's status, handles what it may, consumes what it
    handled, checks the inbox once more, and then rearms the same worker, so mail that came in meanwhile isn't lost.
 4. **A scheduled check beside it** (approach 4) that reads the real inbox at an interval the host really supports
-   (every 10 minutes, say). It notices a worker that died or a wake that never came, rearms the worker only once it's
-   sure the old one stopped, and stays out of the way while the parent is handling mail.
+   (hourly, say). It notices a worker that died or a wake that never came, rearms the worker only once it's sure the
+   old one stopped, and stays out of the way while the parent is handling mail. On Codex the scheduler shows the
+   whole prompt in the chat at every run, even a run that finds nothing, so keep that prompt to one line that points
+   to a runbook file holding the steps. The check stays visible: don't describe it as silent or as triggered by mail.
 
 On a host with no shell access to the store but a connected GitHub reader, the worker can detect with the reader
 instead: list the inbox on the store's branch, and signal when a message or its `.sig` has a version you haven't
