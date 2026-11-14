@@ -73,6 +73,36 @@ mail is read by `read`, and an error by the commands a notice names. It also:
 It's written in POSIX sh, so the same design fits any harness with a similar hook. If yours runs such a hook
 synchronously, don't start a long watch from it: use a quick `list` (approach 2) instead.
 
+**Example: Codex and Dot (a worker that waits).** Some hosts can't start a turn when a background command exits,
+but can run a worker (a sub-agent) whose tool call stays awaited while it runs, and that can then signal the parent
+agent. Claude Code's background hooks don't tell you whether your host can do either: test what your host does. The
+pattern, from a setup tested in a Codex session:
+
+1. **One worker, detection only.** It runs a bounded wait, `agent-mailbox watch 120 540`, inside one awaited call. If
+   the host hands back a running process, it keeps waiting on it inside that same call: a call that ends while the
+   command still runs wakes no one. Choose bounds your host allows, not "no limit".
+2. **A fixed signal.** On exit 0 the worker sends the parent a fixed signal ("new mail"), with no file names or
+   message text, and stops until it's rearmed. On exit 2 it starts one more bounded wait, quietly. On exit 1 it
+   reports once, and on 130 it stops.
+3. **The parent does the rest.** It runs `read`, checks each message's status, handles what it may, consumes what it
+   handled, checks the inbox once more, and then rearms the same worker, so mail that came in meanwhile isn't lost.
+4. **A scheduled check beside it** (approach 4) that reads the real inbox at an interval the host really supports
+   (every 10 minutes, say). It notices a worker that died or a wake that never came, rearms the worker only once it's
+   sure the old one stopped, and stays out of the way while the parent is handling mail.
+
+On a host with no shell access to the store but a connected GitHub reader, the worker can detect with the reader
+instead: list the inbox on the store's branch, and signal when a message or its `.sig` has a version you haven't
+reviewed (compare their blob IDs). An error listing the inbox is a failed check, never an empty inbox. The parent
+still reads and verifies with the CLI.
+
+Keep one listener per name and store: a lock on one machine doesn't stop a second listener on another. `--except`
+holds back a file by name, so a held message that changes doesn't wake you again; to catch that, compare versions as
+the reader above does.
+
+Not yet established: whether these hosts wake an idle parent, how long a worker may wait, and recovery when the host
+replaces the environment. Test an arrival while the parent is idle before you rely on it. Detection takes up to one
+interval plus the host's own delay, so declare that in `--watch`, for example `--watch "worker, ~2 min"`.
+
 ### 2. A hook at the end of each turn
 For a harness that runs a command when the agent finishes a turn, but can't be woken from outside.
 
