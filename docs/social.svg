@@ -18,14 +18,14 @@
   <g transform="translate(600 440)">
     <rect x="-360" y="-240" width="720" height="480" rx="52" fill="#1e1b4b" opacity="0.35" transform="translate(0 24)"/>
     <rect x="-360" y="-240" width="720" height="480" rx="52" fill="#ffffff"/>
-    <path d="M-312 -198 L0 40 L312 -198" fill="none" stroke="#4338ca" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M-312 198 L-96 -18 M312 198 L96 -18" fill="none" stroke="#e0e7ff" stroke-width="24" stroke-linecap="round"/>
+    <path d="M-312 -198 L0 40 L312 -198" fill="none" stroke="#4338ca" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
   <!-- a git history: the main line, and a branch that leaves, takes two commits, and merges back -->
   <g fill="none" stroke="#a5b4fc" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
     <path d="M150 990 H1050"/>
-    <path d="M390 990 C 455 990, 455 850, 520 850 H680 C 745 850, 745 990, 810 990"/>
+    <path d="M390 990 C 440 950, 455 850, 520 850 H680 C 745 850, 760 950, 810 990"/>
   </g>
   <g fill="#ffffff">
     <circle cx="230" cy="990" r="34"/>
