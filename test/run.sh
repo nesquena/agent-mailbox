@@ -2471,17 +2471,25 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0 sawh=0
-while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
-if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
-  kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
-else wait "$bg"; rc=$?
+# hangrun <limit>: the hook with that limit (RWMAX), its watch hanging; sets bg's exit (rc, or "" when it was still
+# running after 60 s and was stopped), n (its seconds) and sawh (1 once the hang was seen)
+hangrun() { (RWMAX=$1 fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out") & bg=$!; n=0 sawh=0 rc=""
+  while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
+  if kill -0 "$bg" 2>/dev/null; then kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+  else wait "$bg"; rc=$?; fi; }
+# (once more with a 4 s limit, its deadline then 7 s out, only if no hang started and the hook said the day was out:
+# its own start, on a loaded machine, used up the 2 s before any watcher ran)
+hl=2; hangrun $hl
+if [ "$sawh $rc" = "0 2" ] && grep -q "daily limit; it starts again" "$T/bg.out"; then hl=4; hangrun $hl; fi
+if [ -z "$rc" ]; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
+else
   # (the hang must have started: the hook prints the same note when its day ran out before any watcher did)
   case "$sawh $rc $(cat "$T/bg.out")" in ("1 2 "*"reached its daily limit; it starts again at this turn's end."*)
       ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
-    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; exit $rc: $(cat "$T/bg.out")" ;; esac
-  # (the deadline is 5 s out: a watchdog that slept a 15 s check past it would end at 17 or later)
-  [ "$n" -le 10 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 5s"
+    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; limit ${hl}s; exit $rc: $(cat "$T/bg.out")" ;; esac
+  # (the deadline is the limit, an interval and the 2 s check out: a watchdog that slept a 15 s check past it would
+  # end at least 10 s later)
+  [ "$n" -le $((hl + 8)) ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline $((hl + 3))s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
