@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Claude Code plugin: the rewake hook works, or declines safely, where a sandbox blocks `ps` and the shared temp
+  folder.** Watching several stores, it made its temporary folder with `mktemp -d` and no template; on macOS that
+  ignores TMPDIR, so inside a sandbox that gives the hook its own TMPDIR it ended without watching. It now makes it
+  under TMPDIR. Where it can't read Claude Code's arguments at all (macOS won't start `ps`, a setuid program, inside a
+  sandbox), it declines as it does when it can't tell, rather than missing a `claude -p` and waiting at every turn end.
 - **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
