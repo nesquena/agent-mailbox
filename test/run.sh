@@ -1146,17 +1146,6 @@ case " $ADAPTERS " in *" git "*)
   [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] && [ "$nc" -ge 3 ] &&
     ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
     no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc, $nc checks for a lock: $out; $(cat "$RT/dies")"
-  # no lock there at the end of the wait, and none can be made, though the folder takes other files (a stand-in says
-  # no lock is ever there, while a live holder has it): the command says it can't create the lock, not that another
-  # command holds it, which doctor would read as busy rather than failing
-  RN="$T/lnone"; mkdir -p "$RN/state/locks/x"; "$SH" -c 'sleep 30; :' "$RN/holder" & rp=$!
-  printf '%s %s %s %s\n' "$rp" "$(date +%s)" "$host" "$(started "$rp")" > "$RN/state/locks/x/lock"
-  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }; ad_lock_there() { false; }' \
-    'STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=2; ad_lock; echo took' > "$RN/taker"
-  out=$(time_cap 30 "$SH" "$RN/taker" "$ROOTDIR/adapters/git.sh" "$RN" 2>&1); rc=$?; kill_tree "$rp"
-  [ "$rc" = 1 ] && case "$out" in ("can't create the lock "*) true ;; (*) false ;; esac &&
-    ok "a lock still missing and unmakeable at the end of the wait says it can't be created" ||
-    no "a lock still missing and unmakeable at the end of the wait says it can't be created" "exit $rc: $out"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
@@ -1178,7 +1167,11 @@ case " $ADAPTERS " in *" git "*)
     within 10 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
     chmod u+w "$ld"; sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; chmod a-w "$ld"
     within 10 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
-    AGENT_MAILBOX_LOCK_WAIT=3; chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+    chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+    # a folder that can be written but not searched (-w says yes, yet no file can be made in it) stops it too
+    chmod 600 "$ld"
+    within 10 "a lock folder -w passes but no file can be made in stops the command, saying so" 1 "can't create the lock" as lp list
+    AGENT_MAILBOX_LOCK_WAIT=3; chmod 700 "$ld"
   fi
   # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
   # (it's running once its pid file names a process of the one started here: $! is the subshell `as` runs in, and the

@@ -4,8 +4,10 @@
 
 - **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
   command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
-  It now stops only when the lock's folder can't be written (or no lock can be made by the end of its wait), and
-  otherwise waits its turn.
+  It now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
+  making one rather than asking `test -w`, which says yes where a sandbox or a full disk refuses one, so there a stale
+  lock it can't remove now stops it at once, saying so, instead of waiting out the lock wait and blaming the dead
+  holder.
 - **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`,
   and a scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot (approach 3): a GitHub Action on the store's repository calls a routine's webhook when
   mail lands in the bot's inbox. Each is written from a working setup. The skill points to them.

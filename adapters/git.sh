@@ -304,7 +304,8 @@ AD_LOCK="" AD_LOCKED=""
 # ad_lock_there: a lock file (or a link where it goes) is there
 ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
 # ad_can_make: a file can be made in the lock folder. Tried by making one, not by -w, which says yes where a sandbox,
-# a full disk or a read-only mount refuses one; in a subshell, since a failed redirection on : ends a POSIX shell
+# a full disk or a folder that can't be searched refuses one; in a subshell, since a failed redirection on : ends a
+# POSIX shell
 ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
@@ -343,12 +344,6 @@ ad_lock() {
       [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
     fi
     [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
-      # (no lock there at the end of the wait: a last try, and if that fails too with still none there, it's this
-      # command that can't make one, whoever else was taking turns)
-      if ! ad_lock_there; then
-        (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-        ad_lock_there || die "can't create the lock $lk"
-      fi
       case "$he" in (''|*[!0-9]*) age="" ;; (*) age=" for $(( $(date +%s) - he ))s" ;; esac
       if [ -n "$hh" ] && [ "$hh" != "$host" ]; then
         die "another agent-mailbox command (pid ${hp:-unknown} on $hh) has been working in this name's copy of the store$age: if none is running on $hh (or this machine's name has changed), delete $lk, then run this again"
