@@ -6,6 +6,9 @@
   command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
   It now stops only when the lock's folder can't be written (or no lock can be made by the end of its wait), and
   otherwise waits its turn.
+- **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`,
+  and a scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot (approach 3): a GitHub Action on the store's repository calls a routine's webhook when
+  mail lands in the bot's inbox. Each is written from a working setup. The skill points to them.
 - **`reply` says what a refused message's file name should be.** For a message whose file name doesn't match its
   header, `reply` now says "its file name doesn't name it as from <from> about <topic>", as `read` does, rather than
   guessing whether the sender or the topic is off (names may hold '-', so which part is off can't always be told).
