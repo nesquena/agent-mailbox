@@ -82,8 +82,10 @@ mine() {
 # itself, as below. A run records the mail it woke for as pending; this hook adds it to that store's list only once it
 # has passed the wake on, so a stop in between wakes the session for it again rather than never
 if [ "$n" -ge 2 ]; then
-  # (in the system's temporary folder, so one a killed hook leaves is cleared as other temporary files are)
-  each=$(mktemp -d 2>/dev/null) || exit 0
+  # (in the temporary folder, so one a killed hook leaves is cleared as other temporary files are. Named under TMPDIR:
+  # macOS's mktemp with no template ignores TMPDIR, and a sandbox that gives the hook its own TMPDIR denies the folder
+  # it would use instead, so the hook would end without watching)
+  each=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-rewake.XXXXXX" 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
   while IFS= read -r l; do split "$l"; printf '%s\n' "$state/rewake/$name/$sid@$store"; done < "$each/list" > "$each/dirs"
   # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside;
@@ -185,6 +187,9 @@ background() {
   # the command line split at spaces, where a prompt's words can't be told from options, so only a terminal counts
   if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline") px=1
   else av=$(args "$ccpid" | tr ' ' '\n') px=""; fi
+  # (no arguments read at all, as where ps can't start, in a macOS sandbox that blocks setuid programs: that's no
+  # evidence, and a headless run's -p would go unseen, so it declines)
+  [ -n "$(printf '%s' "$av" | tr -d '\n')" ] || return 1
   printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
   # (its input checked only where it can be read)
   if [ -n "$px" ] && [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ]; then
