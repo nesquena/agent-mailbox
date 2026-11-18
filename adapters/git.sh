@@ -303,6 +303,9 @@ ad_same_start() {
 AD_LOCK="" AD_LOCKED=""
 # ad_lock_there: a lock file (or a link where it goes) is there
 ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
+# ad_can_make: a file can be made in the lock folder. Tried by making one, not by -w, which says yes where a sandbox,
+# a full disk or a read-only mount refuses one; in a subshell, since a failed redirection on : ends a POSIX shell
+ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
   lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
@@ -314,11 +317,10 @@ ad_lock() {
     (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
     # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and no
     # file can be made in the folder: it can't be made. One that can is another taker's lock, come and gone between the
-    # two tries: wait, and try again. The folder is tried by making a file, not by -w, which says yes where a sandbox,
-    # a full disk or a read-only mount refuses one)
+    # two tries: wait, and try again)
     if ! ad_lock_there; then
       (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-      ad_lock_there || { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; } || die "can't create the lock $lk"
+      ad_lock_there || ad_can_make || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
@@ -337,7 +339,7 @@ ad_lock() {
       fi
       # (still no guard there, and the folder can't be written: the stale lock can't be removed either. One that can
       # be is only another waiter's guard, come and gone: wait, and try again)
-      [ -e "$ld/break" ] || [ -w "$ld" ] || die "can't remove the stale lock $lk"
+      [ -e "$ld/break" ] || ad_can_make || die "can't remove the stale lock $lk"
       [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
     fi
     [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {

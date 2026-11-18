@@ -1173,10 +1173,12 @@ case " $ADAPTERS " in *" git "*)
   if (true > "$ld/probe") 2>/dev/null; then rm -f "$ld/probe"; chmod u+w "$ld"
     sk "a lock that can't be made, or removed, stops the command (read-only folders don't stop this user)"
   else
-    within 20 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
+    # (with a wait far past the time allowed, so a command that only fails once the wait is over doesn't pass)
+    AGENT_MAILBOX_LOCK_WAIT=60
+    within 10 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
     chmod u+w "$ld"; sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; chmod a-w "$ld"
-    within 20 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
-    chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+    within 10 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
+    AGENT_MAILBOX_LOCK_WAIT=3; chmod u+w "$ld"; rm -f "$lk" "$ld/break"
   fi
   # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
   # (it's running once its pid file names a process of the one started here: $! is the subshell `as` runs in, and the
