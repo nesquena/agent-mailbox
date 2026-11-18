@@ -465,8 +465,10 @@ out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only b
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
   ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
-# a section for one adapter is left out of a run that doesn't test it, and kept in one that does
-gs="holds-rules key-change loose-plain-header strict-stores"
+# a section for one adapter is left out of a run that doesn't test it, and kept in one that does (the git-only ones
+# read from their section lines, so a new one is covered too)
+gs=$(sed -n 's/^ *section \([a-z0-9-]*\) [a-z_]* git$/\1/p' "$0" | sort | tr '\n' ' '); gs=${gs% }
+[ "$(echo $gs | wc -w)" -ge 14 ] || no "the git-only sections weren't found by their section lines" "$gs"
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && [ -z "$(printf '%s\n' "$out" | grep -xE "$(echo $gs | tr ' ' '|')")" ] &&
   ok "a run of the dir adapter leaves out the git-only sections" || no "a run of the dir adapter didn't leave out the git-only sections (exit $rc)" "$out"
@@ -992,7 +994,7 @@ notes.md"'
 for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
 
 # --- cases that need their own store -------------------------------------------------------------------------------
-case " $ADAPTERS " in *" git "*)
+# (each of these is for the git adapter: its section line names it, so a run without git leaves it out)
   sec_git_default_branch() {
   echo "== git: a store whose default branch isn't the mailbox branch"
   T="$W/branch"; mkdir -p "$T"; git init -q --bare "$T/store.git"
@@ -1008,7 +1010,7 @@ case " $ADAPTERS " in *" git "*)
   expect "the mailbox is on that branch" 0 "^mailbox/store.md$" sh -c "git --git-dir='$T/store.git' ls-tree -r --name-only team/inbox | grep store.md"
   expect "a branch name git refuses is refused before git sees it" 1 "bad branch name 'x\.lock'" env HOME="$W/home-e2" AGENT_MAILBOX_BRANCH=x.lock "$SH" "$CLI" init
   }
-  section git-default-branch sec_git_default_branch
+  section git-default-branch sec_git_default_branch git
 
   sec_git_exact_branch() {
   echo "== git: the mailbox branch is matched by its exact name"
@@ -1029,7 +1031,7 @@ case " $ADAPTERS " in *" git "*)
     no "the poll token isn't the exact branch's tip" "$tok"
   expect "and watch reads it" 2 "no mail" as nb1 watch 1 1
   }
-  section git-exact-branch sec_git_exact_branch
+  section git-exact-branch sec_git_exact_branch git
 
   sec_git_take_turns() {
   echo "== git: commands under one name take turns in its clone"
@@ -1177,7 +1179,7 @@ case " $ADAPTERS " in *" git "*)
   as lr send lp q9 "$T/m" >/dev/null 2>&1; as lp list >/dev/null 2>&1; rm -f "$ck/mailbox/inbox/lp/"*-lr-q9.md
   expect "and a message removed from the clone but never consumed in the store is back" 0 "-lr-q9\.md" as lp list
   }
-  section git-take-turns sec_git_take_turns
+  section git-take-turns sec_git_take_turns git
 
   sec_git_first_init() {
   echo "== git: a first init whose push failed is published by the next command"
@@ -1201,7 +1203,7 @@ case " $ADAPTERS " in *" git "*)
   expect "a published init whose branch was deleted isn't published again" 1 "no longer has the branch main" as fi2 agents
   [ -z "$(git --git-dir="$T/store.git" for-each-ref)" ] && ok "and the store still has no branch" || no "the deleted branch was published again"
   }
-  section git-first-init sec_git_first_init
+  section git-first-init sec_git_first_init git
   sec_git_foreign_history() {
   echo "== git: a clone whose history the store doesn't share fails, saying how to recover"
   # an init left unpublished (the store's folders read-only for its push), then another agent's init wins
@@ -1502,7 +1504,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     env PATH="$T/bin:$PATH" REAL_GIT="$(command -v git)" RACE_DONE="$T/raced" \
       RACE_CMD="HOME='$W/home-dn2' '$SH' '$CLI' init --title winner" HOME="$W/home-dn1" "$SH" "$CLI" init --title loser
   }
-  section git-foreign-history sec_git_foreign_history
+  section git-foreign-history sec_git_foreign_history git
 
   sec_git_unpublished() {
   echo "== git: a command that can't publish what an earlier one left says it wrote nothing"
@@ -1568,7 +1570,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   [ -n "$(git --git-dir="$T/store.git" ls-tree --name-only main:mailbox/inbox/xq6 | grep -- '-xq5-first\.md$')" ] &&
     ok "and the first message is in the store" || no "the leftover first message wasn't published" "$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
   }
-  section git-unpublished sec_git_unpublished
+  section git-unpublished sec_git_unpublished git
 
   sec_git_leftover_conflict() {
   echo "== git: a leftover commit that conflicts with the store doesn't wedge the clone"
@@ -1710,7 +1712,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
     [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
     ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
   }
-  section git-leftover-conflict sec_git_leftover_conflict
+  section git-leftover-conflict sec_git_leftover_conflict git
   sec_git_planted() {
   echo "== git: what a store holds can't change how the CLI's checkout works"
   T="$W/planted"; mkdir -p "$T"; git init -q --bare "$T/store.git"; S="$T/store.git"; git --git-dir="$S" symbolic-ref HEAD refs/heads/main
@@ -1905,7 +1907,7 @@ exec "%s" "$@"
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
   }
-  section git-planted sec_git_planted
+  section git-planted sec_git_planted git
 
   sec_git_shared_home() {
   echo "== git: names sharing one HOME (a config each)"
@@ -1928,7 +1930,7 @@ exec "%s" "$@"
     [ $r3 = 3 ] && [ $r4 = 3 ] && ok "and each lists its own mail" ||
     no "a name's list is wrong" "pn1: $(pn pn1 list) | pn2: $(pn pn2 list) | pn3 ($r3): $l3 | pn4 ($r4): $l4"
   }
-  section git-shared-home sec_git_shared_home
+  section git-shared-home sec_git_shared_home git
 
   sec_git_replayed_releases() {
   echo "== git: replayed releases and required signatures"
@@ -1963,9 +1965,7 @@ exec "%s" "$@"
     expect "a crafted sent header can't forge another agent's release" 5 "is held by g2" as g1 holds "item#1" --version v1
   else sk "git-replayed-releases (no ssh-keygen -Y)"; fi
   }
-  section git-replayed-releases sec_git_replayed_releases
-  ;;
-esac
+  section git-replayed-releases sec_git_replayed_releases git
 
 sec_pins_on_move() {
 echo "== setup says when pinned keys stay with the old store settings (dir)"
