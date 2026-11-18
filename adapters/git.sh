@@ -318,7 +318,7 @@ ad_lock() {
     # a full disk or a read-only mount refuses one)
     if ! ad_lock_there; then
       (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-      ad_lock_there || { : > "$ld/probe.$$" && rm -f "$ld/probe.$$"; } 2>/dev/null || die "can't create the lock $lk"
+      ad_lock_there || { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; } || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
