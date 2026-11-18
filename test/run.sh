@@ -1133,17 +1133,30 @@ case " $ADAPTERS " in *" git "*)
     no "sixty takers, a quarter killed holding the lock, are never two inside at once" "overlaps: $(wc -l < "$LT/overlaps"); $(cat "$LT/dies")"
   # another taker's lock that comes and goes between the two tries (the first finds one held, the retry finds it gone,
   # and a third taker's lock is gone again by the check after) isn't a lock that can't be made: the taker waits, and
-  # takes it once it's free. (A stand-in reports no lock at those two checks, while a live holder still has it)
+  # takes it once it's free. (A stand-in reports no lock at those two checks, while a live holder still has it. It
+  # counts its calls: fewer than 3 means the window was never forced, and the check proves nothing)
   RT="$T/lrace"; mkdir -p "$RT/state/locks/x"; "$SH" -c 'sleep 30; :' "$RT/holder" & rp=$!
   printf '%s %s %s %s\n' "$rp" "$(date +%s)" "$host" "$(started "$rp")" > "$RT/state/locks/x/lock"
   printf '%s\n' 'BRANCH=main; . "$1"; RT=$2; die() { echo "$*" >> "$RT/dies"; exit 1; }' \
-    'n=0; ad_lock_there() { n=$((n+1)); [ "$n" -gt 2 ] && { [ -e "$lk" ] || [ -L "$lk" ]; }; }' \
+    'n=0; ad_lock_there() { n=$((n+1)); echo >> "$RT/calls"; [ "$n" -gt 2 ] && { [ -e "$lk" ] || [ -L "$lk" ]; }; }' \
     'STATE=$RT/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=20; ad_lock; echo took' > "$RT/taker"
-  : > "$RT/dies"; ( sleep 2; rm -f "$RT/state/locks/x/lock" ) & fp=$!
+  : > "$RT/dies"; : > "$RT/calls"; ( sleep 2; rm -f "$RT/state/locks/x/lock" ) & fp=$!
   out=$(time_cap 30 "$SH" "$RT/taker" "$ROOTDIR/adapters/git.sh" "$RT" 2>&1); rc=$?; wait "$fp" 2>/dev/null; kill_tree "$rp"
-  [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] &&
+  nc=$(wc -l < "$RT/calls" | tr -d ' ')
+  [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] && [ "$nc" -ge 3 ] &&
     ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
-    no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc: $out; $(cat "$RT/dies")"
+    no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc, $nc checks for a lock: $out; $(cat "$RT/dies")"
+  # no lock there at the end of the wait, and none can be made, though the folder takes other files (a stand-in says
+  # no lock is ever there, while a live holder has it): the command says it can't create the lock, not that another
+  # command holds it, which doctor would read as busy rather than failing
+  RN="$T/lnone"; mkdir -p "$RN/state/locks/x"; "$SH" -c 'sleep 30; :' "$RN/holder" & rp=$!
+  printf '%s %s %s %s\n' "$rp" "$(date +%s)" "$host" "$(started "$rp")" > "$RN/state/locks/x/lock"
+  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }; ad_lock_there() { false; }' \
+    'STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=2; ad_lock; echo took' > "$RN/taker"
+  out=$(time_cap 30 "$SH" "$RN/taker" "$ROOTDIR/adapters/git.sh" "$RN" 2>&1); rc=$?; kill_tree "$rp"
+  [ "$rc" = 1 ] && case "$out" in ("can't create the lock "*) true ;; (*) false ;; esac &&
+    ok "a lock still missing and unmakeable at the end of the wait says it can't be created" ||
+    no "a lock still missing and unmakeable at the end of the wait says it can't be created" "exit $rc: $out"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \

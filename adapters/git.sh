@@ -312,12 +312,13 @@ ad_lock() {
   while :; do
     stale=""
     (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-    # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and the
-    # folder can't be written: it can't be made. One that can is another taker's lock, come and gone between the two
-    # tries: wait, and try again)
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and no
+    # file can be made in the folder: it can't be made. One that can is another taker's lock, come and gone between the
+    # two tries: wait, and try again. The folder is tried by making a file, not by -w, which says yes where a sandbox,
+    # a full disk or a read-only mount refuses one)
     if ! ad_lock_there; then
       (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-      ad_lock_there || [ -w "$ld" ] || die "can't create the lock $lk"
+      ad_lock_there || { : > "$ld/probe.$$" && rm -f "$ld/probe.$$"; } 2>/dev/null || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
