@@ -49,7 +49,9 @@ W=$RUNW
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
-procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
+# (where ps can't run, as in a macOS sandbox, which won't start a setuid program, pgrep lists the same: it isn't one)
+procs_naming() { [ -n "$1" ] || return 0
+  { ps -eo pid=,args= 2>/dev/null || pgrep -lf . 2>/dev/null; } | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
@@ -58,6 +60,10 @@ for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
 done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
+# spaceless_tmp: a temporary folder whose path holds no spaces, for the few checks that need one: TMPDIR when its path
+# has none (macOS's mktemp with no template, or -t, ignores TMPDIR, and a sandbox that gives the run its own TMPDIR
+# denies the folder it uses instead), else /tmp
+spaceless_tmp() { case ${TMPDIR:-} in (''|*[[:space:]]*) echo /tmp ;; (*) echo "${TMPDIR%/}" ;; esac; }
 CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
 leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
@@ -558,6 +564,8 @@ x-trace:abc
 '
   # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
   hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
+  # (a topic that isn't a name can't be part of the name the file should have, so then only the sender is checked)
+  hm 20200101T000013Z-carol-x1.md X1 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
   for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
@@ -569,6 +577,9 @@ x-trace:abc
   for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
     printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
       ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
+  printf '%s\n' "$out" | grep -q "20200101T000013Z-carol-x1\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+    ok "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" ||
+    no "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" "$out"
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
@@ -583,7 +594,7 @@ x-trace:abc
     sp=$(as bob list | grep -- '-alice-swapme\.md$'); [ "$AD" = git ] && sp="$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts/"*-bob | head -n 1)/$sp" || sp="$STORE/$sp"
     mkdir -p "$T/kgs"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y verify "*) ;; (*) exec "$REAL_KG" "$@" ;; esac' \
       'p=; for a in "$@"; do [ "$p" != -s ] || [ "$a" != "$SWAP_FILE.sig" ] || : > "$SWAP_DONE.store"; p=$a; done' \
-      'm=$(mktemp); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
+      'm=$(mktemp "${TMPDIR:-/tmp}/kgs.XXXXXX"); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
       'if grep -q "^topic: swapme$" "$m" && [ ! -e "$SWAP_DONE" ]; then : > "$SWAP_DONE"; cp "$SWAP_FILE" "$SWAP_FILE.orig"' \
       '  sed "s/^from: alice$/from: carol/" "$SWAP_FILE" > "$SWAP_FILE.t" && mv -f "$SWAP_FILE.t" "$SWAP_FILE"; fi' \
       'rm -f "$m"; exit $rc' > "$T/kgs/ssh-keygen"; chmod +x "$T/kgs/ssh-keygen"; rm -f "$T/swapped"
@@ -2190,6 +2201,12 @@ unset FAKEBG
   expect "in either order" 0 '^\r?$' ptycc -cp hi
   expect "or before one that takes a value" 0 '^\r?$' ptycc -pr r1 hi
   expect "or --init-only" 0 '^\r?$' ptycc --init-only
+  # (and where it can't read Claude Code's arguments at all, as in a macOS sandbox, where ps can't start, it declines:
+  # a -p there would go unseen. A ps that fails stands in for that; with /proc the arguments come from there)
+  if [ -z "$PROCOK" ]; then mkdir -p "$T/nops"; printf '#!/bin/sh\nexit 1\n' > "$T/nops/ps"; chmod +x "$T/nops/ps"
+    nops() { ( PATH="$T/nops:$PATH"; export PATH; ptycc "$@" ); }
+    expect "or where it can't read Claude Code's arguments" 0 '^\r?$' nops
+  else sk "or where it can't read Claude Code's arguments (they come from /proc here)"; fi
   if [ -r "/proc/$$/cmdline" ]; then
     wakes "a prompt that mentions -p isn't headless" "rw-1.md" ptycc "what does -p do"
     rm -f "$R1/woke"
@@ -2207,7 +2224,7 @@ expect "a hook Claude Code waited for at this prompt steps aside the next time" 
 expect "leaving the guard a note" 0 - grep -qx p-7 "$R1/declined"
 if command -v node >/dev/null 2>&1; then
   # an npm install runs under node, and renames its process to claude, so without AI_AGENT nothing tells its version
-  CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; mkdir -p "$CCD/cc"
+  CCD=$(mktemp -d "$(spaceless_tmp)/amcc.XXXXXX") && [ -d "$CCD" ] || { echo "FAIL can't make a folder under $(spaceless_tmp)"; exit 1; }; mkdir -p "$CCD/cc"
   printf '%s\n' "process.title = 'claude'; if (process.argv.includes('--version')) { console.log('2.1.80 (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
@@ -2220,7 +2237,7 @@ if command -v node >/dev/null 2>&1; then
 else sk "an npm install that doesn't say its version is left to the guard (no node)"; fi
 CC=$(command -v cc || command -v gcc || command -v clang)
 if [ -n "$CC" ]; then
-  [ -n "$CCD" ] || { CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; }
+  [ -n "$CCD" ] || { CCD=$(mktemp -d "$(spaceless_tmp)/amcc.XXXXXX") && [ -d "$CCD" ] || { echo "FAIL can't make a folder under $(spaceless_tmp)"; exit 1; }; }
   mkdir -p "$CCD/cc" "$CCD/claude/versions"
   # (with this stop's prompt id, PRID, when set)
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
