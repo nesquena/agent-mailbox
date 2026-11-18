@@ -49,7 +49,9 @@ W=$RUNW
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
-# (where ps can't run, as in a macOS sandbox, which won't start a setuid program, pgrep lists the same: it isn't one)
+# (where ps can't run, as in a macOS sandbox, which won't start a setuid program, BSD and macOS `pgrep -lf`, which isn't
+# setuid, lists the same pid and command line. Linux's procps pgrep -l prints the name, not the arguments, but Linux
+# has a ps that runs; and pgrep's -a means ancestors on macOS, so it's not used)
 procs_naming() { [ -n "$1" ] || return 0
   { ps -eo pid=,args= 2>/dev/null || pgrep -lf . 2>/dev/null; } | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
@@ -58,12 +60,12 @@ for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
   [ -d "$d" ] && [ "$d" != "$RUNW" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
     [ -z "$(procs_naming "$d")" ] && rm -rf "$d"
 done
-# at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
-# background and missed, even one whose parent is gone), so no run leaves processes behind
 # spaceless_tmp: a temporary folder whose path holds no spaces, for the few checks that need one: TMPDIR when its path
 # has none (macOS's mktemp with no template, or -t, ignores TMPDIR, and a sandbox that gives the run its own TMPDIR
 # denies the folder it uses instead), else /tmp
 spaceless_tmp() { case ${TMPDIR:-} in (''|*[[:space:]]*) echo /tmp ;; (*) echo "${TMPDIR%/}" ;; esac; }
+# at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
+# background and missed, even one whose parent is gone), so no run leaves processes behind
 CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
 leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
@@ -2669,6 +2671,27 @@ r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.m
 [ "$rc" = 2 ] && woken rx-2.md && woken rz-2.md && ok "mail on both stores at once is all passed on" ||
   no "mail on both stores at once is all passed on" "$rc $r"
 expect "with no mail on either it wakes once at the day's limit" 2 "daily limit with no new mail" rewake r9 AGENT_MAILBOX_REWAKE_MAX=5
+# the two-store hook makes its folder from a template under TMPDIR (macOS's mktemp with no template ignores TMPDIR, and
+# a sandbox that gives the hook its own TMPDIR denies the folder it would use instead); and when TMPDIR names a folder
+# that isn't there, it falls back to a plain mktemp -d rather than ending without watching. A mktemp on PATH notes
+# each call, then runs the real one
+mkdir -p "$T/mkt"; printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "$MKTLOG"' 'exec "$REAL_MKTEMP" "$@"' > "$T/mkt/mktemp"
+chmod +x "$T/mkt/mktemp"; RMK=$(command -v mktemp); TD=${TMPDIR:-/tmp}; : > "$T/mkt.log"
+expect "with two stores the hook makes its folder under TMPDIR" 2 "daily limit with no new mail" rewake r9 AGENT_MAILBOX_REWAKE_MAX=5 \
+  PATH="$T/mkt:$PATH" MKTLOG="$T/mkt.log" REAL_MKTEMP="$RMK"
+grep -qxF -- "-d $TD/agent-mailbox-rewake.XXXXXX" "$T/mkt.log" && ok "from a template there, not mktemp's own default" ||
+  no "the two-store hook didn't name its folder under TMPDIR" "TMPDIR $TD; mktemp calls: $(cat "$T/mkt.log")"
+: > "$T/mkt.log"
+# (the terminal stand-in writes straight to CCOUT, so it needs no temporary file of its own there. Where a plain
+# mktemp -d can't work either, as in a sandbox that denies the system's own temporary folder, there's nothing to fall
+# back to)
+if _md=$(mktemp -d 2>/dev/null) && rmdir "$_md"; then
+(rewake r9 AGENT_MAILBOX_REWAKE_MAX=5 PATH="$T/mkt:$PATH" MKTLOG="$T/mkt.log" REAL_MKTEMP="$RMK" TMPDIR="$T/no-such-folder" \
+  CCOUT="$T/mkt.out") >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && grep -q "daily limit with no new mail" "$T/mkt.out" && ok "and with TMPDIR naming a folder that isn't there, it still watches" ||
+  no "and with TMPDIR naming a folder that isn't there, it still watches" "exit $rc: $(cat "$T/mkt.out" 2>/dev/null)"
+grep -qx -- "-d" "$T/mkt.log" && ok "through a plain mktemp -d" || no "the hook didn't fall back to a plain mktemp -d" "$(cat "$T/mkt.log")"
+else sk "and with TMPDIR naming a folder that isn't there, it still watches (a plain mktemp -d can't work here either)"; fi
 # a watcher the agent started by hand on one store doesn't count for the other, though it's for the same name
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
