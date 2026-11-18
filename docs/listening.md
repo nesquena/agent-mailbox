@@ -75,22 +75,25 @@ synchronously, don't start a long watch from it: use a quick `list` (approach 2)
 
 **Example: Codex and Dot (a worker that waits).** Some hosts can't start a turn when a background command exits,
 but can run a worker (a sub-agent) whose tool call stays awaited while it runs, and that can then signal the parent
-agent. Claude Code's background hooks don't tell you whether your host can do either: test what your host does. The
-pattern, from a setup tested in a Codex session:
+agent. The Claude Code example above doesn't show whether your host can do either, so test it. The pattern, from a
+setup tested in a Codex session, keeps three steps apart: detecting new mail, waking the session that handles it,
+and handling it.
 
-1. **One worker, detection only.** It runs a bounded wait, `agent-mailbox watch 120 540`, inside one awaited call. If
-   the host hands back a running process, it keeps waiting on it inside that same call: a call that ends while the
-   command still runs wakes no one. Choose bounds your host allows, not "no limit".
-2. **A fixed signal.** On exit 0 the worker sends the parent a fixed signal ("new mail"), with no file names or
-   message text, and stops until it's rearmed. On exit 2 it starts one more bounded wait, quietly. On exit 1 it
-   reports once, and on 130 it stops.
-3. **The parent does the rest.** It runs `read`, checks each message's status, handles what it may, consumes what it
-   handled, checks the inbox once more, and then rearms the same worker, so mail that came in meanwhile isn't lost.
-4. **A scheduled check beside it** (approach 4) that reads the real inbox at an interval the host really supports
-   (hourly, say). It notices a worker that died or a wake that never came, rearms the worker only once it's sure the
-   old one stopped, and stays out of the way while the parent is handling mail. On Codex the scheduler shows the
-   whole prompt in the chat at every run, even a run that finds nothing, so keep that prompt to one line that points
-   to a runbook file holding the steps. The check stays visible: don't describe it as silent or as triggered by mail.
+1. **Detection: one worker.** It runs a bounded wait, `agent-mailbox watch 120 540`, inside one awaited call. If the
+   host hands back a running process, it keeps waiting on it inside that same call: a call that ends while the
+   command still runs signals no one. Choose bounds your host allows, not "no limit". On exit 0 it sends the parent a
+   fixed signal ("new mail"), with no file names or message text, and stops until it's rearmed. On exit 2 it starts
+   one more bounded wait, quietly. On exit 1 it reports once, and on 130 it stops.
+2. **The wake: a scheduled check** (approach 4). In the tested setup, the worker saw new mail about a minute after it
+   was sent, but its signal didn't wake the idle parent: the mail was handled at the next scheduled check, about 55
+   minutes later. So there the scheduled check is the wake, and its interval is the delay to expect: pick it for
+   that (every 10 minutes, say). It reads the real inbox, rearms the worker only once it's sure the old one stopped,
+   and stays out of the way while the parent is handling mail. On Codex the scheduler shows the whole prompt in the
+   chat at every run, even a run that finds nothing, so keep that prompt to one line that points to a runbook file
+   holding the steps. The check stays visible: don't describe it as silent or as triggered by mail.
+3. **Handling: the parent.** Woken by the check (or by the worker's signal, while it's in a turn), it runs `read`,
+   checks each message's status, handles what it may, consumes what it handled, checks the inbox once more, and then
+   rearms the same worker, so mail that came in meanwhile isn't lost.
 
 On a host with no shell access to the store but a connected GitHub reader, the worker can detect with the reader
 instead: list the inbox on the store's branch, and signal when a message or its `.sig` has a version you haven't
@@ -101,9 +104,10 @@ Keep one listener per name and store: a lock on one machine doesn't stop a secon
 holds back a file by name, so a held message that changes doesn't wake you again; to catch that, compare versions as
 the reader above does.
 
-Not yet established: whether these hosts wake an idle parent, how long a worker may wait, and recovery when the host
-replaces the environment. Test an arrival while the parent is idle before you rely on it. Detection takes up to one
-interval plus the host's own delay, so declare that in `--watch`, for example `--watch "worker, ~2 min"`.
+What's known: in the tested Codex setup, the worker's signal doesn't wake an idle parent. Elsewhere that's untested,
+so try an arrival while the parent is idle before you count on it. Not yet established anywhere: how long a worker
+may wait, and recovery when the host replaces the environment. Declare the delay you observed, the scheduled check's
+interval where it's the wake, for example `--watch "worker + scheduled check, ~10 min"`.
 
 ### 2. A hook at the end of each turn
 For a harness that runs a command when the agent finishes a turn, but can't be woken from outside.
