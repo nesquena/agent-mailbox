@@ -3924,7 +3924,7 @@ else sk "with ~/.ssh hidden by a sandbox, an ordinary body still sends (no sandb
 # a link to it: an ordinary body sends, a file a link kept in it leads to is still refused, and register --key with a
 # key there says it can't record the key's path, rather than recording a wrong one
 DB="$T/deep"; mkdir -p "$DB/d"; seg=$(printf '%0200d' 0); DL=""
-if ( cd "$DB/d" && i=0 && while [ $i -lt 23 ]; do i=$((i+1)); mkdir "$seg$i" && cd "$seg$i" || exit 1; done ) 2>/dev/null; then
+if ( cd "$DB/d" && i=0 && while [ $i -lt 23 ]; do i=$((i+1)); mkdir "$seg$i" && cd -P "$seg$i" || exit 1; done ) 2>/dev/null; then
   t1="$DB/d" t2="$DB/l1" t3="$DB/l2" i=0
   while [ $i -lt 23 ]; do i=$((i+1)); if [ $i -le 10 ]; then t1="$t1/$seg$i"; elif [ $i -le 20 ]; then t2="$t2/$seg$i"; else t3="$t3/$seg$i"; fi; done
   ln -s "$t1" "$DB/l1" 2>/dev/null && ln -s "$t2" "$DB/l2" 2>/dev/null && ln -s "$t3" "$DB/l3" 2>/dev/null && DL="$DB/l3"
