@@ -4232,13 +4232,14 @@ T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
 as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
 as wa1 register --kind t --about t --no-key >/dev/null 2>&1
 R="$W/home-wa1/.local/state/agent-mailbox/run"
-# wpid <job>: the pid a watcher wrote to the name's pid file, once it has (up to 60 s, or until its job has ended);
-# stopw <pid>: stop it, and wait (every watcher here has a short max: a stopped watcher waits out its current sleep
-# before it exits)
+# wpid <job>: wp is the pid a watcher wrote to the name's pid file, once it has (up to 60 s, or until its job has
+# ended: run in this shell, not in $(...), whose subshell can't reap the job, so an ended one would still answer
+# kill -0); stopw <pid>: stop it, and wait (every watcher here has a short max: a stopped watcher waits out its current
+# sleep before it exits)
 wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && kill -0 "$1" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
-  cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null; }
+  wp=$(cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null); }
 stopw() { kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; }
-rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j1=$!; p1=$(wpid "$j1"); sid=$(cut -d' ' -f3 "$R/wa1.pid" 2>/dev/null)
+rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j1=$!; wpid "$j1"; p1=$wp; sid=$(cut -d' ' -f3 "$R/wa1.pid" 2>/dev/null)
 [ -n "$p1" ] || no "the first watcher never started (no pid file), so the checks after it aren't what they say" "job $j1"
 # a second watcher, while the first runs, says so (naming the first), and starts anyway, writing its own pid to both files
 as wa1 watch 1 30 > "$T/w2.out" 2>&1 & j2=$!
@@ -4276,7 +4277,7 @@ kill $(pgrep -P "$gh") "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 # a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
-rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j3=$!; p3=$(wpid "$j3")
+rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j3=$!; wpid "$j3"; p3=$wp
 [ -n "$p3" ] || no "the watcher on the first store never started (no pid file), so the next check isn't what it says" "job $j3"
 out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
