@@ -26,9 +26,13 @@ ad_poll() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
   find "$AD_DIR/$ROOT" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort | cksum | cut -d' ' -f1-2 | tr ' ' '-'; }
 # (the peek checks store.md before and after listing, so a store moved away, or whose store.md goes before the listing
 # ends, fails it rather than reading as no mail, or as fewer messages)
+# (a folder that isn't there is no files only when the folder above it can be searched: one that can't be hides it, and
+# the peek fails, rather than reading an inbox it can't see as empty)
 ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; pl=""
   if [ -d "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ]; then
-    pl=$(CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*") || return 1; fi
+    pl=$(CDPATH= cd -P -- "$AD_DIR" && find "$1" -maxdepth 1 -type f ! -name "*$NL*") || return 1
+  elif [ ! -e "$AD_DIR/$1" ] && [ ! -L "$AD_DIR/$1" ]; then
+    ( CDPATH= cd -P -- "$AD_DIR/$(dirname -- "$1")" ) 2>/dev/null || [ ! -e "$AD_DIR/$(dirname -- "$1")" ] || return 1; fi
   [ -f "$AD_DIR/$ROOT/store.md" ] || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | LC_ALL=C sort; }
 # (a failed peek is the `! !` row, never fewer rows: holds then stops rather than read a gone store as an empty one)

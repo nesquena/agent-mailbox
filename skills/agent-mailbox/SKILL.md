@@ -69,7 +69,7 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 | 3 | no mail |
 | 4 | a change is saved locally but not published: run any command with the same name to publish it, and **don't resend**; but when it says this command wrote nothing, run it again once that's published |
 | 5 | `holds`: the item isn't released at that version |
-| 6 | `verify`: not verified (see the status) |
+| 6 | `verify`: not verified (see the status). A message or signature it can't read is an error (1), never 6 |
 | 130 | `watch` was stopped (a signal, such as a harness ending it) |
 
 ## Watching

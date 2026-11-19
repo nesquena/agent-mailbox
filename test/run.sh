@@ -3978,6 +3978,12 @@ st=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDI
   ad_show HEAD mailbox/store.md >/dev/null; printf '%s ' $?; ad_show HEAD mailbox/no-such.md >/dev/null; printf '%s ' $?
   ad_show HEAD mailbox/inbox >/dev/null; printf '%s' $?) )
 [ "$st" = "0 1 1" ] && ok "git: ad_show exits 0 for a file, 1 for none or a folder" || no "git: ad_show's exits for a file, none and a folder" "$st"
+# and it takes the path as it is, never as a pattern (mailbox/st*.md is no file, though store.md would match it), and a
+# path that lists more than one entry (a folder named with its trailing /, holding files) can't be told: 2
+st=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"
+  ad_show HEAD 'mailbox/st*.md' >/dev/null; printf '%s ' $?; ad_show HEAD mailbox/inbox/u1/ >/dev/null; printf '%s' $?) )
+[ "$st" = "1 2" ] && ok "git: ad_show takes its path literally, and a path that lists several entries is 2" ||
+  no "git: ad_show's exits for a pattern and for a path that lists several entries" "$st"
 echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 # 10. in a store that requires signatures, a copy of a signed hold committed without its signature (an old-dated side
@@ -4571,6 +4577,72 @@ expect "and so does holds on one whose store.md goes during the listing" 1 "can'
 mv "$T/store.md.gone" "$T/store/mailbox/store.md"
 }
 section dir-store-gone sec_dir_store_gone dir
+sec_dir_unreadable() {
+echo "== dir: an inbox, record, message or signature that can't be read stops the command, never reads as a verdict"
+if [ -n "$SSH" ]; then
+T="$W/unread"; mkdir -p "$T"
+for a in ua ub uc; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as ua init --require-signatures >/dev/null; for a in ua ub uc; do as $a register --kind t --about t >/dev/null 2>&1; done
+echo r | as uc send ub r1 - --release "u#1 v1" >/dev/null; sleep 1
+echo h | as ua send ub h1 - --hold "u#1 v1" >/dev/null; echo hi | as ua send ub m1 - >/dev/null
+I="$T/store/mailbox/inbox"; A="$T/store/mailbox/agents"; f=$(ls "$I/ub" | grep -- '-ua-m1\.md$')
+chmod 000 "$A/ua.md"
+if cat "$A/ua.md" >/dev/null 2>&1; then chmod 644 "$A/ua.md"; sk "unreadable inboxes, records and messages (this user reads any file)"
+else
+  # a sender's record that can't be read, or whose folder can't be searched, stops holds: before, it read as no key,
+  # and a store requiring signatures dropped the hold of a sender the reader hadn't pinned (here holds then said
+  # "released by uc")
+  expect "holds with a sender's record that can't be read stops, saying so" 1 "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record" \
+    as ub holds "u#1" --version v1
+  chmod 644 "$A/ua.md"; chmod 600 "$A"
+  expect "and so does holds with the agents folder not searchable" 1 "^agent-mailbox: can't list mailbox/agents" as ub holds "u#1" --version v1
+  chmod 755 "$A"
+  # a record that's a link whose target can't be reached (its folder not searchable) can't be read either
+  mkdir "$T/hid"; mv "$A/ua.md" "$T/hid/ua.md"; ln -s "$T/hid/ua.md" "$A/ua.md"; chmod 000 "$T/hid"
+  expect "and so does holds with a sender's record a link it can't follow" 1 "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record" \
+    as ub holds "u#1" --version v1
+  chmod 755 "$T/hid"; rm -f "$A/ua.md"; mv "$T/hid/ua.md" "$A/ua.md"
+  expect "with both readable, ua's hold holds" 5 "u#1 is held by ua" as ub holds "u#1" --version v1
+  # the mailbox's inbox folder not searchable (600, 000): watch and holds stop at once, saying so, as list and read do;
+  # before, watch said "no mail" and holds "nothing recorded"
+  chmod 600 "$I"
+  out=$(time_cap 30 "$SH" -c 'HOME="$1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$2" "$3" watch 1 20' sh "$W/home-ub" "$SH" "$CLI" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't list mailbox/inbox" &&
+    ok "watch with the mailbox's inbox folder not searchable stops at once, saying so" || no "watch with an inbox it can't search didn't stop, saying so (exit $rc)" "$out"
+  expect "and so does holds" 1 "^agent-mailbox: can't list mailbox/inbox" as ub holds "u#1" --version v1
+  st=$( (AD_DIR=$T/store ROOT=mailbox; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/dir.sh"; ad_peek mailbox/inbox/ub >/dev/null; printf '%s' $?) )
+  [ "$st" = 1 ] && ok "and the dir adapter's peek fails there, rather than listing no files" || no "the dir peek read an inbox it can't search as empty (exit $st)"
+  chmod 000 "$I"
+  expect "and watch at 000" 1 "^agent-mailbox: can't list mailbox/inbox" as ub watch 1 5
+  # an agent with no inbox folder, where the mailbox's inbox can be searched but not listed (100) or not read (300),
+  # has no mail: its absence is known (since #182 this stopped)
+  chmod 755 "$I"; rm -rf "$I/uc"; [ ! -e "$I/uc" ] || no "uc's inbox folder couldn't be removed for the next checks" "$(ls -la "$I")"; chmod 100 "$I"
+  expect "an agent with no inbox folder, the mailbox's inbox searchable but not listable, has no mail" 3 "^no mail for uc" as uc list
+  chmod 300 "$I"; expect "and the same at 300" 3 "^no mail for uc" as uc list
+  chmod 755 "$I"
+  # a message or signature that can't be read: verify, reply and sent stop, saying so (verify said "bad", exit 6; sent
+  # left the message out)
+  chmod 000 "$I/ub/$f"
+  expect "verify of a message that can't be read stops, saying so (exit 1, not 6)" 1 "^agent-mailbox: can't read mailbox/inbox/ub/$f\$" as ub verify "$f"
+  echo x > "$T/rb"; expect "and so does reply" 1 "^agent-mailbox: can't read mailbox/inbox/ub/$f\$" as ub reply "$f" "$T/rb"
+  expect "and sent, by its sender" 1 "^agent-mailbox: can't read mailbox/inbox/ub/$f\$" as ua sent
+  chmod 644 "$I/ub/$f"; chmod 000 "$I/ub/$f.sig"
+  expect "verify of a message whose signature can't be read stops, saying so" 1 "^agent-mailbox: can't read mailbox/inbox/ub/$f\.sig" as ub verify "$f"
+  chmod 644 "$I/ub/$f.sig"
+  expect "with both readable, verify says verified" 0 "^verified$" as ub verify "$f"
+  expect "and sent lists both" 0 "-ua-m1\.md to ub" as ua sent
+fi
+chmod -R u+rwX "$T/store" 2>/dev/null
+# a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
+# row: sent lists the rest, as it did before it stopped on one it can't read
+mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \
+  'exec /bin/cat "$@"' > "$T/shim/cat"; chmod +x "$T/shim/cat"
+out=$(PATH="$T/shim:$PATH"; export PATH; as ua sent 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-ua-h1\.md to ub" && ! printf '%s\n' "$out" | grep -q -- "-ua-m1\.md\|can't read" &&
+  ok "sent passes over a message consumed while it lists, and lists the rest" || no "sent stopped on, or listed, a message consumed while it listed (exit $rc)" "$out"
+else sk "dir-unreadable (no ssh-keygen -Y)"; fi
+}
+section dir-unreadable sec_dir_unreadable dir
 sec_bats() {
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"

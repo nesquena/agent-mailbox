@@ -367,8 +367,19 @@ need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$
 # in $(...), and stop on its status. That's asked of the folder itself, not of find, which also fails when an entry goes
 # between its listing and its look, as a message being consumed may)
 listable() { [ ! -e "$1" ] || ( CDPATH= cd -P -- "$1" && ls -A >/dev/null ) 2>/dev/null || die "can't list $(rel "$1")"; }
-inbox_files() { [ -d "$M/inbox/$1" ] || { listable "$M/inbox"; return 0; }; listable "$M/inbox/$1"
+# known_absent <path>: the path isn't there, and that's known: its folder can be searched (a folder that can be searched
+# but not listed still says whether a name is in it), or isn't there either, as far up as that goes. One whose folder is
+# there and can't be searched stops the command, saying so: its absence can't be told from a name hidden by the
+# folder's permissions. Status 1 when the path is there
+known_absent() { [ ! -e "$1" ] && [ ! -L "$1" ] || return 1; ka_d=$(dirname -- "$1")
+  ( CDPATH= cd -P -- "$ka_d" ) 2>/dev/null || { [ "$ka_d" != "$1" ] && known_absent "$ka_d"; } || die "can't list $(rel "$ka_d")"; }
+# inbox_ok <name>: that inbox can be read, or it's known not to be there (no mail). Stops, saying so, otherwise
+inbox_ok() { if [ -d "$M/inbox/$1" ]; then listable "$M/inbox/$1"; else known_absent "$M/inbox/$1" || :; fi; }
+inbox_files() { inbox_ok "$1"; [ -d "$M/inbox/$1" ] || return 0
   il=$(find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" 2>/dev/null)
+  # (asked again after find: a folder that can't be listed by then gave find nothing. ceiling: one that changes after
+  # this second look, as find's listing is used, isn't seen)
+  listable "$M/inbox/$1"
   [ -n "$il" ] || return 0
   printf '%s\n' "$il" | sort | while IFS= read -r p; do basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done
   return 0; }
@@ -464,7 +475,8 @@ copy_in() { ci_t=$1 ci_w=$2; shift 2; rm -f "$ci_t" 2>/dev/null
   case $ci_r in (0) die "can't copy $ci_w to $ci_t: check that the state folder can be written" ;; (1) return 1 ;; esac
   die "can't read $ci_w"; }
 # verify_file <message path> [<inbox it sits in>]: a message whose header isn't plain reads bad; otherwise as verify_sig
-verify_file() { hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
+# (a message that can't be read stops the command, as does its .sig in verify_sig: neither reads bad)
+verify_file() { cat -- "$1" >/dev/null 2>&1 || die "can't read $(rel "$1")"; hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
 # verify_sig <message path> [<inbox it sits in>]: its signature alone, whatever else its header holds
 verify_sig() {
   f=$1 inb=${2:-}
@@ -473,7 +485,12 @@ verify_sig() {
   [ -z "$inb" ] || [ "$to" = "$inb" ] || { echo misrouted; return; }
   # (a .sig that's a link isn't the message's own signature, as read's copy, which skips one, would also say)
   { [ -f "$f.sig" ] && [ ! -L "$f.sig" ]; } || { echo unsigned; return; }
-  rec=$(record "$from"); [ -f "$rec" ] || { echo nokey; return; }
+  cat -- "$f.sig" >/dev/null 2>&1 || die "can't read $(rel "$f.sig")"
+  # (a record that can't be read, or whose folder hides whether it's there, stops the command, rather than reading as
+  # no key, which a store requiring signatures drops a hold for)
+  # (a link there whose target can't be reached is a record that can't be read, too)
+  rec=$(record "$from"); [ -f "$rec" ] || { known_absent "$rec" || [ ! -L "$rec" ] || die "can't read $(rel "$rec"), $from's record"; echo nokey; return; }
+  cat -- "$rec" >/dev/null 2>&1 || die "can't read $(rel "$rec"), $from's record"
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
   # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
@@ -572,7 +589,8 @@ if [ "$cmd" = reply ]; then
   load_adapter; ad_sync; need_store; LOADED=1
   rp="$M/inbox/$ME/$rf"
   # (a link isn't a message of your inbox's, as for read)
-  plain "$rp" || die "not in your inbox: $rf"
+  plain "$rp" || { inbox_ok "$ME"; die "not in your inbox: $rf"; }
+  cat -- "$rp" >/dev/null 2>&1 || die "can't read $(rel "$rp")"
   hdr_ok "$rp" || die "$rf has a header that isn't plain (verify reads it bad), so reply can't tell who sent it; answer with send if you mean to"
   rfrom=$(field from "$rp") rtopic=$(field topic "$rp")
   matches "$NAME_RE" "$rfrom" || die "$rf has no valid from: header, so reply can't tell who sent it"
@@ -954,6 +972,9 @@ sent)
       il=$(inbox_files "$r") || { echo '!'; continue; }
       printf '%s\n' "$il" | while IFS= read -r p; do [ -n "$p" ] || continue; b=${p##*/}
         case "$b" in (????????T??????Z-"$ME"-?*) ;; (*) continue ;; esac
+        # (one named as yours that can't be read is a row "!" too, saying so: it can't be told whether it's yours)
+        # (one gone since the listing, consumed meanwhile, isn't a row: only one still there that can't be read is)
+        cat -- "$p" >/dev/null 2>&1 || { there "$p" || continue; warn "can't read $(rel "$p")"; echo '!'; continue; }
         [ "$(field from "$p")" = "$ME" ] || continue
         s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
         printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")"
@@ -1052,6 +1073,8 @@ holds)
   need_me; [ -z "$version" ] || [ -n "$item" ] || die "--version needs an item"
   load_adapter; ad_sync; need_store
   strict=""; require_sigs && strict=1
+  # (an inbox that can't be read stops holds, saying so, rather than reading as one with no records)
+  inbox_ok "$ME"
   tmpd="$STATE/tmp.holds.$$"; mkdir -p "$tmpd" || die "can't create $tmpd"
   # every message ever delivered to you that may carry a hold or release, in delivery order (consumed mail
   # included): <ref> <path>. The pattern lets an adapter skip the rest; each record is still checked below. Files in
@@ -1196,11 +1219,13 @@ watch)
   trap unmark EXIT
   trap 'exit 130' INT TERM
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"
+  # (an inbox that can't be read, here or after a check that failed, stops watch at once, saying so: it isn't a store
+  # that can't be reached for a moment, and a dir store's peek can't tell it from an empty inbox)
   check() { files=$(ad_peek "$ROOT/inbox/$ME") || return 1
             printf '%s\n' "$files" | while IFS= read -r p; do
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
               case " $except " in (*" $b "*) ;; (*) echo "$p" ;; esac; done; }
-  last=$(ad_poll 2>/dev/null) || last=""
+  inbox_ok "$ME"; last=$(ad_poll 2>/dev/null) || last=""
   if mail=$(check); then [ -z "$mail" ] || { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }; else last=""; fi
   # a store it can't reach or read ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
@@ -1210,6 +1235,7 @@ watch)
       fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't reach the store ($fails tries in a row)"
     fi
     [ "$now" != "$last" ] || { fails=0; continue; }
+    inbox_ok "$ME"
     if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store ($fails tries in a row)"; fi
     fails=0; last=$now
     [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
