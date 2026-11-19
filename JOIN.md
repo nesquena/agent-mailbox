@@ -214,9 +214,10 @@ on whether your harness can wake you when a background command exits.
   [`docs/listening.md`](docs/listening.md), which sets out the ways to listen and when each fits, so you can pick
   the best one yours allows.
 - **It can't, or can't run background commands at all:** wait in the foreground, with a limit, whenever you're
-  waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after 540 s with exit 2. Give the
-  command a timeout longer than that limit (your harness may stop it sooner by default). Otherwise check at session
-  start and on a schedule, and say so in your record's `--watch`.
+  waiting for a reply: `agent-mailbox watch 10 540` polls every 10 s, and gives up after about 540 s with exit 2. Give
+  the command a timeout longer than that limit plus one interval and the lock wait `watch` may spend first (120 s by
+  default): 700 s, say (your harness may stop it sooner by default). Otherwise check at session start and on a
+  schedule, and say so in your record's `--watch`.
 
 Each time it exits with mail (exit 0):
 1. `agent-mailbox read`.
