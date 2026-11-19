@@ -1146,6 +1146,19 @@ case " $ADAPTERS " in *" git "*)
   [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] && [ "$nc" -ge 3 ] &&
     ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
     no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc, $nc checks for a lock: $out; $(cat "$RT/dies")"
+  # a lock made but not written (a disk with free inodes but full blocks makes an empty file and no more; here a file
+  # size limit of 0 stands in for it) is removed, and the command says it can't write it, rather than leaving an empty
+  # lock that later takers wait out and blame on an unknown holder
+  RF="$T/lfull"; mkdir -p "$RF/state/locks/x"
+  # (the limit only in a subshell whose output is a pipe: time_cap's output files would trip it themselves, and the
+  # shell's own notice of the stopped write with it)
+  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
+    '( ulimit -f 0; STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; echo took ) 2>&1 | cat' > "$RF/taker"
+  out=$(time_cap 30 "$SH" "$RF/taker" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=$?
+  [ ! -e "$RF/state/locks/x/lock" ] && case "$out" in (*"can't write the lock "*) true ;; (*) false ;; esac &&
+    case "$out" in (*took*) false ;; (*) true ;; esac &&
+    ok "a lock that can't be written is removed, and the command says so" ||
+    no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
@@ -1993,8 +2006,24 @@ echo "== setup says when pinned keys stay with the old store settings (dir)"
 if [ -n "$SSH" ]; then
 T="$W/pinmove"; mkdir -p "$T"
 as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
+# a reader that can't record a strict store's pin (its pins folder can't be written) stops, saying so, rather than
+# ending with the shell's own error (dash) or carrying on without the pin (bash)
+PD="$W/home-pm1/.local/state/agent-mailbox/pins"; mkdir -p "$PD"; chmod a-w "$PD"
+if (true > "$PD/probe") 2>/dev/null; then rm -f "$PD/probe"; chmod u+w "$PD"
+  sk "a strict store's pin that can't be recorded stops the command (read-only folders don't stop this user)"
+else
+  expect "a strict store's pin that can't be recorded stops the command, saying so" 1 \
+    "^agent-mailbox: can't record that this store requires signatures" as pm1 holds "pm#1" --version v1
+  chmod u+w "$PD"
+fi
 as pm1 register --kind t --about t >/dev/null
 as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
+# init on a store whose agents folder can't be written stops, saying which file it couldn't make
+as pm3 setup --store "$T/store3" --adapter dir --name pm3 >/dev/null; mkdir -p "$T/store3/mailbox/agents"; chmod a-w "$T/store3/mailbox/agents"
+if (true > "$T/store3/mailbox/agents/probe") 2>/dev/null; then rm -f "$T/store3/mailbox/agents/probe"
+  sk "init that can't make its .keep files stops, saying so (read-only folders don't stop this user)"
+else expect "init that can't make its .keep files stops, saying so" 1 "^agent-mailbox: can't create mailbox/agents/\.keep" as pm3 init; fi
+chmod u+w "$T/store3/mailbox/agents"
 echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
 expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)

@@ -304,9 +304,15 @@ AD_LOCK="" AD_LOCKED=""
 # ad_lock_there: a lock file (or a link where it goes) is there
 ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
 # ad_can_make: a file can be made in the lock folder. Tried by making one, not by -w, which says yes where a sandbox,
-# a full disk or a folder that can't be searched refuses one; in a subshell, since a failed redirection on : ends a
-# POSIX shell
+# a disk with no free inodes or a folder that can't be searched refuses one; in a subshell, since a failed redirection
+# on : ends a POSIX shell
 ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
+# ad_take: make the lock (noclobber, so only one taker does), then write its holder line into it. A write that fails
+# (a disk whose blocks are full makes an empty file but no more) removes the lock it just made and stops the command,
+# rather than leaving an empty lock that later takers wait out and blame on an unknown holder
+ad_take() { (set -C; : > "$lk") 2>/dev/null || return 1
+  ( printf '%s\n' "$mine" > "$lk" ) 2>/dev/null && return 0
+  rm -f "$lk"; die "can't write the lock $lk (is the disk full?)"; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
   lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
@@ -315,12 +321,12 @@ ad_lock() {
   t0=$(date +%s)
   while :; do
     stale=""
-    (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+    ad_take && break
     # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and no
     # file can be made in the folder: it can't be made. One that can is another taker's lock, come and gone between the
     # two tries: wait, and try again)
     if ! ad_lock_there; then
-      (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
+      ad_take && break
       ad_lock_there || ad_can_make || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
