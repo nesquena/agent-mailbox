@@ -3605,6 +3605,8 @@ expect "or a walk fails while the signature lookup fails too" 1 "can't read this
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
 # (a version history lists that can't be read, the file there, stops holds naming it)
 expect "holds stops when a listed version can't be read" 1 "^agent-mailbox: can't read mailbox/inbox/k1/[^ ]*-k2-ha\.md as of " gf '*show*-k2-ha.md?'
+# (and so does one whose signature git can't look up: it's never taken for one that isn't there)
+expect "or whose signature can't be looked up" 1 "^agent-mailbox: can't read mailbox/inbox/k1/[^ ]*-k2-ha\.md\.sig as of " gf '*ls-tree*-k2-ha.md.sig*'
 else sk "strict-stores (no ssh-keygen -Y)"; fi
 }
 section strict-stores sec_strict_stores git
