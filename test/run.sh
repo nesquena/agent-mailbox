@@ -193,6 +193,10 @@ pinned() { a=$1 pf=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STA
 planted() { a=$1 pp=$2; shift 2; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
   CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'mkdir -p "$1/$(printf "%s" "$2" | sed "s/PID/$$/g")"; shift 2; exec "$@"' \
   sh "$W/home-$a/.local/state/agent-mailbox" "$pp" "$SH" "$CLI" "$@"; }
+# linked <agent> <path> <victim> <args...>: the same, with a link to <victim> made at <path>
+linked() { a=$1 pp=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'ln -s "$3" "$1/$(printf "%s" "$2" | sed "s/PID/$$/g")"; shift 3; exec "$@"' \
+  sh "$W/home-$a/.local/state/agent-mailbox" "$pp" "$pv" "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
 # tamper <shell command>: change the store directly, as anyone with write access could, from the store's top folder
@@ -2114,6 +2118,16 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't copy mailbox/inbox/pm2/[^ ]*\.sig " &&
     ! printf '%s\n' "$out" | grep -q "^holds: " && ok "and holds, deciding nothing" ||
     no "holds that couldn't copy a signature decided, or didn't say why (exit $rc)" "$out"
+  # a record whose name isn't plain (here it holds ESC bytes) is passed over before anything names it: with a copy that
+  # fails (a folder at the message copy's path), the stop names the next record, and no escape reaches the terminal
+  esc=$(printf '\033'); en="19990101T000000Z-pm1-x$esc[31m.md"
+  printf -- '---\nprotocol: 1\nfrom: pm1\nto: pm2\ntopic: x\ncontext: c\nsent: 1999-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\nhold: pm#2 v1\n---\n\nh\n' \
+    > "$T/store/mailbox/inbox/pm2/$en"
+  out=$(planted pm2 tmp.holds.PID/m holds "pm#2" --version v1 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't copy mailbox/inbox/pm2/[0-9]*T[0-9]*Z-pm1-pin-[a-z]*\.md " &&
+    ! printf '%s' "$out" | grep -q "$esc" &&
+    ok "holds passes over a record whose name isn't plain before naming it" || no "holds named a record whose name holds escapes (exit $rc)" "$(printf '%s' "$out" | od -c | head -4)"
+  rm -f "$T/store/mailbox/inbox/pm2/$en"
   [ -z "$(ls -d "$SP"/tmp.* 2>/dev/null)" ] && ok "and none of them leaves its copies behind" || no "a stopped copy left a folder" "$(ls -d "$SP"/tmp.*)"
   # a folder at the key's pin path is refused: before, the pin's temp was moved into it and verify said verified
   mkdir "$PP/pm1"
@@ -2128,6 +2142,60 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   out=$(PATH="$T/nosha:$PATH"; export PATH; as pm2 verify "$f" 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't work out this store's id (is sha256sum or shasum installed?)" &&
     ok "without sha256sum or shasum, verify stops, saying so" || no "verify without sha256sum or shasum didn't stop (exit $rc)" "$out"
+  # a message or signature that's in the store but can't be read stops the command, saying so: before, holds (through
+  # the dir adapter, which said "no such file" for both) read the signed hold as unsigned, which a strict store drops,
+  # and read's stop at a message or .sig it can't read had no check
+  IB="$T/store/mailbox/inbox/pm2"; chmod 000 "$IB/$fh.sig"
+  if cat "$IB/$fh.sig" >/dev/null 2>&1; then sk "a signature in the store that can't be read stops holds (this user reads any file)"
+  else
+    # (the dir adapter's ad_show says which: 0 for a file, 1 for none, 2 for one it can't read)
+    st=$( (AD_DIR=$T/store; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/dir.sh"
+      ad_show - mailbox/store.md >/dev/null; printf '%s ' $?; ad_show - mailbox/no-such.md >/dev/null; printf '%s ' $?
+      ad_show - "mailbox/inbox/pm2/$fh.sig" >/dev/null; printf '%s' $?) )
+    [ "$st" = "0 1 2" ] && ok "dir: ad_show exits 0 for a file, 1 for none, 2 for one it can't read" || no "dir: ad_show's exits for a file, none and an unreadable one" "$st"
+    out=$(as pm2 holds "pm#2" --version v1 2>&1); rc=$?
+    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/inbox/pm2/$fh\.sig as of " &&
+      ! printf '%s\n' "$out" | grep -q "^holds: " && ok "a hold's signature in the store that can't be read stops holds, deciding nothing" ||
+      no "holds read a signature it couldn't read as none, or didn't say why (exit $rc)" "$out"
+    chmod 644 "$IB/$fh.sig"; chmod 000 "$IB/$f"
+    expect "and a message that can't be read stops read, saying how to read the rest" 1 \
+      "^agent-mailbox: can't read mailbox/inbox/pm2/$f \(consume it, or pass --except, to read the rest\)" as pm2 read
+    chmod 644 "$IB/$f"; chmod 000 "$IB/$f.sig"
+    expect "and so does its signature" 1 "^agent-mailbox: can't read mailbox/inbox/pm2/$f\.sig \(consume its message" as pm2 read
+  fi
+  chmod 644 "$IB/$fh.sig" "$IB/$f" "$IB/$f.sig"
+  # an inbox folder that's there and can't be listed stops list, read, sent and a retiring update, saying so: before,
+  # list and read said "no mail", sent left it out, and update retired as if the inbox were empty
+  chmod 000 "$IB"
+  if ls "$IB" >/dev/null 2>&1; then sk "an inbox that can't be listed stops the command (this user lists any folder)"
+  else
+    expect "list of an inbox that can't be listed stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox/pm2" as pm2 list
+    expect "and so does read" 1 "^agent-mailbox: can't list mailbox/inbox/pm2" as pm2 read
+    expect "and sent" 1 "^agent-mailbox: can't list mailbox/inbox/pm2" as pm1 sent
+    expect "and update --status retired" 1 "^agent-mailbox: can't list mailbox/inbox/pm2" as pm2 update --status retired
+  fi
+  chmod 755 "$IB"
+  # and so does a mailbox inbox folder that can't be searched (600) or read (300): before, they said "no mail", and
+  # update retired with mail waiting
+  for mo in 600 300; do chmod "$mo" "$T/store/mailbox/inbox"
+    if ls "$T/store/mailbox/inbox" >/dev/null 2>&1 && ls "$IB" >/dev/null 2>&1; then
+      sk "an inbox folder at $mo stops the command (this user lists any folder)"
+    elif [ "$mo" = 600 ]; then
+      expect "with the inbox folder at 600, list stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 list
+      expect "and so does read" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 read
+      expect "and sent" 1 "^agent-mailbox: can't list mailbox/inbox" as pm1 sent
+      expect "and update --status retired" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 update --status retired
+    else expect "with the inbox folder at 300, sent stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox\$" as pm1 sent
+      expect "and list still lists pm2's mail" 0 "/inbox/pm2/" as pm2 list; fi
+    chmod 755 "$T/store/mailbox/inbox"; done
+  grep -qx "status: active" "$T/store/mailbox/agents/pm2.md" && ok "and pm2 is still active" ||
+    { no "an update that couldn't list the inbox retired pm2" "$(cat "$T/store/mailbox/agents/pm2.md")"; as pm2 update --status active >/dev/null 2>&1; }
+  # trust --relax that can't remove the strict pin (a read-only pins folder) stops, saying so, and the store stays strict
+  chmod a-w "$PP"
+  if (true > "$PP/probe") 2>/dev/null; then rm -f "$PP/probe"; sk "trust --relax that can't lift the pin stops (read-only folders don't stop this user)"
+  else expect "trust --relax that can't remove the strict pin stops, saying so" 1 "^agent-mailbox: can't remove .*/\.strict" as pm2 trust --relax
+    [ -f "$PP/.strict" ] && ok "and the store stays strict" || no "trust --relax removed the strict pin anyway" "$(ls -A "$PP")"; fi
+  chmod u+w "$PP"
   as pm2 consume "$fh" >/dev/null 2>&1
   as pm4 setup --store "$T/store" --adapter dir --name pm4 >/dev/null; P4="$W/home-pm4/.local/state/agent-mailbox/pins/${PP##*/}"
   # (the store's strict pin already there, as a reader's first command leaves it, so the write that fails is the key's)
@@ -2138,10 +2206,21 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
     as pm4 register --kind t --about t; fi
   chmod u+w "$P4"
 else no "a key pin that can't be recorded stops the command" "no hold sent, pm2 has no pins folder, or already pinned pm1: $fh; $(ls -A "$PP" 2>&1)"; fi
-expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
+# a link left at the pin's temp name, or at the key list's, isn't followed: the pin and the key list are written as
+# files of their own, and what the links lead to is left as it was (for the process id the CLI will run as)
+PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
+echo victim > "$T/victim"; echo victim > "$T/victim2"
+# (from no pin: an earlier read may have pinned pm1's key, when its message sorted first)
+rm -f "$PP/pm1"
+expect "verify pins the sender's key, past a link left at the pin's temp name" 0 "^verified$" pinned pm2 "$PP/.pm1" "$T/victim" verify "$f"
+[ "$(cat "$T/victim")" = victim ] && [ -f "$PP/pm1" ] && [ ! -L "$PP/pm1" ] && ok "and writes the pin as a file of its own, leaving what the link leads to" ||
+  no "a link at the pin's temp name was followed" "$(cat "$T/victim"; ls -lA "$PP")"
+rm -f "$PP"/.pm1.tmp.*
+expect "and verify checks a signature past a link left at its key list's name" 0 "^verified$" linked pm2 tmp.allowed.PID "$T/victim2" verify "$f"
+[ "$(cat "$T/victim2")" = victim ] && ok "leaving what the link leads to" || no "a link at the key list's name was followed" "$(cat "$T/victim2")"
 # send with a hold whose gate record can't be written (a size limit of 0) stops, saying so, and sends nothing: before,
-# the size limit ended the shell with its own error. (A shell that writes its here-documents to files, as bash does,
-# can't run send's checks under that limit at all: skipped there)
+# the size limit ended the shell with its own error. (A shell that writes its here-documents to files, as bash 3.2 does
+# (macOS's), can't run send's checks under that limit at all: skipped there; Linux's bash 5.2 runs this check)
 if (ulimit -f 0; "$SH" -c ': <<E
 x
 E') >/dev/null 2>&1; then
@@ -2160,6 +2239,24 @@ if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.pin"
   cmp -s "$PP/pm1" "$T/pm1.pin" && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and leaves the old pin as it was, with no temp beside it" ||
     no "trust under a size limit changed the pin or left a temp" "$(ls -A "$PP"; od -c "$PP/pm1" | head -2)"
 else no "trust that can't write its pin stops" "verify recorded no pin for pm1: $(ls -A "$PP" 2>&1)"; fi
+# a hold whose sender's key is gone from the registry still blocks in a strict store when the reader has a pin for it,
+# whatever is at the pin's path (here a folder): before, only a file there counted, and the hold was dropped
+as pm5 setup --store "$T/store" --adapter dir --name pm5 >/dev/null; as pm5 register --kind t --about t >/dev/null
+echo h | as pm5 send pm2 pin-nokey - --hold "pm#5 v1" >/dev/null
+r5="$T/store/mailbox/agents/pm5.md"; grep -v '^key:' "$r5" > "$r5.new" && mv "$r5.new" "$r5"; mkdir "$PP/pm5"
+out=$(as pm2 holds "pm#5" --version v1 2>&1); rc=$?
+[ "$rc" = 5 ] && printf '%s\n' "$out" | grep -q "^holds: pm#5 is held by pm5 at v1 (.*nokey" &&
+  ok "a strict store's hold from a sender with no key now, and a folder at its pin path, still blocks" ||
+  no "a hold whose sender has a folder at its pin path didn't block (exit $rc)" "$out"
+rmdir "$PP/pm5"
+# a message too big for a size limit (here 2 blocks; the others fit) stops read with its own message: the copy ignores
+# XFSZ, so nothing is cut short by the signal, and no shell prints it
+head -c 3000 /dev/zero | tr '\0' a | as pm1 send pm2 pin-big - >/dev/null; fb=$(basename "$(as pm2 list | grep -- '-pm1-pin-big\.md$')")
+out=$( (ulimit -f 2; as pm2 read) 2>&1 ); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't copy mailbox/inbox/pm2/$fb to .*: check that the state folder can be written" &&
+  ! printf '%s\n' "$out" | grep -qi "size" && ok "read of a message bigger than a size limit stops, saying only so" ||
+  no "read under a size limit didn't stop with its own message (exit $rc)" "$out"
+as pm2 consume "$fb" >/dev/null 2>&1
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
   no "a re-run of setup with unchanged settings spoke of pins" "$out"
@@ -3533,7 +3630,10 @@ expect "or the walk over every version fails" 1 "can't read this store's full, l
 expect "or a shallow checkout can't fetch its full history" 1 "can't read this store's full, latest history" gf '*--unshallow*' 1
 expect "or a walk fails while the signature lookup fails too" 1 "can't read this store's full, latest history" gf '*--reverse* *cat-file*'
 expect "a failed signature lookup still lists every version" 5 "a#1 is held by k2" gf '*cat-file*'
-expect "holds stops when a listed version can't be read" 1 "can't read this store's full, latest history" gf '*show*-k2-ha.md?'
+# (a version history lists that can't be read, the file there, stops holds naming it)
+expect "holds stops when a listed version can't be read" 1 "^agent-mailbox: can't read mailbox/inbox/k1/[^ ]*-k2-ha\.md as of " gf '*show*-k2-ha.md?'
+# (and so does one whose signature git can't look up: it's never taken for one that isn't there)
+expect "or whose signature can't be looked up" 1 "^agent-mailbox: can't read mailbox/inbox/k1/[^ ]*-k2-ha\.md\.sig as of " gf '*ls-tree*-k2-ha.md.sig*'
 else sk "strict-stores (no ssh-keygen -Y)"; fi
 }
 section strict-stores sec_strict_stores git
@@ -3873,6 +3973,11 @@ as u1 holds "item#15" >/dev/null 2>&1
 co=$(ls -d "$W"/home-u1/.local/state/agent-mailbox/checkouts/*/ | head -n 1)
 rows=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_history mailbox/inbox/u1 '^(hold|release):') | grep -c -- '-u2-h-15\.md$')
 [ "$rows" = 1 ] && ok "a hold under several merges is read once" || no "a hold under merges was listed $rows times"
+# the git adapter's ad_show says which: 0 for a file in that version, 1 for none (a folder isn't one)
+st=$( (AD_DIR=${co%/} BRANCH=main ME=u1; die() { :; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"
+  ad_show HEAD mailbox/store.md >/dev/null; printf '%s ' $?; ad_show HEAD mailbox/no-such.md >/dev/null; printf '%s ' $?
+  ad_show HEAD mailbox/inbox >/dev/null; printf '%s' $?) )
+[ "$st" = "0 1 1" ] && ok "git: ad_show exits 0 for a file, 1 for none or a folder" || no "git: ad_show's exits for a file, none and a folder" "$st"
 echo r | as u2 send u1 r-9 - --release "item#9 v1" >/dev/null
 expect "a real release still counts (holds reads only mail that may carry one)" 0 "released by u2 at v1" as u1 holds "item#9" --version v1
 # 10. in a store that requires signatures, a copy of a signed hold committed without its signature (an old-dated side

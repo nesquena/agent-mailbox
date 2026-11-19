@@ -362,10 +362,16 @@ active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = act
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
-# (names are listed one per line, so a name with a line break in it is skipped)
-inbox_files() { [ -d "$M/inbox/$1" ] || return 0
-  find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" | sort | while IFS= read -r p; do
-    basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done; }
+# (names are listed one per line, so a name with a line break in it is skipped. An inbox folder that's there and can't
+# be listed, or a mailbox inbox folder that can't, stops the command, never reads as an empty inbox: the callers run this
+# in $(...), and stop on its status. That's asked of the folder itself, not of find, which also fails when an entry goes
+# between its listing and its look, as a message being consumed may)
+listable() { [ ! -e "$1" ] || ( CDPATH= cd -P -- "$1" && ls -A >/dev/null ) 2>/dev/null || die "can't list $(rel "$1")"; }
+inbox_files() { [ -d "$M/inbox/$1" ] || { listable "$M/inbox"; return 0; }; listable "$M/inbox/$1"
+  il=$(find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" 2>/dev/null)
+  [ -n "$il" ] || return 0
+  printf '%s\n' "$il" | sort | while IFS= read -r p; do basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done
+  return 0; }
 # no_link <path>: refuse to write at or under <path> when any part of it below the store's own folder is a symlink,
 # so a link a writer plants in a shared store can't redirect writes outside it
 no_link() {
@@ -448,13 +454,15 @@ keep_pin() { [ -n "$2" ] || die "can't work out the fingerprint of $3 (is sha256
     mv -f "$kp_t" "$1" 2>/dev/null; } ||
     { rm -f "$kp_t"; die "can't record $3 ($1): check that the state folder can be written${4:+; $4}"; }; }
 # copy_in <to> <what> <command...>: the command's output (a message or its .sig, from the store) into <to>, a file in
-# this run's temp folder in the state folder: 0 when it's there; 1 when the source has none (the command fails as well
-# with its output thrown away). A copy that fails while its source is there (a full or read-only state folder, a size
-# limit) stops the command, so it's never read as a message or signature that isn't there
-copy_in() { ci_t=$1 ci_w=$2; shift 2; rm -f "$ci_t"
+# this run's temp folder in the state folder: 0 when it's there; 1 when the source has none (the command, run again
+# with its output thrown away, exits 1, as ad_show does only for a file that isn't there). A copy that fails while its
+# source is there (a full or read-only state folder, a size limit) stops the command, and so does a source that's there
+# and can't be read (any other exit), so neither is read as a message or signature that isn't there
+copy_in() { ci_t=$1 ci_w=$2; shift 2; rm -f "$ci_t" 2>/dev/null
   ( trap '' XFSZ; set -C; "$@" > "$ci_t" ) 2>/dev/null && return 0
-  rm -f "$ci_t"; ( trap '' XFSZ; "$@" > /dev/null ) 2>/dev/null || return 1
-  die "can't copy $ci_w to $ci_t: check that the state folder can be written"; }
+  rm -f "$ci_t" 2>/dev/null; ( trap '' XFSZ; "$@" > /dev/null ) 2>/dev/null; ci_r=$?
+  case $ci_r in (0) die "can't copy $ci_w to $ci_t: check that the state folder can be written" ;; (1) return 1 ;; esac
+  die "can't read $ci_w"; }
 # verify_file <message path> [<inbox it sits in>]: a message whose header isn't plain reads bad; otherwise as verify_sig
 verify_file() { hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
 # verify_sig <message path> [<inbox it sits in>]: its signature alone, whatever else its header holds
@@ -673,7 +681,7 @@ register|update)
   # an agent retires once its inbox is empty (PROTOCOL.md section 4): mail still waiting would no longer wake it.
   # --force retires anyway, leaving that mail unread
   if [ "$cmd" = update ] && [ "$status" = retired ] && [ "$(field status "$rec")" != retired ] && [ -z "$force" ]; then
-    left=$(inbox_files "$ME" | while IFS= read -r p; do basename "$p"; done)
+    il=$(inbox_files "$ME") || exit 1; left=$(printf '%s\n' "$il" | sed -n 's#.*/##p')
     if [ -n "$left" ]; then nl=$(printf '%s\n' "$left" | grep -c .)
       shown=$(printf '%s\n' "$left" | head -n 5 | tr '\n' ' '); [ "$nl" -le 5 ] || shown="$shown(and $((nl - 5)) more) "
       die "your inbox still holds $nl message(s): $shown- read and consume them first (sending on to another agent, as new mail, any that are its job), or pass --force to retire with them unread"
@@ -928,7 +936,7 @@ send)
 list)
   [ $# -eq 0 ] || unknown "$1"
   need_me; load_adapter; ad_sync; need_store
-  mail=$(inbox_files "$ME"); [ -n "$mail" ] || no_mail
+  mail=$(inbox_files "$ME") || exit 1; [ -n "$mail" ] || no_mail
   printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean ;;
 sent)
   for a in "$@"; do case "$a" in (-*) unknown "$a" ;; esac; done
@@ -938,16 +946,20 @@ sent)
   # mail from you is a message whose file name's sender field and from: header both name you, so another writer's
   # file can't pass by one alone. Signatures aren't checked: a writer could plant both. Rows: <id> <path> <to> <sent>
   # <needs>, sorted by id (time first), with sent as "?" when it isn't the form send writes
+  listable "$M/inbox"
   rows=$(for d in "$M"/inbox/*; do r=${d##*/}
       [ -z "$to" ] || [ "$r" = "$to" ] || continue
       [ -d "$d" ] && matches "$NAME_RE" "$r" || continue
-      inbox_files "$r" | while IFS= read -r p; do b=${p##*/}
+      # (an inbox that can't be listed is a row "!", which stops sent: its message is already out)
+      il=$(inbox_files "$r") || { echo '!'; continue; }
+      printf '%s\n' "$il" | while IFS= read -r p; do [ -n "$p" ] || continue; b=${p##*/}
         case "$b" in (????????T??????Z-"$ME"-?*) ;; (*) continue ;; esac
         [ "$(field from "$p")" = "$ME" ] || continue
         s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
         printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")"
       done
     done | LC_ALL=C sort)
+  case "$NL$rows$NL" in (*"$NL!$NL"*) exit 1 ;; esac
   [ -n "$rows" ] || { echo "no mail from $ME waiting${to:+ for $to}"; exit 3; }
   # age from sent to now, both UTC, by days from the civil date (no date -d, which BSD date lacks)
   printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
@@ -972,7 +984,8 @@ read)
   # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
   # file swapped in the store meanwhile can't be shown under another's status
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
-  shown=$(inbox_files "$ME" | while IFS= read -r p; do
+  ib=$(inbox_files "$ME") || { rm -rf "$rt"; exit 1; }
+  shown=$(printf '%s\n' "$ib" | while IFS= read -r p; do [ -n "$p" ] || continue
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     # (a message consumed since it was listed is skipped; one still there that can't be copied or read stops read, as
     # does its .sig: neither is read as no mail, or as unsigned)

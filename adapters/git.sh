@@ -466,5 +466,8 @@ ad_history() {
                  { split(r[++n], f, "\t"); b = /^[0-9a-f]+$/ ? $0 : "-"; if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
                  END { while (n < m) { split(r[++n], f, "\t"); print f[1], f[2] } }'
 }
-# ad_show <ref> <path>: a file's content as of <ref>
-ad_show() { ad_git show "$1:$2" 2>/dev/null; }
+# ad_show <ref> <path>: a file's content as of <ref>; 1 when that version has no such file (ls-tree lists no blob there:
+# a folder isn't one), 2 when it has and it can't be read, or when ls-tree itself fails (then it can't be told)
+ad_show() { as_l=$(ad_git --literal-pathspecs ls-tree "$1" -- "$2" 2>/dev/null) || return 2
+  case $as_l in ([0-7]*" blob "*) ;; (*) return 1 ;; esac
+  ad_git show "$1:$2" 2>/dev/null || return 2; }

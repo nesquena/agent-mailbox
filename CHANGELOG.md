@@ -19,6 +19,14 @@
   folder or a link at a key's pin path is refused rather than taken as no pin (a folder got the pin moved into it, and
   `verify` said verified), `trust` on a full disk refuses where it used to rewrite the pin in place, and
   `trust --relax` says so when it can't lift the pin.
+- **`holds` no longer reads a signature it can't read as no signature.** With the dir adapter, a hold's `.sig` that was
+  there but couldn't be read (its permissions) read as unsigned, so a store requiring signatures dropped the hold and
+  `holds` could report "released"; it now stops, saying which file it can't read. Adapters: `ad_show` exits 1 only
+  when the file isn't there in that version, and 2 when it's there and can't be read (adapters/README.md). An adapter
+  of your own must exit 1, and only 1, when the file isn't there: any other failure now stops `holds`.
+- **An inbox folder, or the mailbox's inbox folder, that can't be listed stops `list`, `read`, `sent` and a retiring
+  `update`, saying so.** `list` and
+  `read` said "no mail", `sent` left that inbox out, and `update --status retired` retired as if the inbox were empty.
 - **Without `sha256sum` or `shasum`, commands that open a store stop, saying so.** The store's id, a hash, names its
   key pins, the git adapter's copy and its locks in the state folder; without one every store shared them, and a key
   pin left empty by an older version matched any key. (With #178, `verify`, `read`, `reply` and `holds` already
