@@ -1161,6 +1161,19 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] && [ "$nc" -ge 3 ] &&
     ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
     no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc, $nc checks for a lock: $out; $(cat "$RT/dies")"
+  # a lock made but not written (a disk with free inodes but full blocks makes an empty file and no more; here a file
+  # size limit of 0 stands in for it) is removed, and the command says it can't write it, rather than leaving an empty
+  # lock that later takers wait out and blame on an unknown holder
+  RF="$T/lfull"; mkdir -p "$RF/state/locks/x"
+  # (the limit only in a subshell whose output is a pipe: time_cap's output files would trip it themselves, and the
+  # shell's own notice of the stopped write with it)
+  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
+    '( ulimit -f 0; STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; echo took ) 2>&1 | cat' > "$RF/taker"
+  out=$(time_cap 30 "$SH" "$RF/taker" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=$?
+  [ ! -e "$RF/state/locks/x/lock" ] && case "$out" in (*"can't write the lock "*) true ;; (*) false ;; esac &&
+    case "$out" in (*took*) false ;; (*) true ;; esac &&
+    ok "a lock that can't be written is removed, and the command says so" ||
+    no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
@@ -2007,7 +2020,25 @@ if [ -n "$SSH" ]; then
 T="$W/pinmove"; mkdir -p "$T"
 as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
 as pm1 register --kind t --about t >/dev/null
+# a reader that can't record a strict store's pin (the store's pins folder there but not writable, its .strict gone)
+# stops, saying so, rather than ending with the shell's own error (dash) or carrying on without the pin (bash)
+PS=$(ls -d "$W/home-pm1/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PS=${PS%/}
+if [ -n "$PS" ] && [ -f "$PS/.strict" ]; then mv "$PS/.strict" "$PS/.strict.kept"; chmod a-w "$PS"
+  if (true > "$PS/probe") 2>/dev/null; then rm -f "$PS/probe"
+    sk "a strict store's pin that can't be recorded stops the command (read-only folders don't stop this user)"
+  else
+    expect "a strict store's pin that can't be recorded stops the command, saying so" 1 \
+      "^agent-mailbox: can't record that this store requires signatures" as pm1 holds "pm#1" --version v1
+  fi
+  chmod u+w "$PS"; mv "$PS/.strict.kept" "$PS/.strict"
+else no "a strict store's pin that can't be recorded stops the command, saying so" "register recorded no pin to test with: $(ls -R "$W/home-pm1/.local/state/agent-mailbox/pins" 2>&1)"; fi
 as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
+# init on a store whose agents folder can't be written stops, saying which file it couldn't make
+as pm3 setup --store "$T/store3" --adapter dir --name pm3 >/dev/null; mkdir -p "$T/store3/mailbox/agents"; chmod a-w "$T/store3/mailbox/agents"
+if (true > "$T/store3/mailbox/agents/probe") 2>/dev/null; then rm -f "$T/store3/mailbox/agents/probe"
+  sk "init that can't make its .keep files stops, saying so (read-only folders don't stop this user)"
+else expect "init that can't make its .keep files stops, saying so" 1 "^agent-mailbox: can't create mailbox/agents/\.keep" as pm3 init; fi
+chmod u+w "$T/store3/mailbox/agents"
 echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
 expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
@@ -2543,6 +2574,21 @@ else
   [ "$n" -le $((hl + 8)) ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline $((hl + 3))s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
+# the watchdog still stops the hook at its deadline when it can't write its note there (the run folder made read-only
+# once the hook has started: under dash a failed write would end the watchdog's own shell before it stops the hook)
+(RWMAX=2 fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/ro.out") & bg=$!; n=0
+while [ $n -lt 30 ] && [ -z "$(hung)" ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
+if [ -n "$(hung)" ]; then chmod a-w "$R1"
+  if (true > "$R1/probe") 2>/dev/null; then rm -f "$R1/probe"; chmod u+w "$R1"; kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" 2>/dev/null
+    wait "$bg" 2>/dev/null; sk "a watchdog that can't write its note still stops the hook (read-only folders don't stop this user)"
+  else n=0; while [ $n -lt 30 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; chmod u+w "$R1"
+    if kill -0 "$bg" 2>/dev/null; then no "a watchdog that can't write its note still stops the hook" "still running 30 s after its 5 s deadline"
+      kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+    else wait "$bg" 2>/dev/null; ok "a watchdog that can't write its note still stops the hook (after ${n}s)"; fi
+  fi
+else no "a watchdog that can't write its note still stops the hook" "the hang never started: $(cat "$T/ro.out" 2>/dev/null)"
+  kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
+sleep 1; [ -z "$(hung)" ] || kill $(hung) 2>/dev/null
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
 for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!

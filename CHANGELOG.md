@@ -2,17 +2,22 @@
 
 ## Unreleased
 
+- **Commands that can't write a file they need now stop at once, saying why.** A lock write that fails on a full
+  disk stops with "can't write the lock … (is the disk full?)", rather than waiting about a minute and blaming
+  "another agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops the command with a
+  message, where bash carried on without it; and `init` on a folder it can't write stops with a message, where bash
+  reported it initialized without the `.keep` files. Under dash each of these ended with the shell's own error.
 - **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
   read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
   file a link kept in it leads to is now refused under every shell (under bash it used to be sent).
   `register --key` with a key in such a folder says so rather than recording a wrong path, and the plugin's hooks and
   `install.sh` no longer take an unreadable path for `/`.
 - **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
-  command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
-  It now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
-  making one rather than asking `test -w`, which says yes where a sandbox or a full disk refuses one, so there a stale
-  lock it can't remove now stops it at once, saying so, instead of waiting out the lock wait and blaming the dead
-  holder.
+  command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped. It
+  now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
+  making one rather than asking `test -w`, which says yes where a sandbox or a disk with no free inodes refuses one,
+  so there a stale lock it can't remove now stops it at once, saying so, instead of waiting out the lock wait and
+  blaming the dead holder.
 - **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`,
   and a scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot (approach 3): a GitHub Action on the store's repository calls a routine's webhook when
   mail lands in the bot's inbox. Each is written from a working setup. The skill points to them.
