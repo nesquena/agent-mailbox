@@ -225,6 +225,8 @@ SECTIONS=""
 section() { case $1 in (''|[!abcdefghijklmnopqrstuvwxyz0123456789]*|*[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "test/run.sh: section id '$1' isn't lowercase letters, digits and -" >&2; exit 64 ;; esac
   case "$NL$SECTIONS" in (*"$NL$1 "*) echo "test/run.sh: section '$1' is named twice" >&2; exit 64 ;; esac
   case $(LC_ALL=C; export LC_ALL; type "$2" 2>/dev/null) in ("$2 is a "*function*) ;; (*) echo "test/run.sh: section '$1' has no function '$2'" >&2; exit 64 ;; esac
+  # (a tag names an adapter this tree has: a typo would leave the section out of every run that names adapters)
+  [ -z "${3:-}" ] || [ -f "$ROOTDIR/adapters/$3.sh" ] || { echo "test/run.sh: section '$1' names adapter '$3', and there's no adapters/$3.sh" >&2; exit 64; }
   [ -z "${3:-}" ] || case " $ADAPTERS " in (*" $3 "*) ;; (*) return 0 ;; esac
   SECTIONS="$SECTIONS$*$NL"; }
 
@@ -433,7 +435,7 @@ sleep 1; [ -n "$hw" ] && [ -z "$(procs_naming "$hw/orphan")" ] && [ ! -d "$hw" ]
 for p in $(procs_naming "${hw:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done
 # a section named twice, or one whose function doesn't exist, stops the run before it starts (either would drop a
 # section with every shard still listing each id once); so does a shard with no sections
-mkdir -p "$W/guard/test" "$W/guard/tmp"
+mkdir -p "$W/guard/test" "$W/guard/tmp" "$W/guard/adapters"; cp "$ROOTDIR"/adapters/*.sh "$W/guard/adapters/"
 sed 's/^section capability-probe sec_capability_probe$/section cli-hardening sec_capability_probe/' "$0" > "$W/guard/test/twice.sh"
 sed 's/^section bats sec_bats$/section bats sec_batz/' "$0" > "$W/guard/test/nofn.sh"
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/twice.sh" --list 2>&1); rc=$?
@@ -446,6 +448,10 @@ n=$(( $(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --list | wc -l) + 1 ))
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --shard "$n/$n" --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "shard $n/$n has no sections" &&
   ok "and so does a shard with no sections" || no "a shard with no sections didn't stop the run (exit $rc)" "$out"
+sed 's/^section dir-store-gone sec_dir_store_gone dir$/section dir-store-gone sec_dir_store_gone drr/' "$0" > "$W/guard/test/badtag.sh"
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/badtag.sh" --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section 'dir-store-gone' names adapter 'drr', and there's no adapters/drr.sh" &&
+  ok "and so does a section tagged with an adapter this tree doesn't have" || no "a section with a mistyped adapter tag didn't stop the run (exit $rc)" "$out"
 sed 's/^section bats sec_bats$/section Bats sec_bats/' "$0" > "$W/guard/test/badid.sh"
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/badid.sh" --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "section id 'Bats' isn't lowercase" &&
@@ -480,6 +486,11 @@ tagged_sections() { sed -n "s/^ *section \([a-z0-9-]*\) [a-z0-9_]* $1\$/\1/p" "$
 lists_all() { [ "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')" | sort | tr '\n' ' ')" = "$2 " ]; }
 lists_none() { [ -z "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')")" ]; }
 gs=$(tagged_sections git); gs=${gs% }; ds=$(tagged_sections dir); ds=${ds% }
+# (every section line with a third word is one of them: a trailing space or another word there would hide a section
+# from the lists above)
+nt=$(grep -cE '^ *section [a-z0-9-]+ [a-z0-9_]+ [^ ]' "$0"); nl=$(echo $gs $ds | wc -w | tr -d ' ')
+[ "$nt" = "$nl" ] && ok "every section line with an adapter names git or dir, exactly" ||
+  no "a section line names an adapter some other way ($nt such lines, $nl read as git or dir)" "$(grep -nE '^ *section [a-z0-9-]+ [a-z0-9_]+ [^ ]' "$0")"
 if [ -n "$gs" ] && [ -n "$ds" ]; then
   out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && lists_none "$out" "$gs" && lists_all "$out" "$ds" &&
@@ -4077,6 +4088,9 @@ sec_capability_probe() {
 echo "== capability probe"
 old_ssh
 expect "an OpenSSH without -Y isn't taken for a signer" 1 "FAIL ssh-keygen -Y" env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$CLI" doctor
+# install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
+expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
+  env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 }
 section capability-probe sec_capability_probe
 sec_cli_hardening() {
@@ -4251,14 +4265,18 @@ T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
 as wa1 setup --store "$T/store" --adapter dir --name wa1 >/dev/null; as wa1 init >/dev/null
 as wa1 register --kind t --about t --no-key >/dev/null 2>&1
 R="$W/home-wa1/.local/state/agent-mailbox/run"
-# wpid: the pid a watcher wrote to the name's pid file, once it has (up to 10 s); stopw <pid>: stop it, and wait
-# (every watcher here has a short max: a stopped watcher waits out its current sleep before it exits)
-wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null; }
+# wpid <job>: wp is the pid a watcher wrote to the name's pid file, once it has (up to 60 s, or until its job has
+# ended: run in this shell, not in $(...), whose subshell can't reap the job, so an ended one would still answer
+# kill -0); stopw <pid>: stop it, and wait (every watcher here has a short max: a stopped watcher waits out its current
+# sleep before it exits)
+wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && kill -0 "$1" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+  wp=$(cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null); }
 stopw() { kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; }
-rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p1=$(wpid); sid=$(cut -d' ' -f3 "$R/wa1.pid")
+rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j1=$!; wpid "$j1"; p1=$wp; sid=$(cut -d' ' -f3 "$R/wa1.pid" 2>/dev/null)
+[ -n "$p1" ] || no "the first watcher never started (no pid file), so the checks after it aren't what they say" "job $j1"
 # a second watcher, while the first runs, says so (naming the first), and starts anyway, writing its own pid to both files
-(as wa1 watch 1 30 > "$T/w2.out" 2>&1 &)
-i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+as wa1 watch 1 30 > "$T/w2.out" 2>&1 & j2=$!
+i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && kill -0 "$j2" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 p2=$(cut -d' ' -f1 "$R/wa1.pid")
 grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the same mail: stop this one, or pid $p1 unless the Claude Code plugin's hook started it" "$T/w2.out" &&
   ok "a second watch for the name, while the first runs, warns, naming the first" || no "a second watch didn't warn" "$(cat "$T/w2.out")"
@@ -4292,7 +4310,8 @@ kill $(pgrep -P "$gh") "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 # a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
-rm -f "$R"/wa1*.pid; (as wa1 watch 1 30 >/dev/null 2>&1 &); p3=$(wpid)
+rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j3=$!; wpid "$j3"; p3=$wp
+[ -n "$p3" ] || no "the watcher on the first store never started (no pid file), so the next check isn't what it says" "job $j3"
 out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
 stopw "$p3"
@@ -4310,13 +4329,18 @@ rm -rf "$T/store/mailbox/inbox/vw2"
 expect "and on one whose inbox folder doesn't exist yet" 2 "no mail for vw2 after 12s" as vw2 watch 1 12
 expect "and holds there lists nothing, never an unreadable history" 0 "no holds or releases recorded" as vw2 holds
 # the store's folder is moved away while watch runs: watch stops loudly, well within the time limit
-(as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") &
-i=0; while [ ! -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ] && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
-mv "$T/store" "$T/gone"
-i=0; while ! grep -q '^exit ' "$T/w.out" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
-grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "exit 0" ] &&
-  ok "watch stops with \"can't reach the store\" once the dir store is gone (after ${i}s)" ||
-  no "watch kept running, or exited quietly, after its dir store was moved away" "$(cat "$T/w.out")"
+# (it's waited for until its pid file is there, up to 60 s, or until it has ended: a watch that never started is
+# its own failure, not a store-gone result)
+(as vw1 watch 1 0 > "$T/w.out" 2>&1; echo "exit $?" >> "$T/w.out") & wj=$!
+i=0; while [ ! -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ] && kill -0 "$wj" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+if [ -f "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid" ]; then
+  mv "$T/store" "$T/gone"
+  i=0; while ! grep -q '^exit ' "$T/w.out" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+  grep -q "can't reach the store" "$T/w.out" && [ "$(tail -n 1 "$T/w.out")" != "exit 0" ] &&
+    ok "watch stops with \"can't reach the store\" once the dir store is gone (after ${i}s)" ||
+    no "watch kept running, or exited quietly, after its dir store was moved away" "$(cat "$T/w.out")"
+else no "watch on the dir store never started (no pid file after ${i}s), so its store going away wasn't tested" "$(cat "$T/w.out")"
+  kill_tree "$wj"; mv "$T/store" "$T/gone"; fi
 # (a watcher still running is stopped through its own pid file, so the suite never waits on it)
 [ -n "$(grep '^exit ' "$T/w.out")" ] || { kill "$(cut -d' ' -f1 "$W/home-vw1/.local/state/agent-mailbox/run/vw1.pid")" 2>/dev/null; wait; }
 # other commands on the gone store don't read it as an empty one: holds can't pass
@@ -4354,10 +4378,6 @@ printf '#!/bin/sh\ncase "$1" in (mailbox/inbox/*) mv "%s" "%s" ;; esac\nexec "%s
 expect "and so does holds on one whose store.md goes during the listing" 1 "can't read this store's full, latest history" \
   env PATH="$T/shim-md2:$PATH" HOME="$W/home-vw1" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" holds
 mv "$T/store.md.gone" "$T/store/mailbox/store.md"
-# install.sh probes the same way: an ssh-keygen without -Y gets the note, not silence
-old_ssh
-expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
-  env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 }
 section dir-store-gone sec_dir_store_gone dir
 sec_bats() {
