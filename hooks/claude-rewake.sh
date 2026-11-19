@@ -290,7 +290,8 @@ ck=${AGENT_MAILBOX_REWAKE_CHECK:-15}; case "$ck" in ([1-9]|1[0-5]) ;; (*) ck=15 
 dl=$((start + max + iv + ck)); rm -f "$run/deadline"
 # (it checks every ck seconds, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
-    now=$(date +%s); [ "$now" -lt "$dl" ] || { : > "$run/deadline"; break; }
+    # (the note written in a subshell: under dash a failed write would end this one before it stops the hook)
+    now=$(date +%s); [ "$now" -lt "$dl" ] || { ( : > "$run/deadline" ) 2>/dev/null; break; }
     ds=$((dl - now)); [ "$ds" -le "$ck" ] || ds=$ck; sleep "$ds"; done
   kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!
