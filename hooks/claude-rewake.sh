@@ -57,7 +57,9 @@ else n=$(stores | wc -l)
   else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); legacy=1; fi
 fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
+# (a plugin folder whose path can't be read back comes back empty from some shells' pwd: then there's no CLI to run)
+pd=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P) && [ -n "$pd" ] || exit 0
+cli="$pd/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
 # args <pid>: that process's command line, its arguments joined by spaces
 args() { if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o args= 2>/dev/null; fi; }

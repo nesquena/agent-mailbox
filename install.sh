@@ -5,7 +5,10 @@
 set -u
 prefix="$HOME/.local"
 [ "${1:-}" = --prefix ] && { [ $# -ge 2 ] || { echo "usage: install.sh [--prefix <dir>]" >&2; exit 2; }; prefix=$2; }
-src="$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)/bin/agent-mailbox"
+# (a path that can't be read back comes back empty from some shells' pwd: refuse it rather than link /bin/agent-mailbox)
+here=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P) && [ -n "$here" ] ||
+  { echo "install.sh: can't read back the path of $(dirname "$0"): run it from a folder whose path can be read" >&2; exit 1; }
+src="$here/bin/agent-mailbox"
 dest="$prefix/bin/agent-mailbox"
 mkdir -p "$prefix/bin" || exit 1
 if [ -e "$dest" ] && [ ! -L "$dest" ]; then echo "install.sh: $dest exists and isn't a link; leaving it alone" >&2; exit 1; fi
