@@ -4003,8 +4003,10 @@ else sk "with ~/.ssh hidden by a sandbox, an ordinary body still sends (no sandb
 # the same where it can be built without a sandbox (Linux, not as root): a folder past PATH_MAX, reached by links whose
 # targets are each under 3000 characters, under a folder of the test's own that's write-and-search only (300), so
 # cd -P works and getcwd doesn't (/bin/pwd fails; dash's and busybox's builtin prints nothing and succeeds). ~/.ssh is
-# a link to it: an ordinary body sends, a file a link kept in it leads to is still refused, and register --key with a
-# key there says it can't record the key's path, rather than recording a wrong one
+# a link to it: an ordinary body sends, a file a link kept in it leads to (or a file under a folder one leads to) is
+# still refused, register --key with a key there says it can't record the key's path, rather than recording a wrong
+# one, a session's config kept there is recorded as named (not as /<file>), and install.sh run from there stops rather
+# than linking /bin/agent-mailbox
 DB="$T/deep"; mkdir -p "$DB/d"; seg=$(printf '%0200d' 0); DL=""
 if ( cd "$DB/d" && i=0 && while [ $i -lt 23 ]; do i=$((i+1)); mkdir "$seg$i" && cd -P "$seg$i" || exit 1; done ) 2>/dev/null; then
   t1="$DB/d" t2="$DB/l1" t3="$DB/l2" i=0
@@ -4012,19 +4014,30 @@ if ( cd "$DB/d" && i=0 && while [ $i -lt 23 ]; do i=$((i+1)); mkdir "$seg$i" && 
   ln -s "$t1" "$DB/l1" 2>/dev/null && ln -s "$t2" "$DB/l2" 2>/dev/null && ln -s "$t3" "$DB/l3" 2>/dev/null && DL="$DB/l3"
 fi
 if [ -n "$DL" ] && [ "$(id -u)" != 0 ] && echo "Host deep" > "$T/deep-config" && ln -s "$T/deep-config" "$DL/config" 2>/dev/null &&
+   mkdir -p "$T/deep-dotdir" && echo "Host d" > "$T/deep-dotdir/work" && ln -s "$T/deep-dotdir" "$DL/config.d" 2>/dev/null &&
+   cp "$C/config" "$DL/c.config" 2>/dev/null && cp "$ROOTDIR/install.sh" "$DL/install.sh" 2>/dev/null &&
    chmod 300 "$DB" && [ -z "$( (cd -P -- "$DL" && /bin/pwd -P) 2>/dev/null)" ]; then
   mv "$H/.ssh" "$H/.ssh.kept"; ln -s "$DL" "$H/.ssh"
   expect "with ~/.ssh's path unreadable (past PATH_MAX), an ordinary body still sends" 0 "^sent " as sec1 send sec2 deep "$T/prose.md"
   expect "and a file a link kept in it leads to is still refused" 1 "where a link in .*\.ssh leads" as sec1 send sec2 deepcfg "$T/deep-config"
+  expect "and so is a file under a folder a link kept in it leads to" 1 "where a link in .*\.ssh leads" as sec1 send sec2 deepdir "$T/deep-dotdir/work"
   rm -f "$H/.ssh"; mv "$H/.ssh.kept" "$H/.ssh"
   if [ -n "$SSH" ]; then chmod 700 "$DB"; ssh-keygen -q -t ed25519 -N '' -C deep -f "$DL/k" 2>/dev/null; chmod 300 "$DB"
     as sec3 setup --store "$T/store" --adapter dir --name sec3 >/dev/null
     expect "register --key with the key in a folder whose path can't be read back says so" 1 "can't read back the path of .*the key's folder" \
       as sec3 register --kind t --about t --key "$DL/k.pub"
   else sk "register --key with the key in a folder whose path can't be read back says so (no ssh-keygen -Y)"; fi
+  rm -f "$S/session-configs/sdeep"; env HOME="$H" AGENT_MAILBOX_SESSION=sdeep "$SH" "$CLI" --config "$DL/c.config" watch 1 1 >/dev/null 2>&1
+  [ "$(cat "$S/session-configs/sdeep" 2>/dev/null)" = "$DL/c.config" ] &&
+    ok "a session's config in a folder whose path can't be read back is recorded as named" ||
+    no "a session's config in a folder whose path can't be read back is recorded as named" "recorded: $(cat "$S/session-configs/sdeep" 2>&1)"
+  mkdir -p "$T/ih"; expect "install.sh run from a folder whose path can't be read back stops, rather than linking /bin" 1 \
+    "can't read back the path of" env HOME="$T/ih" "$SH" "$DL/install.sh" --prefix "$T/ih"
+  [ ! -e "$T/ih/bin/agent-mailbox" ] && [ ! -L "$T/ih/bin/agent-mailbox" ] && ok "and links nothing" ||
+    no "install.sh linked something from a folder whose path can't be read back" "$(ls -l "$T/ih/bin/agent-mailbox" 2>&1)"
   chmod 700 "$DB"
 else chmod 700 "$DB" 2>/dev/null
-  sk "with ~/.ssh's path unreadable (past PATH_MAX), an ordinary body still sends (getcwd works here, or this is root)"; fi
+  sk "with ~/.ssh's path unreadable (past PATH_MAX), an ordinary body still sends (can't build such a folder here, getcwd works, or this is root)"; fi
 rm -rf "$DB" 2>/dev/null
 }
 section send-secrets sec_send_secrets
