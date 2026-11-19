@@ -32,4 +32,5 @@ cli-hardening 3
 dir-name-race 6
 second-watcher 6
 dir-store-gone 26
+dir-unreadable 5
 bats 42
