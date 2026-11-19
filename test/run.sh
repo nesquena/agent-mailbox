@@ -1168,9 +1168,9 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   # (the limit only in a subshell whose output is a pipe: time_cap's output files would trip it themselves, and the
   # shell's own notice of the stopped write with it)
   printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
-    '( ulimit -f 0; STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; echo took ) 2>&1 | cat' > "$RF/taker"
-  out=$(time_cap 30 "$SH" "$RF/taker" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=$?
-  [ ! -e "$RF/state/locks/x/lock" ] && case "$out" in (*"can't write the lock "*) true ;; (*) false ;; esac &&
+    '{ ( ulimit -f 0; STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; echo took ) 2>&1; echo "exit $?"; } | cat' > "$RF/taker"
+  out=$(time_cap 30 "$SH" "$RF/taker" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=${out##*exit }
+  [ ! -e "$RF/state/locks/x/lock" ] && [ "$rc" = 1 ] && case "$out" in (*"can't write the lock "*) true ;; (*) false ;; esac &&
     case "$out" in (*took*) false ;; (*) true ;; esac &&
     ok "a lock that can't be written is removed, and the command says so" ||
     no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
@@ -2040,6 +2040,27 @@ if (true > "$T/store3/mailbox/agents/probe") 2>/dev/null; then rm -f "$T/store3/
 else expect "init that can't make its .keep files stops, saying so" 1 "^agent-mailbox: can't create mailbox/agents/\.keep" as pm3 init; fi
 chmod u+w "$T/store3/mailbox/agents"
 echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
+# a key pin that can't be recorded (the reader's pins folder for this store read-only) stops the command, saying so:
+# verify, read and trust, and register for its own key; before, each said "verified" or "pinned" and recorded nothing
+PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
+if [ -n "$PP" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
+  if (true > "$PP/probe") 2>/dev/null; then rm -f "$PP/probe"
+    sk "a key pin that can't be recorded stops the command (read-only folders don't stop this user)"
+  else
+    expect "verify that can't record the sender's key pin stops, saying so" 1 "^agent-mailbox: can't record pm1's key" as pm2 verify "$f"
+    expect "and so does read" 1 "^agent-mailbox: can't record pm1's key" as pm2 read
+    expect "and trust" 1 "^agent-mailbox: can't record pm1's key" as pm2 trust pm1
+  fi
+  chmod u+w "$PP"
+else no "a key pin that can't be recorded stops the command" "pm2 has no pins folder, or already pinned pm1: $(ls -A "$PP" 2>&1)"; fi
+as pm4 setup --store "$T/store" --adapter dir --name pm4 >/dev/null; P4="$W/home-pm4/.local/state/agent-mailbox/pins"
+# (the store's strict pin already there, as a reader's first command leaves it, so the write that fails is the key's)
+mkdir -p "$P4/$(basename "$PP")"; : > "$P4/$(basename "$PP")/.strict"; chmod a-w "$P4/$(basename "$PP")"
+if (true > "$P4/$(basename "$PP")/probe") 2>/dev/null; then rm -f "$P4/$(basename "$PP")/probe"
+  sk "register that can't record its own key pin stops (read-only folders don't stop this user)"
+else expect "register that can't record its own key pin stops, saying so" 1 "^agent-mailbox: can't record your own key" \
+  as pm4 register --kind t --about t; fi
+chmod u+w "$P4/$(basename "$PP")"
 expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||

@@ -446,10 +446,13 @@ verify_sig() {
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
   # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
-  pins="$STATE/pins/$STORE_ID"; mkdir -p "$pins"
+  # (a pin that can't be recorded stops the command: without it a later key swap would be pinned in turn, unseen. The
+  # callers run this in $(...), so they stop on its empty status; the message is already out)
+  pins="$STATE/pins/$STORE_ID"; mkdir -p "$pins" 2>/dev/null
   fp=$(printf '%s\n' "$pub" | sha)
   if [ -f "$pins/$from" ]; then [ "$(cat "$pins/$from")" = "$fp" ] || { echo changed; return; }
-  else echo "$fp" > "$pins/$from"; fi
+  else ( printf '%s\n' "$fp" > "$pins/$from" ) 2>/dev/null ||
+    die "can't record $from's key ($pins/$from): check that the state folder can be written"; fi
   allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE"
   printf '%s %s\n' "$from" "$pub" > "$allowed"
   if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
@@ -549,7 +552,7 @@ if [ "$cmd" = reply ]; then
   # its signature, as read shows it. In a strict store only verified mail counts (as for holds), so reply answers only a
   # message that verifies. Elsewhere a message that reads bad, changed or misrouted is refused too, since consuming it
   # would remove the sign of tampering unseen; unsigned and nokey are answered, with the status said
-  v=$(verify_file "$rp" "$ME")
+  v=$(verify_file "$rp" "$ME") && [ -n "$v" ] || exit 1
   if require_sigs; then
     [ "$v" = verified ] || die "this store requires signatures, and $rf doesn't verify ($v; see verify); answer with send if you mean to"
   else case "$v" in
@@ -733,7 +736,9 @@ register|update)
     session_store - 2>/dev/null || true
   fi
   # pin your own name only to a key you hold
-  [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$ME"; }
+  [ -z "$pub" ] || { [ "$cmd" = update ] && [ -z "$own" ]; } || { mkdir -p "$STATE/pins/$STORE_ID" 2>/dev/null
+    ofp=$(printf '%s\n' "$pub" | sha) && ( printf '%s\n' "$ofp" > "$STATE/pins/$STORE_ID/$ME" ) 2>/dev/null ||
+      die "can't record your own key ($STATE/pins/$STORE_ID/$ME): check that the state folder can be written"; }
   if [ -n "$unchanged" ] && [ -n "$AD_PUBLISHED" ]; then echo "update: nothing new to update for $ME ($status): the earlier change is now published"
   elif [ -n "$unchanged" ]; then echo "update: nothing to update for $ME ($status)"
   else echo "$cmd: $ME ($status)${pub:+, signing key $(printf '%s' "$pub" | cut -c1-24)...}"; fi ;;
@@ -776,7 +781,9 @@ trust)
     echo "this store is strict for you only while its store.md requires signatures"; exit 0; fi
   valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
-  mkdir -p "$STATE/pins/$STORE_ID"; printf '%s\n' "$pub" | sha > "$STATE/pins/$STORE_ID/$1"
+  mkdir -p "$STATE/pins/$STORE_ID" 2>/dev/null; tfp=$(printf '%s\n' "$pub" | sha) &&
+    ( printf '%s\n' "$tfp" > "$STATE/pins/$STORE_ID/$1" ) 2>/dev/null ||
+    die "can't record $1's key ($STATE/pins/$STORE_ID/$1): check that the state folder can be written"
   fp=$(fpnote "$pub")
   # in a strict store, what the old key signed stops counting; elsewhere it reads bad, and its holds still count
   if [ -f "$M/store.md" ] && require_sigs; then
@@ -944,7 +951,7 @@ read)
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     cat -- "$p" > "$rt/m" 2>/dev/null || continue
     if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
-    v=$(verify_file "$rt/m" "$ME")
+    v=$(verify_file "$rt/m" "$ME") && [ -n "$v" ] || { : > "$rt/stopped"; exit 1; }
     # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
     # name other than <stamp>-<from>-<topic>.md is pointed out (names may hold '-', so which part is off can't always
     # be told: the note says what the name should be)
@@ -961,6 +968,7 @@ read)
     # first) is indented; a last line without its newline gets one, and each message ends with its own marker
     clean 's/^[^ -~]*=/ &/' < "$rt/m"; [ -z "$(tail -c 1 < "$rt/m" | tr '\000' x)" ] || echo; printf '===== end %s\n\n' "$(rel "$p")"
   done)
+  [ ! -e "$rt/stopped" ] || { rm -rf "$rt"; exit 1; }
   rm -rf "$rt"
   [ -n "$shown" ] || no_mail
   printf '%s\n' "$shown" ;;
@@ -990,7 +998,7 @@ verify)
   [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
   # by path, a message sitting in an inbox is checked against that inbox, so a misrouted copy reads misrouted there too
   if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
-  v=$(verify_file "$f" "$inb"); echo "$v"; [ "$v" = verified ] || exit 6 ;;
+  v=$(verify_file "$f" "$inb") && [ -n "$v" ] || exit 1; echo "$v"; [ "$v" = verified ] || exit 6 ;;
 holds)
   item="" version="" seen=""
   while [ $# -gt 0 ]; do
@@ -1025,7 +1033,7 @@ holds)
       # a record whose header isn't plain, or that doesn't parse, blocks the gate (as a conflict does) when its signature
       # checks out (verified, or a pinned sender's changed or missing key): what it means can't be read for sure. One
       # whose signature doesn't reads bad
-      v=$(verify_sig "$tmpd/m" "$ME")
+      v=$(verify_sig "$tmpd/m" "$ME") && [ -n "$v" ] || { : > "$tmpd/stopped"; exit 1; }
       if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
           (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
@@ -1042,6 +1050,7 @@ holds)
         { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
       echo "$sent $kind $rec $from $(basename "$p") $v"
     done)
+  [ ! -e "$tmpd/stopped" ] || { rm -rf "$tmpd"; exit 1; }
   rm -rf "$tmpd"
   case "$NL$records$NL" in (*"$NL!$NL"*) die "can't read this store's full, latest history (check that the store is reachable), so holds can't decide" ;; esac
   # an adapter that doesn't keep every version (or doesn't say) lists only current mail: say so, then decide as usual,

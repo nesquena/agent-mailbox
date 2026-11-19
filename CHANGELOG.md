@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- **Commands that can't write a file they need now stop at once, saying why.** A lock write that fails on a full
-  disk stops with "can't write the lock … (is the disk full?)", rather than waiting about a minute and blaming
-  "another agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops the command with a
-  message, where bash carried on without it; and `init` on a folder it can't write stops with a message, where bash
-  reported it initialized without the `.keep` files. Under dash each of these ended with the shell's own error.
+- **Commands that can't write a file they need now stop at once, saying why.** A lock write that fails on a full disk
+  stops with "can't write the lock … (is the disk full?)", rather than waiting about a minute and blaming "another
+  agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops the command with a message,
+  where bash carried on without it; and `init` on a folder it can't write stops with a message, where bash reported it
+  initialized without the `.keep` files. Under dash each of these ended with the shell's own error. So do `verify`,
+  `read`, `register` and `trust` when they can't record a key pin, where they said "verified" or "pinned" and recorded
+  nothing, so a later key swap would have gone unseen.
 - **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
   read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
   file a link kept in it leads to is now refused under every shell (under bash it used to be sent).

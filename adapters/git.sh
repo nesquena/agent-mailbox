@@ -307,8 +307,9 @@ ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
 # a disk with no free inodes or a folder that can't be searched refuses one; in a subshell, since a failed redirection
 # on : ends a POSIX shell
 ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
-# ad_take: make the lock (noclobber, so only one taker does) and write its holder line, in one process, so a signal
-# can't land between the two and leave an empty lock. A write that fails (a disk whose blocks are full makes an empty
+# ad_take: make the lock (noclobber, so only one taker does) and write its holder line, in one process, which leaves
+# only the moment between the open and the write for a kill to leave an empty lock behind (two processes left far
+# more; a stale empty lock is broken once it's a minute old). A write that fails (a disk whose blocks are full makes an empty
 # file but no more) removes the lock that same process made, and stops the command, rather than leaving an empty lock
 # that later takers wait out and blame on an unknown holder. (`|| exit 1` after the exec: a non-POSIX bash goes on
 # after a failed `exec 3>`, and would remove another taker's lock; XFSZ ignored, so a size limit fails the write
