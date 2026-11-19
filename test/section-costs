@@ -8,7 +8,7 @@ git-take-turns 68
 git-first-init 1
 git-foreign-history 18
 git-unpublished 8
-git-leftover-conflict 13
+git-leftover-conflict 11
 git-planted 7
 git-shared-home 5
 git-replayed-releases 5
@@ -29,7 +29,7 @@ holds-rules 44
 send-secrets 7
 capability-probe 1
 cli-hardening 3
-dir-name-race 3
+dir-name-race 6
 second-watcher 6
 dir-store-gone 26
 bats 42
