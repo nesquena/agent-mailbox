@@ -187,6 +187,11 @@ as() { a=$1; shift; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAI
 pinned() { a=$1 pf=$2 pv=$3; shift 3; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
   CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'echo $$ > "$2.pid"; for x in "" .sig .old; do ln -s "$2" "$1.tmp.$$$x"; done
   shift 2; exec "$@"' sh "$pf" "$pv" "$SH" "$CLI" "$@"; }
+# planted <agent> <path> <args...>: run the CLI as <agent> after making a folder at <path> in its state folder, PID in
+# <path> standing for the process id the CLI will run as (exec keeps it), so a file the CLI writes there can't be
+planted() { a=$1 pp=$2; shift 2; HOME="$W/home-$a" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_SESSION= \
+  CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= sh -c 'mkdir -p "$1/$(printf "%s" "$2" | sed "s/PID/$$/g")"; shift 2; exec "$@"' \
+  sh "$W/home-$a/.local/state/agent-mailbox" "$pp" "$SH" "$CLI" "$@"; }
 # in_dir <dir> <command...>: run a command from <dir> (no quoting of the path in a string)
 in_dir() { (d=$1; shift; cd "$d" && "$@"); }
 # tamper <shell command>: change the store directly, as anyone with write access could, from the store's top folder
@@ -2068,10 +2073,34 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
     [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && ! printf '%s\n' "$out" | grep -q "^holds: .* by " &&
       ok "and holds, deciding nothing" || no "holds that couldn't record the key pin decided, or didn't say why (exit $rc)" "$out"
     expect "and trust" 1 "^agent-mailbox: can't record pm1's key" as pm2 trust pm1
-    [ ! -e "$PP/pm1" ] && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and no pin or temp file is left" ||
-      no "a pin write that failed left a file" "$(ls -A "$PP")"
   fi
   chmod u+w "$PP"
+  # a message or signature the reader can't copy into its state folder (a folder planted at the copy's path) stops the
+  # command, saying so: before, read skipped the message (no mail, exit 3) or read it as unsigned, and holds read a
+  # signed hold as unsigned, which a strict store drops
+  SP="$W/home-pm2/.local/state/agent-mailbox"
+  expect "read that can't copy a message into its state folder stops, saying so" 1 "^agent-mailbox: can't copy mailbox/inbox/pm2/" \
+    planted pm2 tmp.read.PID/m read
+  expect "and so does read that can't copy its signature" 1 "^agent-mailbox: can't copy mailbox/inbox/pm2/[^ ]*\.sig " \
+    planted pm2 tmp.read.PID/m.sig read
+  out=$(planted pm2 tmp.holds.PID/m.sig holds "pm#2" --version v1 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't copy mailbox/inbox/pm2/[^ ]*\.sig " &&
+    ! printf '%s\n' "$out" | grep -q "^holds: " && ok "and holds, deciding nothing" ||
+    no "holds that couldn't copy a signature decided, or didn't say why (exit $rc)" "$out"
+  [ -z "$(ls -d "$SP"/tmp.* 2>/dev/null)" ] && ok "and none of them leaves its copies behind" || no "a stopped copy left a folder" "$(ls -d "$SP"/tmp.*)"
+  # a folder at the key's pin path is refused: before, the pin's temp was moved into it and verify said verified
+  mkdir "$PP/pm1"
+  expect "verify with a folder at the sender's pin path stops, saying so" 1 "^agent-mailbox: can't check pm1's key: its pin .* isn't a plain file" \
+    as pm2 verify "$f"
+  [ -z "$(ls -A "$PP/pm1")" ] && ok "and moves nothing into it" || no "verify moved a file into a folder at the pin path" "$(ls -A "$PP/pm1")"
+  expect "and so does trust" 1 "^agent-mailbox: can't record pm1's key: .* isn't a plain file" as pm2 trust pm1
+  rmdir "$PP/pm1"
+  # without sha256sum or shasum (here both fail), a command that opens a store stops, saying so: the store's id names its
+  # pins, and an empty one would be every store's
+  mkdir -p "$T/nosha"; for t in sha256sum shasum; do printf '#!/bin/sh\nexit 1\n' > "$T/nosha/$t"; chmod +x "$T/nosha/$t"; done
+  out=$(PATH="$T/nosha:$PATH"; export PATH; as pm2 verify "$f" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't work out this store's id (is sha256sum or shasum installed?)" &&
+    ok "without sha256sum or shasum, verify stops, saying so" || no "verify without sha256sum or shasum didn't stop (exit $rc)" "$out"
   as pm2 consume "$fh" >/dev/null 2>&1
   as pm4 setup --store "$T/store" --adapter dir --name pm4 >/dev/null; P4="$W/home-pm4/.local/state/agent-mailbox/pins/${PP##*/}"
   # (the store's strict pin already there, as a reader's first command leaves it, so the write that fails is the key's)
@@ -2083,6 +2112,27 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   chmod u+w "$P4"
 else no "a key pin that can't be recorded stops the command" "no hold sent, pm2 has no pins folder, or already pinned pm1: $fh; $(ls -A "$PP" 2>&1)"; fi
 expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
+# send with a hold whose gate record can't be written (a size limit of 0) stops, saying so, and sends nothing: before,
+# the size limit ended the shell with its own error. (A shell that writes its here-documents to files, as bash does,
+# can't run send's checks under that limit at all: skipped there)
+if (ulimit -f 0; "$SH" -c ': <<E
+x
+E') >/dev/null 2>&1; then
+  out=$( (ulimit -f 0; echo g | as pm1 send pm2 pin-gate - --hold "pm#3 v1") 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*/gates/" && ! printf '%s\n' "$out" | grep -qi "file size" &&
+    [ -z "$(as pm2 list | grep -- '-pin-gate\.md$')" ] && ok "send whose hold can't record its gate stops, saying only so, and sends nothing" ||
+    no "send under a size limit didn't stop with its own message, or sent (exit $rc)" "$out"
+else sk "send whose hold can't record its gate stops, saying only so ($SH writes here-documents to files, which a size limit stops first)"; fi
+# trust that can't write (a size limit of 0) leaves the old pin as it was, byte for byte, and no temp beside it: the
+# pin is written beside it and moved over it, never truncated in place (a later read would take an empty pin as changed)
+PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
+if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.pin"
+  out=$( (ulimit -f 0; as pm2 trust pm1) 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && ! printf '%s\n' "$out" | grep -qi "file size" &&
+    ok "trust that can't write its pin stops, saying only so" || no "trust under a size limit didn't stop, or said more (exit $rc)" "$out"
+  cmp -s "$PP/pm1" "$T/pm1.pin" && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and leaves the old pin as it was, with no temp beside it" ||
+    no "trust under a size limit changed the pin or left a temp" "$(ls -A "$PP"; od -c "$PP/pm1" | head -2)"
+else no "trust that can't write its pin stops" "verify recorded no pin for pm1: $(ls -A "$PP" 2>&1)"; fi
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
   no "a re-run of setup with unchanged settings spoke of pins" "$out"
