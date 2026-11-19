@@ -2041,26 +2041,38 @@ else expect "init that can't make its .keep files stops, saying so" 1 "^agent-ma
 chmod u+w "$T/store3/mailbox/agents"
 echo hi | as pm1 send pm2 pin-move - >/dev/null; f=$(basename "$(as pm2 list | grep -- '-pm1-pin-move\.md$')")
 # a key pin that can't be recorded (the reader's pins folder for this store read-only) stops the command, saying so:
-# verify, read and trust, and register for its own key; before, each said "verified" or "pinned" and recorded nothing
+# verify, read, reply, holds and trust, and register for its own key; before, each said "verified" or "pinned" (or
+# reply sent and consumed, or holds decided) and recorded nothing
+echo h | as pm1 send pm2 pin-hold - --hold "pm#2 v1" >/dev/null; fh=$(basename "$(as pm2 list | grep -- '-pm1-pin-hold\.md$')")
 PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
-if [ -n "$PP" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
+if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   if (true > "$PP/probe") 2>/dev/null; then rm -f "$PP/probe"
     sk "a key pin that can't be recorded stops the command (read-only folders don't stop this user)"
   else
     expect "verify that can't record the sender's key pin stops, saying so" 1 "^agent-mailbox: can't record pm1's key" as pm2 verify "$f"
     expect "and so does read" 1 "^agent-mailbox: can't record pm1's key" as pm2 read
+    echo r > "$T/pin-reply"
+    expect "and reply" 1 "^agent-mailbox: can't record pm1's key" as pm2 reply "$f" "$T/pin-reply"
+    [ -n "$(as pm2 list | grep -- "$f\$")" ] && ok "and the message reply would have answered is kept" ||
+      no "a reply that couldn't record the key pin consumed the message" "$(as pm2 list 2>&1)"
+    out=$(as pm2 holds "pm#2" --version v1 2>&1); rc=$?
+    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && ! printf '%s\n' "$out" | grep -q "^holds: .* by " &&
+      ok "and holds, deciding nothing" || no "holds that couldn't record the key pin decided, or didn't say why (exit $rc)" "$out"
     expect "and trust" 1 "^agent-mailbox: can't record pm1's key" as pm2 trust pm1
+    [ ! -e "$PP/pm1" ] && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and no pin or temp file is left" ||
+      no "a pin write that failed left a file" "$(ls -A "$PP")"
   fi
   chmod u+w "$PP"
-else no "a key pin that can't be recorded stops the command" "pm2 has no pins folder, or already pinned pm1: $(ls -A "$PP" 2>&1)"; fi
-as pm4 setup --store "$T/store" --adapter dir --name pm4 >/dev/null; P4="$W/home-pm4/.local/state/agent-mailbox/pins"
-# (the store's strict pin already there, as a reader's first command leaves it, so the write that fails is the key's)
-mkdir -p "$P4/$(basename "$PP")"; : > "$P4/$(basename "$PP")/.strict"; chmod a-w "$P4/$(basename "$PP")"
-if (true > "$P4/$(basename "$PP")/probe") 2>/dev/null; then rm -f "$P4/$(basename "$PP")/probe"
-  sk "register that can't record its own key pin stops (read-only folders don't stop this user)"
-else expect "register that can't record its own key pin stops, saying so" 1 "^agent-mailbox: can't record your own key" \
-  as pm4 register --kind t --about t; fi
-chmod u+w "$P4/$(basename "$PP")"
+  as pm2 consume "$fh" >/dev/null 2>&1
+  as pm4 setup --store "$T/store" --adapter dir --name pm4 >/dev/null; P4="$W/home-pm4/.local/state/agent-mailbox/pins/${PP##*/}"
+  # (the store's strict pin already there, as a reader's first command leaves it, so the write that fails is the key's)
+  mkdir -p "$P4"; : > "$P4/.strict"; chmod a-w "$P4"
+  if (true > "$P4/probe") 2>/dev/null; then rm -f "$P4/probe"
+    sk "register that can't record its own key pin stops (read-only folders don't stop this user)"
+  else expect "register that can't record its own key pin stops, saying so" 1 "^agent-mailbox: can't record your own key" \
+    as pm4 register --kind t --about t; fi
+  chmod u+w "$P4"
+else no "a key pin that can't be recorded stops the command" "no hold sent, pm2 has no pins folder, or already pinned pm1: $fh; $(ls -A "$PP" 2>&1)"; fi
 expect "verify pins the sender's key" 0 "^verified$" as pm2 verify "$f"
 out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
