@@ -89,7 +89,8 @@ LIST
 pick "$miss"
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
-cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
+# (a plugin folder whose path can't be read back comes back empty from some shells' pwd: then name the CLI plainly)
+pd=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P) && [ -n "$pd" ] && cli="$pd/bin/agent-mailbox" || cli=agent-mailbox
 command -v agent-mailbox >/dev/null 2>&1 && cli=agent-mailbox
 cli=$(word "$cli")
 # ceiling: the config record and the name are two files, so a stale config record (session-configs/<id>, left by a
