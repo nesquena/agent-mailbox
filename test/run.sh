@@ -4597,6 +4597,11 @@ else
   chmod 644 "$A/ua.md"; chmod 600 "$A"
   expect "and so does holds with the agents folder not searchable" 1 "^agent-mailbox: can't list mailbox/agents" as ub holds "u#1" --version v1
   chmod 755 "$A"
+  # a record that's a link whose target can't be reached (its folder not searchable) can't be read either
+  mkdir "$T/hid"; mv "$A/ua.md" "$T/hid/ua.md"; ln -s "$T/hid/ua.md" "$A/ua.md"; chmod 000 "$T/hid"
+  expect "and so does holds with a sender's record a link it can't follow" 1 "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record" \
+    as ub holds "u#1" --version v1
+  chmod 755 "$T/hid"; rm -f "$A/ua.md"; mv "$T/hid/ua.md" "$A/ua.md"
   expect "with both readable, ua's hold holds" 5 "u#1 is held by ua" as ub holds "u#1" --version v1
   # the mailbox's inbox folder not searchable (600, 000): watch and holds stop at once, saying so, as list and read do;
   # before, watch said "no mail" and holds "nothing recorded"

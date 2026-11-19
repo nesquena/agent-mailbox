@@ -4,11 +4,13 @@
 
 - **An inbox, record, message or signature that can't be read stops the command, saying so, in more places.** With the
   mailbox's inbox folder not searchable, `watch` said "no mail" and `holds` "nothing recorded"; both now stop at once.
-  A sender's registry record that can't be read (or whose folder can't be searched) read as having no key, so a store
-  requiring signatures dropped that sender's hold if you hadn't pinned its key, and `holds` could say "released"; it
-  now stops. `verify` of a message or signature it can't read said "bad" (exit 6); it now says it can't read it and
-  exits 1, as other errors do: 6 still means read and not verified. `reply` of such a message, and `sent` with a
-  message of yours it can't read, stop too.
+  A sender's registry record that can't be read (or whose folder can't be searched, or a link there whose target can't
+  be reached) read as having no key, so a store requiring signatures dropped that sender's hold if you hadn't pinned
+  its key, and `holds` could say "released"; it now stops, and so does `read`, which showed that sender's mail as
+  `[nokey]`. `verify` of a message or signature it can't read said "bad" (exit 6); it now says it can't read it and
+  exits 1, as other errors do: 6 still means read and not verified. `reply` of such a message now says it can't read
+  it (it stopped before, saying its header wasn't plain), and `sent` shows a message of yours it can't read as a row
+  `!` and exits 1, where it left the message out.
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
   0.1.3 stopped there ("can't list"); the folder's absence is known, so it's no mail, as before. A folder that can't be
   searched still stops the command.

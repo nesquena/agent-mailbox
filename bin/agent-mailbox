@@ -372,7 +372,7 @@ listable() { [ ! -e "$1" ] || ( CDPATH= cd -P -- "$1" && ls -A >/dev/null ) 2>/d
 # there and can't be searched stops the command, saying so: its absence can't be told from a name hidden by the
 # folder's permissions. Status 1 when the path is there
 known_absent() { [ ! -e "$1" ] && [ ! -L "$1" ] || return 1; ka_d=$(dirname -- "$1")
-  ( CDPATH= cd -P -- "$ka_d" ) 2>/dev/null || known_absent "$ka_d" || die "can't list $(rel "$ka_d")"; }
+  ( CDPATH= cd -P -- "$ka_d" ) 2>/dev/null || { [ "$ka_d" != "$1" ] && known_absent "$ka_d"; } || die "can't list $(rel "$ka_d")"; }
 # inbox_ok <name>: that inbox can be read, or it's known not to be there (no mail). Stops, saying so, otherwise
 inbox_ok() { if [ -d "$M/inbox/$1" ]; then listable "$M/inbox/$1"; else known_absent "$M/inbox/$1" || :; fi; }
 inbox_files() { inbox_ok "$1"; [ -d "$M/inbox/$1" ] || return 0
@@ -488,7 +488,8 @@ verify_sig() {
   cat -- "$f.sig" >/dev/null 2>&1 || die "can't read $(rel "$f.sig")"
   # (a record that can't be read, or whose folder hides whether it's there, stops the command, rather than reading as
   # no key, which a store requiring signatures drops a hold for)
-  rec=$(record "$from"); [ -f "$rec" ] || { known_absent "$rec" || :; echo nokey; return; }
+  # (a link there whose target can't be reached is a record that can't be read, too)
+  rec=$(record "$from"); [ -f "$rec" ] || { known_absent "$rec" || [ ! -L "$rec" ] || die "can't read $(rel "$rec"), $from's record"; echo nokey; return; }
   cat -- "$rec" >/dev/null 2>&1 || die "can't read $(rel "$rec"), $from's record"
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
@@ -972,7 +973,8 @@ sent)
       printf '%s\n' "$il" | while IFS= read -r p; do [ -n "$p" ] || continue; b=${p##*/}
         case "$b" in (????????T??????Z-"$ME"-?*) ;; (*) continue ;; esac
         # (one named as yours that can't be read is a row "!" too, saying so: it can't be told whether it's yours)
-        cat -- "$p" >/dev/null 2>&1 || { warn "can't read $(rel "$p")"; echo '!'; continue; }
+        # (one gone since the listing, consumed meanwhile, isn't a row: only one still there that can't be read is)
+        cat -- "$p" >/dev/null 2>&1 || { there "$p" || continue; warn "can't read $(rel "$p")"; echo '!'; continue; }
         [ "$(field from "$p")" = "$ME" ] || continue
         s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
         printf '%s %s %s %s %s\n' "$b" "$(rel "$p")" "$r" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")"
