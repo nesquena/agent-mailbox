@@ -10,6 +10,17 @@
   shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register` and
   `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, or `holds` decided) and recorded
   nothing, so a later key swap would have gone unseen; and a pin write that fails leaves the pin as it was.
+- **A copy into the state folder that fails is no longer read as a verdict about the mail.** `read` and `holds` copy
+  each message and its signature into the state folder before checking them. On a full disk, a read-only state folder
+  or a file size limit, `holds` read a signed hold as unsigned, which a store requiring signatures drops, so it could
+  report "released"; `read` showed signed mail as unsigned, or skipped every message and said "no mail". Both now stop,
+  saying the state folder can't be written. A folder at a key's pin path is refused rather than taken as no pin (the
+  pin went into it, and `verify` said verified), `trust` on a full disk refuses where it used to rewrite the pin in
+  place, and `trust --relax` says so when it can't lift the pin.
+- **Without `sha256sum` or `shasum`, commands that open a store stop, saying so.** The store's id, a hash, names its
+  key pins, the git adapter's copy and its locks in the state folder; without one every store shared them, and a key
+  pin left empty by an older version matched any key. (With #178, `verify`, `read`, `reply` and `holds` already
+  stopped at the first sender with no pin.)
 - **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
   read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
   file a link kept in it leads to is now refused under every shell (under bash it used to be sent).

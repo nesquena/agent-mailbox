@@ -327,6 +327,8 @@ load_adapter() {
   matches '^[a-z0-9-]+$' "$ADAPTER" || die "bad adapter name '$ADAPTER'"
   [ -f "$LIB_DIR/$ADAPTER.sh" ] || die "no adapter '$ADAPTER' (looked in $LIB_DIR)"
   STORE_ID=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)
+  # (the store's id names its pins, checkout and locks in the state folder: without one, every store would share them)
+  [ -n "$STORE_ID" ] || die "can't work out this store's id (is sha256sum or shasum installed?)"
   # shellcheck source=/dev/null
   . "$LIB_DIR/$ADAPTER.sh"
   ad_open
@@ -434,11 +436,25 @@ hdr_ok() { awk 'NR == 1 { if ($0 != "---") exit 1; next } $0 == "---" { c = 1; e
   END { exit c ? 0 : 1 }' "$1"; }
 # keep_pin <file> <fingerprint> <whose key> [<what then>]: record a key pin, or stop, saying so (without it a later key
 # swap would be pinned in turn, unseen). It's written beside the pin and moved over it, so a write that fails (a full
-# disk) leaves the pin as it was, or none, never an empty one; the temp name starts with '.', which no name can
+# disk) leaves the pin as it was, or none, never an empty one; the temp name starts with '.', which no name can. As for
+# put, the temp is cleared, then made with noclobber, so a link left at its name isn't followed; a size limit makes the
+# write fail (XFSZ ignored) rather than end the shell. A pin path that holds something other than a plain file (a
+# folder, which mv would move the temp into) is refused
+there() { [ -e "$1" ] || [ -L "$1" ]; }
 keep_pin() { [ -n "$2" ] || die "can't work out the fingerprint of $3 (is sha256sum or shasum installed?)"
+  ! there "$1" || plain "$1" || die "can't record $3: $1 isn't a plain file (move it aside)"
   kp_t="${1%/*}/.${1##*/}.tmp.$$"; mkdir -p "${1%/*}" 2>/dev/null
-  { ( printf '%s\n' "$2" > "$kp_t" ) 2>/dev/null && mv -f "$kp_t" "$1" 2>/dev/null; } ||
+  { rm -f "$kp_t" && ( trap '' XFSZ; set -C; printf '%s\n' "$2" > "$kp_t" ) 2>/dev/null && plain "$kp_t" &&
+    mv -f "$kp_t" "$1" 2>/dev/null; } ||
     { rm -f "$kp_t"; die "can't record $3 ($1): check that the state folder can be written${4:+; $4}"; }; }
+# copy_in <to> <what> <command...>: the command's output (a message or its .sig, from the store) into <to>, a file in
+# this run's temp folder in the state folder: 0 when it's there; 1 when the source has none (the command fails as well
+# with its output thrown away). A copy that fails while its source is there (a full or read-only state folder, a size
+# limit) stops the command, so it's never read as a message or signature that isn't there
+copy_in() { ci_t=$1 ci_w=$2; shift 2; rm -f "$ci_t"
+  ( trap '' XFSZ; set -C; "$@" > "$ci_t" ) 2>/dev/null && return 0
+  rm -f "$ci_t"; ( trap '' XFSZ; "$@" > /dev/null ) 2>/dev/null || return 1
+  die "can't copy $ci_w to $ci_t: check that the state folder can be written"; }
 # verify_file <message path> [<inbox it sits in>]: a message whose header isn't plain reads bad; otherwise as verify_sig
 verify_file() { hdr_ok "$1" || { echo bad; return; }; verify_sig "$@"; }
 # verify_sig <message path> [<inbox it sits in>]: its signature alone, whatever else its header holds
@@ -455,13 +471,15 @@ verify_sig() {
   # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
   # (a pin that can't be recorded stops the command. The callers run this in $(...), so they stop on its empty status;
   # the message is already out)
+  # (an empty fingerprint, without sha256sum or shasum, would match an empty pin older versions left)
   pins="$STATE/pins/$STORE_ID"
-  fp=$(printf '%s\n' "$pub" | sha)
-  if [ -f "$pins/$from" ]; then [ "$(cat "$pins/$from")" = "$fp" ] || { echo changed; return; }
+  fp=$(printf '%s\n' "$pub" | sha); [ -n "$fp" ] || die "can't work out the fingerprint of $from's key (is sha256sum or shasum installed?)"
+  if there "$pins/$from"; then plain "$pins/$from" || die "can't check $from's key: its pin $pins/$from isn't a plain file (move it aside)"
+    [ "$(cat "$pins/$from")" = "$fp" ] || { echo changed; return; }
   else keep_pin "$pins/$from" "$fp" "$from's key"; fi
   # (a key list that can't be written stops it too, rather than reading a good signature as bad)
   allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE" 2>/dev/null
-  ( printf '%s %s\n' "$from" "$pub" > "$allowed" ) 2>/dev/null ||
+  { rm -f "$allowed" && ( trap '' XFSZ; set -C; printf '%s %s\n' "$from" "$pub" > "$allowed" ) 2>/dev/null; } ||
     { rm -f "$allowed"; die "can't write $allowed to check $from's signature: check that the state folder can be written"; }
   if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
   rm -f "$allowed"; echo "$r"
@@ -596,7 +614,7 @@ setup)
   # mailbox spelled another way, start with none, so say so when the old settings had some (setup can't tell a
   # re-spelled address from another mailbox, so it carries nothing over)
   if [ -n "$STORE" ] && [ "$STORE|$ROOT|$BRANCH" != "$store|${root:-mailbox}|${branch:-main}" ] &&
-    [ -n "$(ls -A "$STATE/pins/$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha)" 2>/dev/null)" ]; then
+    oid=$(printf '%s' "$STORE|$ROOT|$BRANCH" | sha) && [ -n "$oid" ] && [ -n "$(ls -A "$STATE/pins/$oid" 2>/dev/null)" ]; then
     warn "your pinned keys (and a strict store's pin) stay with the old store settings; for the same mailbox, keep its address as first written"
   fi ;;
 init)
@@ -784,7 +802,8 @@ agents)
   [ -z "$fps" ] || printf '\nkey fingerprints:\n%s' "$fps" ;;
 trust)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: trust <name> | trust --relax"
-  if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict"
+  if [ "$1" = --relax ]; then load_adapter; rm -f "$STATE/pins/$STORE_ID/.strict" 2>/dev/null
+    ! there "$STATE/pins/$STORE_ID/.strict" || die "can't remove $STATE/pins/$STORE_ID/.strict: check that the state folder can be written"
     echo "this store is strict for you only while its store.md requires signatures"; exit 0; fi
   valid_name "$1"; load_adapter; ad_sync
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
@@ -880,12 +899,13 @@ send)
   if [ -n "$hold$release" ]; then
     last="$STATE/gates/$STORE_ID/$ME"
     while [ "$(cat "$last" 2>/dev/null)" = "$stamp" ]; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
-    mkdir -p "$STATE/gates/$STORE_ID" && printf '%s\n' "$stamp" > "$last" || die "can't write $last"
+    # (in a subshell, ignoring XFSZ: under a size limit the write fails, saying so, rather than ending the shell)
+    { mkdir -p "$STATE/gates/$STORE_ID" && ( trap '' XFSZ; printf '%s\n' "$stamp" > "$last" ) 2>/dev/null; } || die "can't write $last"
   fi
-  { mkdir -p "$STATE/names/$STORE_ID" &&
+  ( trap '' XFSZ; mkdir -p "$STATE/names/$STORE_ID" &&
     if { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ]; then
       printf '%s\n' "$to/$stamp-$ME-$topic.md" >> "$used"
-    else printf '%s\n%s\n' "$stamp" "$to/$stamp-$ME-$topic.md" > "$used"; fi; } 2>/dev/null ||
+    else printf '%s\n%s\n' "$stamp" "$to/$stamp-$ME-$topic.md" > "$used"; fi ) 2>/dev/null ||
     warn "can't record this send's file name in $used, so a send in the same second may reuse it; sending anyway"
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
@@ -954,8 +974,12 @@ read)
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   shown=$(inbox_files "$ME" | while IFS= read -r p; do
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
-    cat -- "$p" > "$rt/m" 2>/dev/null || continue
-    if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then cat -- "$p.sig" > "$rt/m.sig" 2>/dev/null || rm -f "$rt/m.sig"; else rm -f "$rt/m.sig"; fi
+    # (a message consumed since it was listed is skipped; one still there that can't be copied or read stops read, as
+    # does its .sig: neither is read as no mail, or as unsigned)
+    copy_in "$rt/m" "$(rel "$p")" cat -- "$p" || { ! there "$p" || die "can't read $(rel "$p")"; continue; }
+    if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then
+      copy_in "$rt/m.sig" "$(rel "$p.sig")" cat -- "$p.sig" || ! there "$p.sig" || die "can't read $(rel "$p.sig")"
+    else rm -f "$rt/m.sig"; fi
     v=$(verify_file "$rt/m" "$ME") && [ -n "$v" ] || exit 1
     # a verified message names who signed it; and the header, not the file name, says who sent a message, so a file
     # name other than <stamp>-<from>-<topic>.md is pointed out (names may hold '-', so which part is off can't always
@@ -1022,8 +1046,9 @@ holds)
       case "$p" in (*.md) ;; (*) continue ;; esac
       case "${p#"$ROOT/inbox/$ME/"}" in (*/*) continue ;; esac
       # a listed version it can't read stops holds, like a history it can't read
-      ad_show "$ref" "$p" > "$tmpd/m" 2>/dev/null || { echo '!'; continue; }
-      ad_show "$ref" "$p.sig" > "$tmpd/m.sig" 2>/dev/null || rm -f "$tmpd/m.sig"
+      # (as in read, a copy that can't be written stops holds; only a version with no .sig reads unsigned)
+      copy_in "$tmpd/m" "$p as of $ref" ad_show "$ref" "$p" || { echo '!'; continue; }
+      copy_in "$tmpd/m.sig" "$p.sig as of $ref" ad_show "$ref" "$p.sig" || :
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
       basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
@@ -1041,7 +1066,7 @@ holds)
       v=$(verify_sig "$tmpd/m" "$ME") && [ -n "$v" ] || exit 1
       if [ -n "$odd" ] || ! hdr_ok "$tmpd/m"; then
         case "$v" in (verified|changed) kind=malformed ;;
-          (nokey) if [ -f "$STATE/pins/$STORE_ID/$from" ]; then kind=malformed; else v=bad; fi ;;
+          (nokey) if there "$STATE/pins/$STORE_ID/$from"; then kind=malformed; else v=bad; fi ;;
           (*) v=bad ;; esac
         # (an item with more after it names no version, so it never counts as the hold or release it seems to be)
         case "$rec" in (*" ?") kind=malformed ;; esac
@@ -1052,7 +1077,7 @@ holds)
       # never count, and nokey counts only for a pinned sender, so no hold planted under a name this reader never
       # verified counts. It clears when the key is restored, or trusted after checking with the sender's human
       [ -z "$strict" ] || [ "$v" = verified ] || { { [ "$kind" = hold ] || [ "$kind" = malformed ]; } && { [ "$v" = changed ] ||
-        { [ "$v" = nokey ] && [ -f "$STATE/pins/$STORE_ID/$from" ]; }; }; } || continue
+        { [ "$v" = nokey ] && there "$STATE/pins/$STORE_ID/$from"; }; }; } || continue
       echo "$sent $kind $rec $from $(basename "$p") $v"
     done) || { rm -rf "$tmpd"; exit 1; }
   # (as in read: each record ends with an echo or a continue, so only a stop in the loop fails it, and holds never
