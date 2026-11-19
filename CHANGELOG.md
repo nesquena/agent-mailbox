@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
+  command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
+  It now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
+  making one rather than asking `test -w`, which says yes where a sandbox or a full disk refuses one, so there a stale
+  lock it can't remove now stops it at once, saying so, instead of waiting out the lock wait and blaming the dead
+  holder.
+- **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`,
+  and a scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot (approach 3): a GitHub Action on the store's repository calls a routine's webhook when
+  mail lands in the bot's inbox. Each is written from a working setup. The skill points to them.
+- **`reply` says what a refused message's file name should be.** For a message whose file name doesn't match its
+  header, `reply` now says "its file name doesn't name it as from <from> about <topic>", as `read` does, rather than
+  guessing whether the sender or the topic is off (names may hold '-', so which part is off can't always be told).
+- **Claude Code plugin: the rewake hook works, or declines safely, where a sandbox blocks `ps` and the shared temp
+  folder.** Watching several stores, it made its temporary folder with `mktemp -d` and no template; on macOS that
+  ignores TMPDIR, so inside a sandbox that gives the hook its own TMPDIR it ended without watching. It now makes it
+  under TMPDIR. Where it can't read Claude Code's arguments at all (macOS won't start `ps`, a setuid program, inside a
+  sandbox), it declines as it does when it can't tell, rather than missing a `claude -p` and waiting at every turn end.
+- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
+  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
+  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
+  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
+  calling that header not plain.
 - **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
@@ -10,11 +32,6 @@
 - **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
   no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
   (`CONTRIBUTING.md`).
-- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
-  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
-  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
-  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
-  calling that header not plain.
 
 ## 0.1.2 (2026-11-12)
 

@@ -49,7 +49,9 @@ W=$RUNW
 # procs_naming <text>: the processes whose command line contains <text>, one "<pid> <command line>" line each. Matched
 # with awk, <text> passed in its environment, so the match's own processes never name it, and nothing else is dropped
 # (filtering with grep -v grep also dropped every process whose command line held "grep", a folder's path included)
-procs_naming() { [ -n "$1" ] || return 0; ps -eo pid=,args= 2>/dev/null | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
+# (where ps can't run, as in a macOS sandbox, which won't start a setuid program, pgrep lists the same: it isn't one)
+procs_naming() { [ -n "$1" ] || return 0
+  { ps -eo pid=,args= 2>/dev/null || pgrep -lf . 2>/dev/null; } | _PN="$1" awk '{ a = $0; sub(/^ *[0-9]+ /, "", a) } index(a, ENVIRON["_PN"])'; }
 # folders earlier runs left when they were killed outright (a kill -9 or a crash skips the exit trap): one over an hour
 # old with nothing running out of it is removed, since no run outlasts its 40-minute limit
 for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
@@ -58,6 +60,10 @@ for d in "${TMPDIR:-/tmp}/agent mailbox test."*; do
 done
 # at exit, anything still running out of this run's folder is stopped first (a hook or watcher a test started in the
 # background and missed, even one whose parent is gone), so no run leaves processes behind
+# spaceless_tmp: a temporary folder whose path holds no spaces, for the few checks that need one: TMPDIR when its path
+# has none (macOS's mktemp with no template, or -t, ignores TMPDIR, and a sandbox that gives the run its own TMPDIR
+# denies the folder it uses instead), else /tmp
+spaceless_tmp() { case ${TMPDIR:-} in (''|*[[:space:]]*) echo /tmp ;; (*) echo "${TMPDIR%/}" ;; esac; }
 CCD=""; trap 'trap "" TERM INT HUP; leftovers; rm -rf "$RUNW" ${CCD:+"$CCD"}' EXIT
 # (each with everything it started, and this run's own background jobs: TERM, then KILL what's left a second later)
 leftovers() { set -- $(for _lp in $(procs_naming "$RUNW" | awk -v me=$$ '$1 != me { print $1 }') \
@@ -571,6 +577,8 @@ x-trace:abc
 '
   # and a file name that isn't <stamp>-<from>-<topic>.md is pointed out, whatever the status
   hm 20200101T000008Z-carol-hdr8.md hdr8 ''; hm 20200101T000009Z-alice-ops-x.md hdr9 ''; hm 2020-alice-hdr0.md hdr0 ''
+  # (a topic that isn't a name can't be part of the name the file should have, so then only the sender is checked)
+  hm 20200101T000013Z-carol-x1.md X1 ''
   tamper "cp '$T/hd/'*.md mailbox/inbox/bob/"
   out=$(as bob read 2>&1)
   for n in 1 2 3 4 5 6 11 12; do printf '%s\n' "$out" | grep -q "alice-hdr$n\.md \[bad\]$" && ok "a header line that isn't a plain key and value, or a key given twice, reads bad ($n)" ||
@@ -582,6 +590,9 @@ x-trace:abc
   for f in 20200101T000008Z-carol-hdr8:hdr8 2020-alice-hdr0:hdr0 20200101T000009Z-alice-ops-x:hdr9; do
     printf '%s\n' "$out" | grep -q "${f%:*}\.md \[unsigned; its file name doesn't name it as from alice about ${f#*:}\]$" &&
       ok "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" || no "a file name that isn't <stamp>-alice-<topic>.md is pointed out (${f%:*})" "$out"; done
+  printf '%s\n' "$out" | grep -q "20200101T000013Z-carol-x1\.md \[unsigned; its file name doesn't name alice as the sender\]$" &&
+    ok "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" ||
+    no "with a topic that isn't a name, a file name that doesn't start <stamp>-alice- is pointed out as the sender's" "$out"
   if [ -n "$SSH" ]; then
     tamper "cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||') mailbox/inbox/bob/20200101T000010Z-carol-copy.md &&
       cp mailbox/inbox/bob/$(as bob list | grep -- '-alice-review-1\.md$' | sed 's|.*/||').sig mailbox/inbox/bob/20200101T000010Z-carol-copy.md.sig"
@@ -596,7 +607,7 @@ x-trace:abc
     sp=$(as bob list | grep -- '-alice-swapme\.md$'); [ "$AD" = git ] && sp="$(ls -d "$W/home-bob/.local/state/agent-mailbox/checkouts/"*-bob | head -n 1)/$sp" || sp="$STORE/$sp"
     mkdir -p "$T/kgs"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" -Y verify "*) ;; (*) exec "$REAL_KG" "$@" ;; esac' \
       'p=; for a in "$@"; do [ "$p" != -s ] || [ "$a" != "$SWAP_FILE.sig" ] || : > "$SWAP_DONE.store"; p=$a; done' \
-      'm=$(mktemp); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
+      'm=$(mktemp "${TMPDIR:-/tmp}/kgs.XXXXXX"); cat > "$m"; "$REAL_KG" "$@" < "$m"; rc=$?' \
       'if grep -q "^topic: swapme$" "$m" && [ ! -e "$SWAP_DONE" ]; then : > "$SWAP_DONE"; cp "$SWAP_FILE" "$SWAP_FILE.orig"' \
       '  sed "s/^from: alice$/from: carol/" "$SWAP_FILE" > "$SWAP_FILE.t" && mv -f "$SWAP_FILE.t" "$SWAP_FILE"; fi' \
       'rm -f "$m"; exit $rc' > "$T/kgs/ssh-keygen"; chmod +x "$T/kgs/ssh-keygen"; rm -f "$T/swapped"
@@ -1133,6 +1144,21 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   ( PATH="$T/slow:$PATH"; while [ $i -lt 60 ]; do "$SH" "$LT/taker" "$ROOTDIR/adapters/git.sh" "$LT" 2>/dev/null & i=$((i+1)); done; wait ) 2>/dev/null
   [ ! -s "$LT/overlaps" ] && [ ! -s "$LT/dies" ] && ok "sixty takers, a quarter killed holding the lock, are never two inside at once" ||
     no "sixty takers, a quarter killed holding the lock, are never two inside at once" "overlaps: $(wc -l < "$LT/overlaps"); $(cat "$LT/dies")"
+  # another taker's lock that comes and goes between the two tries (the first finds one held, the retry finds it gone,
+  # and a third taker's lock is gone again by the check after) isn't a lock that can't be made: the taker waits, and
+  # takes it once it's free. (A stand-in reports no lock at those two checks, while a live holder still has it. It
+  # counts its calls: fewer than 3 means the window was never forced, and the check proves nothing)
+  RT="$T/lrace"; mkdir -p "$RT/state/locks/x"; "$SH" -c 'sleep 30; :' "$RT/holder" & rp=$!
+  printf '%s %s %s %s\n' "$rp" "$(date +%s)" "$host" "$(started "$rp")" > "$RT/state/locks/x/lock"
+  printf '%s\n' 'BRANCH=main; . "$1"; RT=$2; die() { echo "$*" >> "$RT/dies"; exit 1; }' \
+    'n=0; ad_lock_there() { n=$((n+1)); echo >> "$RT/calls"; [ "$n" -gt 2 ] && { [ -e "$lk" ] || [ -L "$lk" ]; }; }' \
+    'STATE=$RT/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=20; ad_lock; echo took' > "$RT/taker"
+  : > "$RT/dies"; : > "$RT/calls"; ( sleep 2; rm -f "$RT/state/locks/x/lock" ) & fp=$!
+  out=$(time_cap 30 "$SH" "$RT/taker" "$ROOTDIR/adapters/git.sh" "$RT" 2>&1); rc=$?; wait "$fp" 2>/dev/null; kill_tree "$rp"
+  nc=$(wc -l < "$RT/calls" | tr -d ' ')
+  [ "$rc" = 0 ] && [ "$out" = took ] && [ ! -s "$RT/dies" ] && [ "$nc" -ge 3 ] &&
+    ok "a lock that comes and goes between a taker's two tries makes it wait, not fail" ||
+    no "a lock that comes and goes between a taker's two tries makes it wait, not fail" "exit $rc, $nc checks for a lock: $out; $(cat "$RT/dies")"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
@@ -1149,10 +1175,16 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   if (true > "$ld/probe") 2>/dev/null; then rm -f "$ld/probe"; chmod u+w "$ld"
     sk "a lock that can't be made, or removed, stops the command (read-only folders don't stop this user)"
   else
-    within 20 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
+    # (with a wait far past the time allowed, so a command that only fails once the wait is over doesn't pass)
+    AGENT_MAILBOX_LOCK_WAIT=60
+    within 10 "a lock that can't be made stops the command, saying so" 1 "can't create the lock" as lp list
     chmod u+w "$ld"; sh -c 'exit 0' & dp=$!; wait "$dp"; printf '%s %s %s \n' "$dp" "$(date +%s)" "$host" > "$lk"; chmod a-w "$ld"
-    within 20 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
+    within 10 "a stale lock that can't be removed stops it, saying so" 1 "can't remove the stale lock" as lp list
     chmod u+w "$ld"; rm -f "$lk" "$ld/break"
+    # a folder that can be written but not searched (-w says yes, yet no file can be made in it) stops it too
+    chmod 600 "$ld"
+    within 10 "a lock folder -w passes but no file can be made in stops the command, saying so" 1 "can't create the lock" as lp list
+    AGENT_MAILBOX_LOCK_WAIT=3; chmod 700 "$ld"
   fi
   # watch takes its turn only for its first sync: a send under its name while it watches doesn't wait for it
   # (it's running once its pid file names a process of the one started here: $! is the subshell `as` runs in, and the
@@ -2201,6 +2233,12 @@ unset FAKEBG
   expect "in either order" 0 '^\r?$' ptycc -cp hi
   expect "or before one that takes a value" 0 '^\r?$' ptycc -pr r1 hi
   expect "or --init-only" 0 '^\r?$' ptycc --init-only
+  # (and where it can't read Claude Code's arguments at all, as in a macOS sandbox, where ps can't start, it declines:
+  # a -p there would go unseen. A ps that fails stands in for that; with /proc the arguments come from there)
+  if [ -z "$PROCOK" ]; then mkdir -p "$T/nops"; printf '#!/bin/sh\nexit 1\n' > "$T/nops/ps"; chmod +x "$T/nops/ps"
+    nops() { ( PATH="$T/nops:$PATH"; export PATH; ptycc "$@" ); }
+    expect "or where it can't read Claude Code's arguments" 0 '^\r?$' nops
+  else sk "or where it can't read Claude Code's arguments (they come from /proc here)"; fi
   if [ -r "/proc/$$/cmdline" ]; then
     wakes "a prompt that mentions -p isn't headless" "rw-1.md" ptycc "what does -p do"
     rm -f "$R1/woke"
@@ -2218,7 +2256,7 @@ expect "a hook Claude Code waited for at this prompt steps aside the next time" 
 expect "leaving the guard a note" 0 - grep -qx p-7 "$R1/declined"
 if command -v node >/dev/null 2>&1; then
   # an npm install runs under node, and renames its process to claude, so without AI_AGENT nothing tells its version
-  CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; mkdir -p "$CCD/cc"
+  CCD=$(mktemp -d "$(spaceless_tmp)/amcc.XXXXXX") && [ -d "$CCD" ] || { echo "FAIL can't make a folder under $(spaceless_tmp)"; exit 1; }; mkdir -p "$CCD/cc"
   printf '%s\n' "process.title = 'claude'; if (process.argv.includes('--version')) { console.log('2.1.80 (Claude Code)'); process.exit(0) }" \
     "process.exit(require('child_process').spawnSync('/bin/sh', [process.argv[2]], { stdio: 'inherit' }).status)" > "$CCD/cc/cli.js"
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
@@ -2231,7 +2269,7 @@ if command -v node >/dev/null 2>&1; then
 else sk "an npm install that doesn't say its version is left to the guard (no node)"; fi
 CC=$(command -v cc || command -v gcc || command -v clang)
 if [ -n "$CC" ]; then
-  [ -n "$CCD" ] || { CCD=$(mktemp -d /tmp/amcc.XXXXXX) && [ -d "$CCD" ] || { echo "FAIL can't make a folder under /tmp"; exit 1; }; }
+  [ -n "$CCD" ] || { CCD=$(mktemp -d "$(spaceless_tmp)/amcc.XXXXXX") && [ -d "$CCD" ] || { echo "FAIL can't make a folder under $(spaceless_tmp)"; exit 1; }; }
   mkdir -p "$CCD/cc" "$CCD/claude/versions"
   # (with this stop's prompt id, PRID, when set)
   printf '%s\n' '[ -z "${CCERR:-}" ] || exec > "$CCERR"' \
@@ -2482,17 +2520,25 @@ case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message)."*) woken 20
 # (its length, 99 then this run's pid, tells this run's hang from another's)
 hung() { ps -eo pid=,args= | awk -v n="99$$" '$2 == "sleep" && $3 == n { print $1 }'; }
 # (the hang sits two levels under the watcher, as a git fetch's ssh does)
-fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out" & bg=$!; n=0 sawh=0
-while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
-if kill -0 "$bg" 2>/dev/null; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
-  kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
-else wait "$bg"; rc=$?
+# hangrun <limit>: the hook with that limit (RWMAX), its watch hanging; sets bg's exit (rc, or "" when it was still
+# running after 60 s and was stopped), n (its seconds) and sawh (1 once the hang was seen)
+hangrun() { (RWMAX=$1 fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/bg.out") & bg=$!; n=0 sawh=0 rc=""
+  while [ $n -lt 60 ] && kill -0 "$bg" 2>/dev/null; do [ -z "$(hung)" ] || sawh=1; sleep 1; n=$((n+1)); done
+  if kill -0 "$bg" 2>/dev/null; then kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+  else wait "$bg"; rc=$?; fi; }
+# (once more with a 4 s limit, its deadline then 7 s out, only if no hang started and the hook said the day was out:
+# its own start, on a loaded machine, used up the 2 s before any watcher ran)
+hl=2; hangrun $hl
+if [ "$sawh $rc" = "0 2" ] && grep -q "daily limit; it starts again" "$T/bg.out"; then hl=4; hangrun $hl; fi
+if [ -z "$rc" ]; then no "a watch that hangs ends at the hook's deadline, with the daily note" "still running after 60 s"
+else
   # (the hang must have started: the hook prints the same note when its day ran out before any watcher did)
   case "$sawh $rc $(cat "$T/bg.out")" in ("1 2 "*"reached its daily limit; it starts again at this turn's end."*)
       ok "a watch that hangs ends at the hook's deadline, with the daily note" ;;
-    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; exit $rc: $(cat "$T/bg.out")" ;; esac
-  # (the deadline is 5 s out: a watchdog that slept a 15 s check past it would end at 17 or later)
-  [ "$n" -le 10 ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline 5s"
+    (*) no "a watch that hangs ends at the hook's deadline, with the daily note" "hang seen: $sawh; limit ${hl}s; exit $rc: $(cat "$T/bg.out")" ;; esac
+  # (the deadline is the limit, an interval and the 2 s check out: a watchdog that slept a 15 s check past it would
+  # end at least 10 s later)
+  [ "$n" -le $((hl + 8)) ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline $((hl + 3))s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
