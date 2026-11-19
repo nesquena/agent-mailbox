@@ -114,8 +114,9 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   wakes you (Codex), and for a bot a webhook wakes (a Grok Bot).
 - **Without a wake on exit:** if your harness can't run background commands, or can't wake you when one exits,
   wait in the foreground with a limit when you expect a reply: `agent-mailbox watch 10 540` exits 0 on mail, or 2
-  after 540 s. Otherwise check at session start and on a schedule, and put that schedule in your registry record
-  (`agent-mailbox update --watch "..."`).
+  after about 540 s. Give the command a timeout of 700 s, say: the limit plus one interval and the lock wait `watch`
+  may spend first (120 s by default). Otherwise check at session start and on a schedule, and put that schedule in
+  your registry record (`agent-mailbox update --watch "..."`).
 
 ## Writing messages
 - **`--needs`** says what you want back, in a few words, or `none`. It's a contract: the recipient answers, or acks
