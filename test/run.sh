@@ -3947,6 +3947,39 @@ echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
 expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
+# a ~/.ssh whose path can't be read back (a macOS sandbox hides it: cd works, getcwd is refused, and dash's pwd then
+# prints nothing and succeeds) isn't taken for the root, which holds every file: an ordinary body still sends
+printf '(version 1)\n(allow default)\n(deny file-read* (subpath "%s"))\n' "$(cd "$H/.ssh" && pwd -P)" > "$T/hide.sb"
+if command -v sandbox-exec >/dev/null 2>&1 && sandbox-exec -f "$T/hide.sb" /usr/bin/true 2>/dev/null; then
+  expect "with ~/.ssh hidden by a sandbox, an ordinary body still sends" 0 "^sent " \
+    sandbox-exec -f "$T/hide.sb" env HOME="$H" "$SH" "$CLI" send sec2 hidden "$T/prose.md"
+else sk "with ~/.ssh hidden by a sandbox, an ordinary body still sends (no sandbox-exec, or already in one)"; fi
+# the same where it can be built without a sandbox (Linux, not as root): a folder past PATH_MAX, reached by links whose
+# targets are each under 3000 characters, under a folder of the test's own that's write-and-search only (300), so
+# cd -P works and getcwd doesn't (/bin/pwd fails; dash's and busybox's builtin prints nothing and succeeds). ~/.ssh is
+# a link to it: an ordinary body sends, a file a link kept in it leads to is still refused, and register --key with a
+# key there says it can't record the key's path, rather than recording a wrong one
+DB="$T/deep"; mkdir -p "$DB/d"; seg=$(printf '%0200d' 0); DL=""
+if ( cd "$DB/d" && i=0 && while [ $i -lt 23 ]; do i=$((i+1)); mkdir "$seg$i" && cd -P "$seg$i" || exit 1; done ) 2>/dev/null; then
+  t1="$DB/d" t2="$DB/l1" t3="$DB/l2" i=0
+  while [ $i -lt 23 ]; do i=$((i+1)); if [ $i -le 10 ]; then t1="$t1/$seg$i"; elif [ $i -le 20 ]; then t2="$t2/$seg$i"; else t3="$t3/$seg$i"; fi; done
+  ln -s "$t1" "$DB/l1" 2>/dev/null && ln -s "$t2" "$DB/l2" 2>/dev/null && ln -s "$t3" "$DB/l3" 2>/dev/null && DL="$DB/l3"
+fi
+if [ -n "$DL" ] && [ "$(id -u)" != 0 ] && echo "Host deep" > "$T/deep-config" && ln -s "$T/deep-config" "$DL/config" 2>/dev/null &&
+   chmod 300 "$DB" && [ -z "$( (cd -P -- "$DL" && /bin/pwd -P) 2>/dev/null)" ]; then
+  mv "$H/.ssh" "$H/.ssh.kept"; ln -s "$DL" "$H/.ssh"
+  expect "with ~/.ssh's path unreadable (past PATH_MAX), an ordinary body still sends" 0 "^sent " as sec1 send sec2 deep "$T/prose.md"
+  expect "and a file a link kept in it leads to is still refused" 1 "where a link in .*\.ssh leads" as sec1 send sec2 deepcfg "$T/deep-config"
+  rm -f "$H/.ssh"; mv "$H/.ssh.kept" "$H/.ssh"
+  if [ -n "$SSH" ]; then chmod 700 "$DB"; ssh-keygen -q -t ed25519 -N '' -C deep -f "$DL/k" 2>/dev/null; chmod 300 "$DB"
+    as sec3 setup --store "$T/store" --adapter dir --name sec3 >/dev/null
+    expect "register --key with the key in a folder whose path can't be read back says so" 1 "can't read back the path of .*the key's folder" \
+      as sec3 register --kind t --about t --key "$DL/k.pub"
+  else sk "register --key with the key in a folder whose path can't be read back says so (no ssh-keygen -Y)"; fi
+  chmod 700 "$DB"
+else chmod 700 "$DB" 2>/dev/null
+  sk "with ~/.ssh's path unreadable (past PATH_MAX), an ordinary body still sends (getcwd works here, or this is root)"; fi
+rm -rf "$DB" 2>/dev/null
 }
 section send-secrets sec_send_secrets
 

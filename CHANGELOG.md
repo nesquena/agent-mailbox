@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
+  read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
+  file a link kept in it leads to is now refused under every shell (under bash it used to be sent).
+  `register --key` with a key in such a folder says so rather than recording a wrong path, and the plugin's hooks and
+  `install.sh` no longer take an unreadable path for `/`.
 - **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
   command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
   It now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
