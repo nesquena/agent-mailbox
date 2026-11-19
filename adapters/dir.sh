@@ -34,5 +34,6 @@ ad_peek() { [ -f "$AD_DIR/$ROOT/store.md" ] || return 1; pl=""
 # (a failed peek is the `! !` row, never fewer rows: holds then stops rather than read a gone store as an empty one)
 ad_history() { p=$(ad_peek "$1") || { echo '! !'; return 0; }
   [ -z "$p" ] || printf '%s\n' "$p" | while IFS= read -r l; do printf '%s %s\n' - "$l"; done; }
-# (a plain file only: a link is no file of the store's, as read and verify also hold)
-ad_show() { [ -f "$AD_DIR/$2" ] && [ ! -L "$AD_DIR/$2" ] && cat "$AD_DIR/$2" 2>/dev/null; }
+# (a plain file only: a link is no file of the store's, as read and verify also hold. 1: no such file; 2: it's there,
+# and can't be read)
+ad_show() { [ -f "$AD_DIR/$2" ] && [ ! -L "$AD_DIR/$2" ] || return 1; cat "$AD_DIR/$2" 2>/dev/null || return 2; }
