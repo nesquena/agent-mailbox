@@ -10,7 +10,20 @@
   `[nokey]`. `verify` of a message or signature it can't read said "bad" (exit 6); it now says it can't read it and
   exits 1, as other errors do: 6 still means read and not verified. `reply` of such a message now says it can't read
   it (it stopped before, saying its header wasn't plain), and `sent` stops, saying it can't read a message of yours
-  (exit 1), where it left that message out.
+  (exit 1), where it left that message out. `verify` of a message whose sender's record can't be read exits 1 too
+  (it said `nokey`, exit 6), and `reply` to one says it can't read the record (it said the message doesn't verify,
+  `nokey`).
+- **One rule for an agent's record: anything at its path that isn't a file that can be read, and isn't known to be
+  absent, stops the command, saying so.** A folder or a FIFO there read as an agent with no key; a record that can't be
+  read read as a retired agent: `send` to that agent said it "isn't an active agent", `watch` as it said "(you) is
+  retired", `agents` showed it as `(!name)` and `agents --names` left it out, and `trust` said it "has no registered
+  key". `read` stopping on such a record says how to read the rest (consume the message, or `--except`).
+- **More commands stop, saying so, when the mailbox's inbox folder can't be searched:** `consume`, `send --consume`
+  and `verify` by name, which said "not in your inbox" or "no such message". `watch` looks at the inbox at every tick,
+  so one that becomes unsearchable mid-watch stops it at once, even when no inbox holds a message (it ran to its limit
+  and said "no mail").
+- **`holds` with an adapter that keeps no history (dir) passes over a message consumed while it reads**, as `read`
+  does; it stopped, saying it couldn't read the store's history.
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
   0.1.3 stopped there ("can't list"); the folder's absence is known, so it's no mail, as before. A folder that can't be
   searched still stops the command.
