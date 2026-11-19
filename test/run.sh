@@ -473,16 +473,26 @@ out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only b
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
   ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
-# a section for one adapter is left out of a run that doesn't test it, and kept in one that does (the git-only ones
-# read from their section lines, so a new one is covered too)
-gs=$(sed -n 's/^ *section \([a-z0-9-]*\) [a-z_]* git$/\1/p' "$0" | sort | tr '\n' ' '); gs=${gs% }
-[ "$(echo $gs | wc -w)" -ge 14 ] || no "the git-only sections weren't found by their section lines" "$gs"
-out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
-[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && [ -z "$(printf '%s\n' "$out" | grep -xE "$(echo $gs | tr ' ' '|')")" ] &&
-  ok "a run of the dir adapter leaves out the git-only sections" || no "a run of the dir adapter didn't leave out the git-only sections (exit $rc)" "$out"
-for a in "" git; do out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" $a --list 2>&1); rc=$?
-  [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -xE "$(echo $gs | tr ' ' '|')" | sort | tr '\n' ' ')" = "$gs " ] &&
-    ok "a run of ${a:-every} adapter keeps them" || no "a run of ${a:-every} adapter didn't keep the git-only sections (exit $rc)" "$out"; done
+# a section for one adapter is left out of a run that doesn't test it, and kept in one that does (the tagged ones read
+# from their section lines, so a new one is covered too)
+tagged_sections() { sed -n "s/^ *section \([a-z0-9-]*\) [a-z0-9_]* $1\$/\1/p" "$0" | sort | tr '\n' ' '; }
+# lists_all <--list output> <ids>: it lists each of them; lists_none: it lists none of them
+lists_all() { [ "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')" | sort | tr '\n' ' ')" = "$2 " ]; }
+lists_none() { [ -z "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')")" ]; }
+gs=$(tagged_sections git); gs=${gs% }; ds=$(tagged_sections dir); ds=${ds% }
+if [ -n "$gs" ] && [ -n "$ds" ]; then
+  out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && lists_none "$out" "$gs" && lists_all "$out" "$ds" &&
+    ok "a run of the dir adapter leaves out the git-only sections and keeps the dir-only ones" ||
+    no "a run of the dir adapter didn't leave out the git-only sections, or keep the dir-only ones (exit $rc)" "$out"
+  out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git --list 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-git && lists_all "$out" "$gs" && lists_none "$out" "$ds" &&
+    ok "a run of the git adapter keeps the git-only sections and leaves out the dir-only ones" ||
+    no "a run of the git adapter didn't keep the git-only sections, or leave out the dir-only ones (exit $rc)" "$out"
+  out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --list 2>&1); rc=$?
+  [ "$rc" = 0 ] && lists_all "$out" "$gs" && lists_all "$out" "$ds" && ok "a run of every adapter keeps them all" ||
+    no "a run of every adapter didn't keep every adapter-tagged section (exit $rc)" "$out"
+else no "the adapter-tagged sections weren't found by their section lines" "git: $gs; dir: $ds"; fi
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" --only 'bats, safeguards' --list 2>&1); rc=$?
 [ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "no spaces" &&
   ok "--only refuses ids with spaces" || no "--only took ids with spaces (exit $rc)" "$out"
@@ -1746,18 +1756,6 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
       ok "a signed message moved past an unsigned one of its name takes its .sig with it" ||
       no "a moved message's .sig stayed on the unsigned one, or didn't go with it" "$out$NL$out2$NL$(git --git-dir="$T/store.git" ls-tree -r --name-only main)"
   fi
-  # a send whose file name the store already has in this second (another sender's whose name and topic join to it, or
-  # a message moved there) waits for the next second once, rather than failing (a dir store, where a file planted
-  # lands at once)
-  T="$W/taken"; mkdir -p "$T"
-  for a in da db; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
-  as da init >/dev/null; for a in da db; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
-  s0=$(date -u +%Y%m%dT%H%M%SZ); while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.05; done
-  s1=$(date -u +%Y%m%dT%H%M%SZ); printf 'taken\n' > "$T/store/mailbox/inbox/db/$s1-da-t1.md"
-  out=$(echo hi | as da send db t1 - 2>&1); rc=$?
-  [ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
-    [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
-    ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
   }
   section git-leftover-conflict sec_git_leftover_conflict git
   sec_git_planted() {
@@ -4192,8 +4190,20 @@ if [ -n "$SSH" ]; then
   [ -z "$(ls -A "$T/store/mailbox/inbox/cl2" | grep '\.tmp\.')" ] && ok "and no temp file is left in the inbox" ||
     no "a race left temp files in the inbox" "$(ls -A "$T/store/mailbox/inbox/cl2")"
 fi
+# a send whose file name the store already has in this second (another sender's whose name and topic join to it, or
+# a message moved there) waits for the next second once, rather than failing (a dir store, where a file planted
+# lands at once)
+T="$W/taken"; mkdir -p "$T"
+for a in da db; do as $a setup --store "$T/store" --adapter dir --name $a >/dev/null; done
+as da init >/dev/null; for a in da db; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+s0=$(date -u +%Y%m%dT%H%M%SZ); while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.05; done
+s1=$(date -u +%Y%m%dT%H%M%SZ); printf 'taken\n' > "$T/store/mailbox/inbox/db/$s1-da-t1.md"
+out=$(echo hi | as da send db t1 - 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$T/store/mailbox/inbox/db/$s1-da-t1.md")" = taken ] &&
+  [ "$(ls "$T/store/mailbox/inbox/db/" | grep -c -- '-da-t1\.md$')" = 2 ] &&
+  ok "a send whose name is taken in this second waits for the next one" || no "a send whose name was taken failed (exit $rc)" "$out"
 }
-section dir-name-race sec_dir_name_race
+section dir-name-race sec_dir_name_race dir
 sec_second_watcher() {
 echo "== a second watcher for a name on a machine warns"
 T="$W/onewatch"; mkdir -p "$T/store" "$T/store2"
@@ -4308,7 +4318,7 @@ old_ssh
 expect "install.sh notes an ssh-keygen without -Y" 0 "note: ssh-keygen -Y \\(OpenSSH 8.1\\+\\) isn't available" \
   env PATH="$W/oldssh:$PATH" HOME="$W/home-probe" "$SH" "$ROOTDIR/install.sh" --prefix "$W/probe-prefix"
 }
-section dir-store-gone sec_dir_store_gone
+section dir-store-gone sec_dir_store_gone dir
 sec_bats() {
 echo "== bats-core: test/*.bats (shell: $SH)"
 if [ -z "$BATS" ]; then sk "test/*.bats (bats isn't installed; see CONTRIBUTING.md)"
