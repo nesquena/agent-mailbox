@@ -96,9 +96,11 @@ matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" 
 # too, so a file under a linked folder shows where that link sits and where it leads. real <file>: the
 # file's own physical path. A relative path starting with '-' gets a ./ so no tool reads it as an option
 # the path comes from pwd(1), not the shell's builtin: on a file system that ignores case, some shells' builtin (bash's)
-# keeps the case the path was typed in, and only the system's getcwd gives the case stored on disk
-phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && { pp=$(/bin/pwd -P 2>/dev/null) && [ -n "$pp" ] || pp=$(pwd -P); } &&
-  case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
+# keeps the case the path was typed in, and only the system's getcwd gives the case stored on disk. A folder whose path
+# can't be read back (getcwd refused, as in a sandbox that hides it) has none: dash's builtin then prints nothing and
+# still succeeds, and an empty path would read as the root, holding every file
+phys() { (CDPATH= cd -P -- "$1" 2>/dev/null && { pp=$(/bin/pwd -P 2>/dev/null) && [ -n "$pp" ] || pp=$(pwd -P 2>/dev/null); } &&
+  [ -n "$pp" ] && case "$pp" in (//*) pp=${pp#/} ;; esac && printf '%s\n' "$pp"); }
 # hops keeps its state in plain variables: run it only in $(...) (it recurses in a subshell)
 hops() {
   # a relative path starts from the folder the shell says it's in ($PWD), so a link on the way there counts too.

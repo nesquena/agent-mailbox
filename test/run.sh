@@ -3911,6 +3911,13 @@ echo hi > "$T/café.md"; ln -s "café.md" "$T/cafe-link.md"
 expect "and so does a link to a file with a non-ASCII name" 0 "^sent " as sec1 send sec2 cafe "$T/cafe-link.md"
 ln -s kloop "$T/kloop"
 expect "and so does one whose key path links in a loop" 0 "^sent " env HOME="$H" AGENT_MAILBOX_KEY="$T/kloop" "$SH" "$CLI" send sec2 kloop "$T/prose.md"
+# a ~/.ssh whose path can't be read back (a macOS sandbox hides it: cd works, getcwd is refused, and dash's pwd then
+# prints nothing and succeeds) isn't taken for the root, which holds every file: an ordinary body still sends
+printf '(version 1)\n(allow default)\n(deny file-read* (subpath "%s"))\n' "$(cd "$H/.ssh" && pwd -P)" > "$T/hide.sb"
+if command -v sandbox-exec >/dev/null 2>&1 && sandbox-exec -f "$T/hide.sb" /usr/bin/true 2>/dev/null; then
+  expect "with ~/.ssh hidden by a sandbox, an ordinary body still sends" 0 "^sent " \
+    sandbox-exec -f "$T/hide.sb" env HOME="$H" "$SH" "$CLI" send sec2 hidden "$T/prose.md"
+else sk "with ~/.ssh hidden by a sandbox, an ordinary body still sends (no sandbox-exec, or already in one)"; fi
 }
 section send-secrets sec_send_secrets
 
