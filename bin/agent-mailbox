@@ -363,9 +363,12 @@ active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = act
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
 # (names are listed one per line, so a name with a line break in it is skipped. An inbox folder that's there and can't
-# be listed stops the command, never reads as an empty inbox: the callers run this in $(...), and stop on its status)
-inbox_files() { [ -d "$M/inbox/$1" ] || return 0
-  il=$(find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*") || die "can't list $(rel "$M/inbox/$1")"
+# be listed, or a mailbox inbox folder that can't, stops the command, never reads as an empty inbox: the callers run this
+# in $(...), and stop on its status. That's asked of the folder itself, not of find, which also fails when an entry goes
+# between its listing and its look, as a message being consumed may)
+listable() { [ ! -e "$1" ] || ( CDPATH= cd -P -- "$1" && ls -A >/dev/null ) 2>/dev/null || die "can't list $(rel "$1")"; }
+inbox_files() { [ -d "$M/inbox/$1" ] || { listable "$M/inbox"; return 0; }; listable "$M/inbox/$1"
+  il=$(find "$M/inbox/$1" -maxdepth 1 -type f -name '*.md' ! -name "*$NL*" 2>/dev/null)
   [ -n "$il" ] || return 0
   printf '%s\n' "$il" | sort | while IFS= read -r p; do basename "$p" | grep -Eq "$MSG_RE" && printf '%s\n' "$p"; done
   return 0; }
@@ -943,6 +946,7 @@ sent)
   # mail from you is a message whose file name's sender field and from: header both name you, so another writer's
   # file can't pass by one alone. Signatures aren't checked: a writer could plant both. Rows: <id> <path> <to> <sent>
   # <needs>, sorted by id (time first), with sent as "?" when it isn't the form send writes
+  listable "$M/inbox"
   rows=$(for d in "$M"/inbox/*; do r=${d##*/}
       [ -z "$to" ] || [ "$r" = "$to" ] || continue
       [ -d "$d" ] && matches "$NAME_RE" "$r" || continue

@@ -2161,6 +2161,19 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
     expect "and update --status retired" 1 "^agent-mailbox: can't list mailbox/inbox/pm2" as pm2 update --status retired
   fi
   chmod 755 "$IB"
+  # and so does a mailbox inbox folder that can't be searched (600) or read (300): before, they said "no mail", and
+  # update retired with mail waiting
+  for mo in 600 300; do chmod "$mo" "$T/store/mailbox/inbox"
+    if ls "$T/store/mailbox/inbox" >/dev/null 2>&1 && ls "$IB" >/dev/null 2>&1; then
+      sk "an inbox folder at $mo stops the command (this user lists any folder)"
+    elif [ "$mo" = 600 ]; then
+      expect "with the inbox folder at 600, list stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 list
+      expect "and so does read" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 read
+      expect "and sent" 1 "^agent-mailbox: can't list mailbox/inbox" as pm1 sent
+      expect "and update --status retired" 1 "^agent-mailbox: can't list mailbox/inbox" as pm2 update --status retired
+    else expect "with the inbox folder at 300, sent stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox\$" as pm1 sent
+      expect "and list still lists pm2's mail" 0 "/inbox/pm2/" as pm2 list; fi
+    chmod 755 "$T/store/mailbox/inbox"; done
   grep -qx "status: active" "$T/store/mailbox/agents/pm2.md" && ok "and pm2 is still active" ||
     { no "an update that couldn't list the inbox retired pm2" "$(cat "$T/store/mailbox/agents/pm2.md")"; as pm2 update --status active >/dev/null 2>&1; }
   # trust --relax that can't remove the strict pin (a read-only pins folder) stops, saying so, and the store stays strict
