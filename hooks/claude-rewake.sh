@@ -85,7 +85,10 @@ if [ "$n" -ge 2 ]; then
   # (in the temporary folder, so one a killed hook leaves is cleared as other temporary files are. Named under TMPDIR:
   # macOS's mktemp with no template ignores TMPDIR, and a sandbox that gives the hook its own TMPDIR denies the folder
   # it would use instead, so the hook would end without watching)
-  each=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-rewake.XXXXXX" 2>/dev/null) || exit 0
+  # (and when TMPDIR names a folder that isn't there, the system's own: a plain mktemp -d with TMPDIR unset, since GNU's
+  # and busybox's mktemp build theirs under TMPDIR too. The unset is in this substitution's subshell: the hook's own
+  # TMPDIR stays as it was)
+  each=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-rewake.XXXXXX" 2>/dev/null || { unset TMPDIR; mktemp -d; } 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
   while IFS= read -r l; do split "$l"; printf '%s\n' "$state/rewake/$name/$sid@$store"; done < "$each/list" > "$each/dirs"
   # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside;
