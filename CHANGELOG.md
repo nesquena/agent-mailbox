@@ -6,7 +6,9 @@
   read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
   file a link kept in it leads to is now refused under every shell (under bash it used to be sent).
   `register --key` with a key in such a folder says so rather than recording a wrong path, and the plugin's hooks and
-  `install.sh` no longer take an unreadable path for `/`.
+  `install.sh` no longer take an unreadable path for `/`. Two changes there fail closed: under dash, a body whose own
+  folder's path can't be read back is now refused, as bash already did; and a CLI installed in such a folder now says
+  "can't find the folder this script is in" instead of looking for its adapters at `/`.
 - **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
   command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped.
   It now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
