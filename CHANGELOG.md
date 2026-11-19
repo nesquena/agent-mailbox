@@ -14,9 +14,11 @@
   each message and its signature into the state folder before checking them. On a full disk, a read-only state folder
   or a file size limit, `holds` read a signed hold as unsigned, which a store requiring signatures drops, so it could
   report "released"; `read` showed signed mail as unsigned, or skipped every message and said "no mail". Both now stop,
-  saying the state folder can't be written. A folder at a key's pin path is refused rather than taken as no pin (the
-  pin went into it, and `verify` said verified), `trust` on a full disk refuses where it used to rewrite the pin in
-  place, and `trust --relax` says so when it can't lift the pin.
+  saying the state folder can't be written. `read` also stops at a message or signature in the store that it can't
+  read, where it skipped the message or showed it as unsigned: `consume` it, or pass `--except`, to read the rest. A
+  folder or a link at a key's pin path is refused rather than taken as no pin (a folder got the pin moved into it, and
+  `verify` said verified), `trust` on a full disk refuses where it used to rewrite the pin in place, and
+  `trust --relax` says so when it can't lift the pin.
 - **Without `sha256sum` or `shasum`, commands that open a store stop, saying so.** The store's id, a hash, names its
   key pins, the git adapter's copy and its locks in the state folder; without one every store shared them, and a key
   pin left empty by an older version matched any key. (With #178, `verify`, `read`, `reply` and `holds` already
