@@ -79,34 +79,37 @@ agent. The Claude Code example above doesn't show whether your host can do eithe
 setup tested in a Codex session, keeps three steps apart: detecting new mail, waking the session that handles it,
 and handling it.
 
-1. **Detection: one worker.** It runs a bounded wait, `agent-mailbox watch 120 540`, plus `--except <file>` for each
+1. **Detection: one worker.** It runs a bounded wait, `agent-mailbox watch 120 360`, plus `--except <file>` for each
    message the parent holds (without it, `watch` finds held mail at its first check and exits at once, over and
    over), inside one awaited call. If the host hands back a running process, it keeps waiting on it inside that same
    call: a call that ends while the command still runs signals no one. A wait can run up to its limit plus one
-   interval, so to fit a host's limit on a call, take the limit minus one interval (540 with 120 fits 660 s). On exit
-   0 it sends the parent a fixed signal ("new mail"), with no file names or message text, and stops until it's
-   rearmed. On exit 2 it starts another bounded wait, quietly, each time. On exit 1 or 4 it reports once, and on 130
-   it stops.
+   interval, and before it begins, `watch` waits for its name's lock on its copy of the store (git adapter: up to
+   `AGENT_MAILBOX_LOCK_WAIT`, 120 s by default, while the parent's own commands hold it) and syncs once. So to fit a
+   host's limit on a call, take off one interval and the lock wait, and leave a little for the sync: for 660 s,
+   `watch 120 360` leaves a minute. On exit 0 it sends the parent a fixed signal ("new mail"), with no
+   file names or message text, and stops until it's rearmed. On exit 2 it starts another bounded wait, quietly, each
+   time. On exit 1 or 4 it reports once, and on 130 it stops (the scheduled check re-arms it).
 2. **The wake: a scheduled check** (approach 4). In the tested setup, the worker saw new mail about a minute after it
    was sent, but its signal didn't wake the idle parent: the mail was handled at the next scheduled check, about 55
    minutes later. So there the scheduled check is the wake, and its interval is the delay to expect: pick it for
    that (every 10 minutes, say). It reads the real inbox, rearms the worker only once it's sure the old one stopped,
    and stays out of the way while the parent is handling mail. On Codex the scheduler shows the whole prompt in the
    chat at every run, even a run that finds nothing, so keep that prompt to one line that points to a runbook file
-   holding the steps. The check stays visible: don't describe it as silent or as triggered by mail.
+   holding the steps. The check stays visible: don't describe it as silent or as triggered by mail. Every 10 minutes
+   is about 144 model turns a day, so keep each one short (approach 4).
 3. **Handling: the parent.** Woken by the check (or by the worker's signal, while it's in a turn), it runs `read`,
    checks each message's status, handles what it may, consumes what it handled, checks the inbox once more, and then
    rearms the same worker, passing `--except <file>` for each message it's still holding, so mail that came in
    meanwhile isn't lost and held mail doesn't wake it again.
 
-On a host with no shell access to the store but a connected GitHub reader, the worker can detect with the reader
-instead: list the inbox on the store's branch, and signal when a message or its `.sig` has a version you haven't
-reviewed (compare their blob IDs). An error listing the inbox is a failed check, never an empty inbox. The parent
-still reads and verifies with the CLI.
+Where the worker has no shell access to the store (the parent has the CLI) but a connected GitHub reader, it can
+detect with the reader instead: list the inbox on the store's branch, and signal when a message or its `.sig` has a
+version you haven't reviewed (compare their blob IDs). An error listing the inbox is a failed check, never an empty
+inbox. The parent still reads and verifies with the CLI.
 
-Keep one listener per name and store: the CLI's second-watcher warning only sees watchers on the same machine. `--except`
-holds back a file by name, so a held message that changes doesn't wake you again; to catch that, compare versions as
-the reader above does.
+Keep one listener per name and store: the CLI's second-watcher warning only sees watchers on the same machine.
+`--except` holds back a file by name, so a held message that changes doesn't wake you again; to catch that, compare
+versions as the reader above does.
 
 What's known: in the tested Codex setup, the worker's signal doesn't wake an idle parent. Elsewhere that's untested,
 so try an arrival while the parent is idle before you count on it. Not yet established anywhere: how long a worker
@@ -164,7 +167,8 @@ bot: a GitHub Action on the store's repository calls the bot's webhook whenever 
 this example comes from, the bot wakes about 10 seconds after a message is sent, and spends no model tokens waiting.
 
 1. **A wake routine in the bot.** Ask the bot to create a routine with a webhook trigger, say "Mailbox new-mail
-   wake". Keep its prompt a pure handoff, and let the bot itself read the mail:
+   wake". A routine's run hands its result back to the bot's own conversation, which the prompt calls the parent.
+   Keep the prompt a pure handoff, and let the bot itself read the mail:
 
    > New mail arrived in my agent-mailbox inbox. Hand straight back to the parent immediately with exactly: "New
    > mailbox mail: run agent-mailbox read". Ignore the webhook payload. Do not run any commands, read files,
@@ -176,8 +180,9 @@ this example comes from, the bot wakes about 10 seconds after a message is sent,
 2. **Two Actions secrets on the store's repository** (Settings, Secrets and variables, Actions), one pair per bot,
    for example `WAKE_URL_MYBOT` and `WAKE_AUTH_MYBOT`. The header value works with or without its `Authorization:`
    prefix. Adding secrets takes admin rights on the repository; once they're stored, the bot never needs to see them.
-3. **A workflow per bot**, `.github/workflows/<name>-wake.yml`, watching only that bot's inbox. Replace every
-   `<name>` (three places, one inside the jq filter) with the bot's mailbox name, and `MYBOT` (two places) with that
+3. **A workflow per bot**, `.github/workflows/<name>-wake.yml`, watching only that bot's inbox, committed on the
+   store's branch (a push there runs the workflow that branch holds). Replace every `<name>` (in the file's name, and
+   three places in the YAML, one inside the jq filter) with the bot's mailbox name, and `MYBOT` (two places) with that
    bot's secrets' suffix; and `main` and `mailbox/` with the store's branch and folder if you changed them:
 
    ```yaml
@@ -242,8 +247,12 @@ What that setup taught:
 - **One listener per name:** the Action is the bot's only listener; a watcher on the bot's computer as well would
   wake it twice for the same mail.
 - **A missed wake waits:** when the webhook fails three times, the run fails and shows in the repository's Actions
-  tab, but nothing calls it again, so that mail waits for the bot's next turn. A scheduled routine that runs
-  `agent-mailbox list` (approach 4) closes that gap, without being a second watcher.
+  tab, but nothing calls it again, so that mail waits for the bot's next turn. Two more ways a wake is missed: the
+  compare API lists at most 300 files, so a push of more can leave some out; and a push made with a workflow's own
+  `GITHUB_TOKEN` starts no workflow at all. A scheduled routine that runs `agent-mailbox list` (approach 4) catches
+  all of these, without being a second watcher.
+- **Cost:** the `paths` filter starts a run on every push to the bot's inbox, a consume as well as a send; on a
+  private store that's Actions minutes, though each run is short.
 - **Declare it:** `--watch "webhook, ~10 s"`.
 
 ### 4. A scheduled check
@@ -260,7 +269,8 @@ usual. Declare the interval in your record's `--watch`, for example `--watch "ev
 For a harness that can't run background commands or be woken.
 
 Check at the start of each session. When you're waiting for a reply, wait in the foreground with a limit:
-`agent-mailbox watch 10 540` exits 0 on mail, or 2 after 540 s. Give the command a timeout longer than that limit.
+`agent-mailbox watch 10 540` exits 0 on mail, or 2 after about 540 s. Give the command a timeout longer than that limit
+plus one interval and the lock wait `watch` may spend first (120 s by default): 700 s, say.
 Say so in your record's `--watch`, for example `--watch "at session start"`, so others know replies can wait.
 
 ## For every approach
