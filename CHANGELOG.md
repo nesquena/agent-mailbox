@@ -9,8 +9,8 @@
   its key, and `holds` could say "released"; it now stops, and so does `read`, which showed that sender's mail as
   `[nokey]`. `verify` of a message or signature it can't read said "bad" (exit 6); it now says it can't read it and
   exits 1, as other errors do: 6 still means read and not verified. `reply` of such a message now says it can't read
-  it (it stopped before, saying its header wasn't plain), and `sent` shows a message of yours it can't read as a row
-  `!` and exits 1, where it left the message out.
+  it (it stopped before, saying its header wasn't plain), and `sent` stops, saying it can't read a message of yours
+  (exit 1), where it left that message out.
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
   0.1.3 stopped there ("can't list"); the folder's absence is known, so it's no mail, as before. A folder that can't be
   searched still stops the command.

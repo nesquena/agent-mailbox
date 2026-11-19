@@ -4633,6 +4633,13 @@ else
   expect "and sent lists both" 0 "-ua-m1\.md to ub" as ua sent
 fi
 chmod -R u+rwX "$T/store" 2>/dev/null
+# a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
+# row: sent lists the rest, as it did before it stopped on one it can't read
+mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \
+  'exec /bin/cat "$@"' > "$T/shim/cat"; chmod +x "$T/shim/cat"
+out=$(PATH="$T/shim:$PATH"; export PATH; as ua sent 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-ua-h1\.md to ub" && ! printf '%s\n' "$out" | grep -q -- "-ua-m1\.md\|can't read" &&
+  ok "sent passes over a message consumed while it lists, and lists the rest" || no "sent stopped on, or listed, a message consumed while it listed (exit $rc)" "$out"
 else sk "dir-unreadable (no ssh-keygen -Y)"; fi
 }
 section dir-unreadable sec_dir_unreadable dir
