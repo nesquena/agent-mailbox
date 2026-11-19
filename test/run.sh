@@ -475,22 +475,29 @@ sed 's/^section bats sec_bats$/section bats sec_bats; sec_bats() { :; }/' "$0" >
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$W/guard/test/hollow.sh" --only bats 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "FAIL section bats ran no checks" &&
   ok "a section that runs no checks fails the run" || no "a section that ran no checks passed (exit $rc)" "$out"
+# an adapter this tree doesn't have, on the command line, stops the run, saying so in the usage's terms
+out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" foo --list 2>&1); rc=$?
+[ "$rc" = 64 ] && printf '%s\n' "$out" | grep -q "^test/run.sh: no adapter 'foo' here (adapters/foo.sh); usage: test/run.sh " &&
+  ok "an adapter this tree doesn't have stops the run, saying so" || no "run.sh foo didn't stop with its usage (exit $rc)" "$out"
 # an adapter given twice runs once, and --only won't take ids with spaces (it would run only those it could match)
 out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" git git --list 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -cx adapter-git)" = 1 ] &&
   ok "an adapter named twice runs once" || no "an adapter named twice didn't run once (exit $rc)" "$out"
 # a section for one adapter is left out of a run that doesn't test it, and kept in one that does (the tagged ones read
 # from their section lines, so a new one is covered too)
-tagged_sections() { sed -n "s/^ *section \([a-z0-9-]*\) [a-z0-9_]* $1\$/\1/p" "$0" | sort | tr '\n' ' '; }
+# (any spacing, tabs included, as the shell reads the line)
+tagged_sections() { sed -n "s/^[[:space:]]*section[[:space:]][[:space:]]*\([a-z0-9-]*\)[[:space:]][[:space:]]*[a-z0-9_]*[[:space:]][[:space:]]*$1[[:space:]]*\$/\1/p" "$0" |
+  sort | tr '\n' ' '; }
 # lists_all <--list output> <ids>: it lists each of them; lists_none: it lists none of them
 lists_all() { [ "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')" | sort | tr '\n' ' ')" = "$2 " ]; }
 lists_none() { [ -z "$(printf '%s\n' "$1" | grep -xE "$(echo $2 | tr ' ' '|')")" ]; }
 gs=$(tagged_sections git); gs=${gs% }; ds=$(tagged_sections dir); ds=${ds% }
-# (every section line with a third word is one of them: a trailing space or another word there would hide a section
-# from the lists above)
-nt=$(grep -cE '^ *section [a-z0-9-]+ [a-z0-9_]+ [^ ]' "$0"); nl=$(echo $gs $ds | wc -w | tr -d ' ')
+# (every section line with a third word is one of them: another word there, or a tag run into more, would hide a
+# section from the lists above. ceiling: a section line that doesn't start its line, after `: &&` say, isn't read)
+sl='^[[:space:]]*section[[:space:]]+[a-z0-9-]+[[:space:]]+[a-z0-9_]+[[:space:]]+[^[:space:]]'
+nt=$(grep -cE "$sl" "$0"); nl=$(echo $gs $ds | wc -w | tr -d ' ')
 [ "$nt" = "$nl" ] && ok "every section line with an adapter names git or dir, exactly" ||
-  no "a section line names an adapter some other way ($nt such lines, $nl read as git or dir)" "$(grep -nE '^ *section [a-z0-9-]+ [a-z0-9_]+ [^ ]' "$0")"
+  no "a section line names an adapter some other way ($nt such lines, $nl read as git or dir)" "$(grep -nE "$sl" "$0")"
 if [ -n "$gs" ] && [ -n "$ds" ]; then
   out=$(TMPDIR="$W/guard/tmp" time_cap 60 "$SH" "$0" dir --list 2>&1); rc=$?
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx adapter-dir && lists_none "$out" "$gs" && lists_all "$out" "$ds" &&
@@ -1025,6 +1032,12 @@ notes.md"'
       no "a command rewrote user.name in the checkout's config" "$(git -C "$C" config --local user.name)"
   fi
 }
+# each adapter named must be one this tree has, as the section tags are (here, below the suite's start, which the
+# safeguards copy into folders with no adapters/)
+for a in $ADAPTERS; do
+  case $a in (*[!a-z0-9-]*) false ;; (*) [ -f "$ROOTDIR/adapters/$a.sh" ] ;; esac ||
+    { echo "test/run.sh: no adapter '$a' here (adapters/$a.sh); usage: test/run.sh [--list] [--only <id>[,<id>...] | --shard <i>/<n>] [--order <seed>] [adapter...]" >&2; exit 64; }
+done
 for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
 
 # --- cases that need their own store -------------------------------------------------------------------------------
@@ -4271,9 +4284,9 @@ R="$W/home-wa1/.local/state/agent-mailbox/run"
 # sleep before it exits)
 wpid() { i=0; while [ ! -s "$R/wa1.pid" ] && kill -0 "$1" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
   wp=$(cut -d' ' -f1 "$R/wa1.pid" 2>/dev/null); }
-stopw() { kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; }
+stopw() { [ -n "$1" ] || return 0; kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; }
 rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j1=$!; wpid "$j1"; p1=$wp; sid=$(cut -d' ' -f3 "$R/wa1.pid" 2>/dev/null)
-[ -n "$p1" ] || no "the first watcher never started (no pid file), so the checks after it aren't what they say" "job $j1"
+[ -n "$p1" ] || { no "the first watcher never started (no pid file), so the checks after it aren't what they say" "job $j1"; kill_tree "$j1"; }
 # a second watcher, while the first runs, says so (naming the first), and starts anyway, writing its own pid to both files
 as wa1 watch 1 30 > "$T/w2.out" 2>&1 & j2=$!
 i=0; while [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p1" ] && kill -0 "$j2" 2>/dev/null && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
@@ -4285,7 +4298,7 @@ grep -q "watch: another watcher for wa1 is running (pid $p1); both wake on the s
 [ "$(grep -c 'another watcher' "$T/w2.out")" = 1 ] && ok "(it warns once)" || no "the second watch warned more than once" "$(cat "$T/w2.out")"
 # the first watcher's exit leaves the files the second wrote
 stopw "$p1"
-[ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
+[ -n "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
   ok "the first watcher's exit leaves the second's pid files" || no "the first watcher's exit removed the second's pid files" "$(cat "$R"/*.pid 2>&1)"
 stopw "$p2"
 # a stale file whose pid is gone, and one whose pid now belongs to another process, aren't watchers: no warning
@@ -4311,10 +4324,14 @@ kill $(pgrep -P "$gh") "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
 rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j3=$!; wpid "$j3"; p3=$wp
-[ -n "$p3" ] || no "the watcher on the first store never started (no pid file), so the next check isn't what it says" "job $j3"
+[ -n "$p3" ] || { no "the watcher on the first store never started (no pid file), so the next check isn't what it says" "job $j3"; kill_tree "$j3"; }
 out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
 [ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
 stopw "$p3"
+# (each watcher's job, and what it started, gets a TERM and is waited for, whatever happened above: one still running
+# would hold up a later section's bare wait. Not kill_tree, whose wait for each to end counts a job that has ended but
+# isn't reaped yet as still running)
+for j in "$j1" "$j2" "$j3"; do kill -TERM $(tree "$j") 2>/dev/null; done; wait "$j1" "$j2" "$j3" 2>/dev/null
 }
 section second-watcher sec_second_watcher
 sec_dir_store_gone() {
