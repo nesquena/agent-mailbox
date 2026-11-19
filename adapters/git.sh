@@ -307,12 +307,14 @@ ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
 # a disk with no free inodes or a folder that can't be searched refuses one; in a subshell, since a failed redirection
 # on : ends a POSIX shell
 ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
-# ad_take: make the lock (noclobber, so only one taker does), then write its holder line into it. A write that fails
-# (a disk whose blocks are full makes an empty file but no more) removes the lock it just made and stops the command,
-# rather than leaving an empty lock that later takers wait out and blame on an unknown holder
-ad_take() { (set -C; : > "$lk") 2>/dev/null || return 1
-  ( printf '%s\n' "$mine" > "$lk" ) 2>/dev/null && return 0
-  rm -f "$lk"; die "can't write the lock $lk (is the disk full?)"; }
+# ad_take: make the lock (noclobber, so only one taker does) and write its holder line, in one process, so a signal
+# can't land between the two and leave an empty lock. A write that fails (a disk whose blocks are full makes an empty
+# file but no more) removes the lock that same process made, and stops the command, rather than leaving an empty lock
+# that later takers wait out and blame on an unknown holder. (`|| exit 1` after the exec: a non-POSIX bash goes on
+# after a failed `exec 3>`, and would remove another taker's lock; XFSZ ignored, so a size limit fails the write
+# rather than killing the shell)
+ad_take() { ( trap '' XFSZ; set -C; exec 3> "$lk" || exit 1; printf '%s\n' "$mine" >&3 && exit 0; rm -f "$lk"; exit 3 ) 2>/dev/null
+  case $? in (0) return 0 ;; (3) die "can't write the lock $lk (is the disk full?)" ;; esac; return 1; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
   lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}

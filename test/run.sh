@@ -2019,17 +2019,19 @@ echo "== setup says when pinned keys stay with the old store settings (dir)"
 if [ -n "$SSH" ]; then
 T="$W/pinmove"; mkdir -p "$T"
 as pm1 setup --store "$T/store" --adapter dir --name pm1 >/dev/null; as pm1 init --require-signatures >/dev/null
-# a reader that can't record a strict store's pin (its pins folder can't be written) stops, saying so, rather than
-# ending with the shell's own error (dash) or carrying on without the pin (bash)
-PD="$W/home-pm1/.local/state/agent-mailbox/pins"; mkdir -p "$PD"; chmod a-w "$PD"
-if (true > "$PD/probe") 2>/dev/null; then rm -f "$PD/probe"; chmod u+w "$PD"
-  sk "a strict store's pin that can't be recorded stops the command (read-only folders don't stop this user)"
-else
-  expect "a strict store's pin that can't be recorded stops the command, saying so" 1 \
-    "^agent-mailbox: can't record that this store requires signatures" as pm1 holds "pm#1" --version v1
-  chmod u+w "$PD"
-fi
 as pm1 register --kind t --about t >/dev/null
+# a reader that can't record a strict store's pin (the store's pins folder there but not writable, its .strict gone)
+# stops, saying so, rather than ending with the shell's own error (dash) or carrying on without the pin (bash)
+PS=$(ls -d "$W/home-pm1/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PS=${PS%/}
+if [ -n "$PS" ] && [ -f "$PS/.strict" ]; then mv "$PS/.strict" "$PS/.strict.kept"; chmod a-w "$PS"
+  if (true > "$PS/probe") 2>/dev/null; then rm -f "$PS/probe"
+    sk "a strict store's pin that can't be recorded stops the command (read-only folders don't stop this user)"
+  else
+    expect "a strict store's pin that can't be recorded stops the command, saying so" 1 \
+      "^agent-mailbox: can't record that this store requires signatures" as pm1 holds "pm#1" --version v1
+  fi
+  chmod u+w "$PS"; mv "$PS/.strict.kept" "$PS/.strict"
+else no "a strict store's pin that can't be recorded stops the command, saying so" "register recorded no pin to test with: $(ls -R "$W/home-pm1/.local/state/agent-mailbox/pins" 2>&1)"; fi
 as pm2 setup --store "$T/store" --adapter dir --name pm2 >/dev/null; as pm2 register --kind t --about t >/dev/null
 # init on a store whose agents folder can't be written stops, saying which file it couldn't make
 as pm3 setup --store "$T/store3" --adapter dir --name pm3 >/dev/null; mkdir -p "$T/store3/mailbox/agents"; chmod a-w "$T/store3/mailbox/agents"
@@ -2572,6 +2574,21 @@ else
   [ "$n" -le $((hl + 8)) ] && ok "and within a few seconds of it (after ${n}s)" || no "a hang ended long after the deadline" "after ${n}s, deadline $((hl + 3))s"
 fi
 sleep 1; [ -z "$(hung)" ] && ok "and what the watch was waiting on is stopped too" || { no "and what the watch was waiting on is stopped too" "$(hung)"; kill $(hung) 2>/dev/null; }
+# the watchdog still stops the hook at its deadline when it can't write its note there (the run folder made read-only
+# once the hook has started: under dash a failed write would end the watchdog's own shell before it stops the hook)
+(RWMAX=2 fk FAKEHANG="99$$" AGENT_MAILBOX_REWAKE_CHECK=2 CCOUT="$T/ro.out") & bg=$!; n=0
+while [ $n -lt 30 ] && [ -z "$(hung)" ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done
+if [ -n "$(hung)" ]; then chmod a-w "$R1"
+  if (true > "$R1/probe") 2>/dev/null; then rm -f "$R1/probe"; chmod u+w "$R1"; kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" 2>/dev/null
+    wait "$bg" 2>/dev/null; sk "a watchdog that can't write its note still stops the hook (read-only folders don't stop this user)"
+  else n=0; while [ $n -lt 30 ] && kill -0 "$bg" 2>/dev/null; do sleep 1; n=$((n+1)); done; chmod u+w "$R1"
+    if kill -0 "$bg" 2>/dev/null; then no "a watchdog that can't write its note still stops the hook" "still running 30 s after its 5 s deadline"
+      kill "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" "$bg" 2>/dev/null; wait "$bg" 2>/dev/null
+    else wait "$bg" 2>/dev/null; ok "a watchdog that can't write its note still stops the hook (after ${n}s)"; fi
+  fi
+else no "a watchdog that can't write its note still stops the hook" "the hang never started: $(cat "$T/ro.out" 2>/dev/null)"
+  kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
+sleep 1; [ -z "$(hung)" ] || kill $(hung) 2>/dev/null
 # a watcher a signal ends while the hook goes on (the system, someone stopping it) is started again, quietly
 for f in $(as rw list | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done
 rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
