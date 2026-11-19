@@ -2685,13 +2685,14 @@ grep -qxF -- "-d $TD/agent-mailbox-rewake.XXXXXX" "$T/mkt.log" && ok "from a tem
 # (the terminal stand-in writes straight to CCOUT, so it needs no temporary file of its own there. Where a plain
 # mktemp -d can't work either, as in a sandbox that denies the system's own temporary folder, there's nothing to fall
 # back to)
-if _md=$(mktemp -d 2>/dev/null) && rmdir "$_md"; then
+if _md=$( (unset TMPDIR; mktemp -d) 2>/dev/null) && rmdir "$_md"; then
 (rewake r9 AGENT_MAILBOX_REWAKE_MAX=5 PATH="$T/mkt:$PATH" MKTLOG="$T/mkt.log" REAL_MKTEMP="$RMK" TMPDIR="$T/no-such-folder" \
   CCOUT="$T/mkt.out") >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] && grep -q "daily limit with no new mail" "$T/mkt.out" && ok "and with TMPDIR naming a folder that isn't there, it still watches" ||
-  no "and with TMPDIR naming a folder that isn't there, it still watches" "exit $rc: $(cat "$T/mkt.out" 2>/dev/null)"
-grep -qx -- "-d" "$T/mkt.log" && ok "through a plain mktemp -d" || no "the hook didn't fall back to a plain mktemp -d" "$(cat "$T/mkt.log")"
-else sk "and with TMPDIR naming a folder that isn't there, it still watches (a plain mktemp -d can't work here either)"; fi
+# (watching proves the fallback worked; the call noted shows it was the fallback, not some other folder)
+[ "$rc" = 2 ] && grep -q "daily limit with no new mail" "$T/mkt.out" && grep -qx -- "-d" "$T/mkt.log" &&
+  ok "and with TMPDIR naming a folder that isn't there, it still watches, through a plain mktemp -d" ||
+  no "and with TMPDIR naming a folder that isn't there, it still watches, through a plain mktemp -d" "exit $rc: $(cat "$T/mkt.out" 2>/dev/null); mktemp calls: $(cat "$T/mkt.log")"
+else sk "and with TMPDIR naming a folder that isn't there, it still watches, through a plain mktemp -d (a plain mktemp -d can't work here either)"; fi
 # a watcher the agent started by hand on one store doesn't count for the other, though it's for the same name
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
 HOME="$W/home-rw" XDG_CONFIG_HOME= XDG_STATE_HOME= AGENT_MAILBOX_CONFIG= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= \
@@ -2739,7 +2740,8 @@ if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2;
   gone 5 "$ks" && [ "$rc" = 0 ] && [ ! -s "$T/bg.out" ] && ok "a stopped hook stops both stores' runs and watchers, silently" ||
     no "a stopped hook stops both stores' runs and watchers, silently" "exit $rc: $(cat "$T/bg.out")"
 else no "a stopped hook stops both stores' runs and watchers, silently" "they didn't start"; kill "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; fi
-rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" & bg=$!
+# (its TMPDIR inside this run's folder: a hook killed outright can't remove its temporary folder, so it goes with the run)
+mkdir -p "$T/ktmp"; rewake r9 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg.out" TMPDIR="$T/ktmp" & bg=$!
 if up "$RS/rewake/rw/r9@$S1/pid" && up "$RS/rewake/rw/r9@$S2/pid"; then sleep 2; ks=$(runs)
   hp=$(ps -o ppid= -p "$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S1/pid")" | tr -d ' '); kill -KILL "$hp"
   gone 30 "$ks" && ok "a hook killed outright leaves no run or watcher behind" || no "a hook killed outright leaves no run or watcher behind" "$(ps -o pid=,args= -p "$(echo $ks | tr ' ' ,)")"
