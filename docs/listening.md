@@ -79,13 +79,14 @@ agent. The Claude Code example above doesn't show whether your host can do eithe
 setup tested in a Codex session, keeps three steps apart: detecting new mail, waking the session that handles it,
 and handling it.
 
-1. **Detection: one worker.** It runs a bounded wait, `agent-mailbox watch 120 540`, plus `--except <file>` for each
+1. **Detection: one worker.** It runs a bounded wait, `agent-mailbox watch 120 360`, plus `--except <file>` for each
    message the parent holds (without it, `watch` finds held mail at its first check and exits at once, over and
    over), inside one awaited call. If the host hands back a running process, it keeps waiting on it inside that same
    call: a call that ends while the command still runs signals no one. A wait can run up to its limit plus one
-   interval, so to fit a host's limit on a call, take the limit minus one interval (540 with 120 fits 660 s), and
-   leave headroom for `watch`'s own start: it takes the store's lock (up to `AGENT_MAILBOX_LOCK_WAIT`, 120 s by
-   default) and syncs once before its wait begins. On exit 0 it sends the parent a fixed signal ("new mail"), with no
+   interval, and before it begins, `watch` waits for its name's lock on its copy of the store (git adapter: up to
+   `AGENT_MAILBOX_LOCK_WAIT`, 120 s by default, while the parent's own commands hold it) and syncs once. So to fit a
+   host's limit on a call, take off one interval and the lock wait, and leave a little for the sync: for 660 s,
+   `watch 120 360` leaves a minute. On exit 0 it sends the parent a fixed signal ("new mail"), with no
    file names or message text, and stops until it's rearmed. On exit 2 it starts another bounded wait, quietly, each
    time. On exit 1 or 4 it reports once, and on 130 it stops (the scheduled check re-arms it).
 2. **The wake: a scheduled check** (approach 4). In the tested setup, the worker saw new mail about a minute after it
@@ -268,7 +269,8 @@ usual. Declare the interval in your record's `--watch`, for example `--watch "ev
 For a harness that can't run background commands or be woken.
 
 Check at the start of each session. When you're waiting for a reply, wait in the foreground with a limit:
-`agent-mailbox watch 10 540` exits 0 on mail, or 2 after 540 s. Give the command a timeout longer than that limit.
+`agent-mailbox watch 10 540` exits 0 on mail, or 2 after about 540 s. Give the command a timeout longer than that limit
+plus one interval and the lock wait `watch` may spend first (120 s by default): 700 s, say.
 Say so in your record's `--watch`, for example `--watch "at session start"`, so others know replies can wait.
 
 ## For every approach
