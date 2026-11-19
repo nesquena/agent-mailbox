@@ -2154,7 +2154,7 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
       ad_show - "mailbox/inbox/pm2/$fh.sig" >/dev/null; printf '%s' $?) )
     [ "$st" = "0 1 2" ] && ok "dir: ad_show exits 0 for a file, 1 for none, 2 for one it can't read" || no "dir: ad_show's exits for a file, none and an unreadable one" "$st"
     out=$(as pm2 holds "pm#2" --version v1 2>&1); rc=$?
-    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/inbox/pm2/$fh\.sig as of " &&
+    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/inbox/pm2/$fh\.sig\$" &&
       ! printf '%s\n' "$out" | grep -q "^holds: " && ok "a hold's signature in the store that can't be read stops holds, deciding nothing" ||
       no "holds read a signature it couldn't read as none, or didn't say why (exit $rc)" "$out"
     chmod 644 "$IB/$fh.sig"; chmod 000 "$IB/$f"
@@ -2205,6 +2205,11 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   else expect "register that can't record its own key pin stops, saying so" 1 "^agent-mailbox: can't record your own key" \
     as pm4 register --kind t --about t; fi
   chmod u+w "$P4"
+  # update whose own pin is already its key's writes nothing there, so a read-only pins folder doesn't stop it
+  P1=$(ls -d "$W/home-pm1/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); P1=${P1%/}; chmod a-w "$P1"
+  if (true > "$P1/probe") 2>/dev/null; then rm -f "$P1/probe"; sk "update with its pin unchanged and the pins folder read-only (read-only folders don't stop this user)"
+  else expect "update whose own pin is unchanged goes ahead with the pins folder read-only" 0 "^update: pm1 " as pm1 update --about t2; fi
+  chmod u+w "$P1"
 else no "a key pin that can't be recorded stops the command" "no hold sent, pm2 has no pins folder, or already pinned pm1: $fh; $(ls -A "$PP" 2>&1)"; fi
 # a link left at the pin's temp name, or at the key list's, isn't followed: the pin and the key list are written as
 # files of their own, and what the links lead to is left as it was (for the process id the CLI will run as)
@@ -2232,12 +2237,21 @@ else sk "send whose hold can't record its gate stops, saying only so ($SH writes
 # trust that can't write (a size limit of 0) leaves the old pin as it was, byte for byte, and no temp beside it: the
 # pin is written beside it and moved over it, never truncated in place (a later read would take an empty pin as changed)
 PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
-if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.pin"
+# (an earlier key's pin, so there's a pin to replace: one that's already the key's is left as it is. "Only so" is the
+# CLI's one line: no shell's note of the signal, and nothing bash's printf couldn't write)
+if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.now"; echo 0123456789abcdef > "$PP/pm1"; cp "$PP/pm1" "$T/pm1.pin"
   out=$( (ulimit -f 0; as pm2 trust pm1) 2>&1 ); rc=$?
-  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && ! printf '%s\n' "$out" | grep -qi "file size" &&
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
     ok "trust that can't write its pin stops, saying only so" || no "trust under a size limit didn't stop, or said more (exit $rc)" "$out"
   cmp -s "$PP/pm1" "$T/pm1.pin" && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and leaves the old pin as it was, with no temp beside it" ||
     no "trust under a size limit changed the pin or left a temp" "$(ls -A "$PP"; od -c "$PP/pm1" | head -2)"
+  cp "$T/pm1.now" "$PP/pm1"
+  # setup that can't write the config (the same limit) stops with the CLI's one line, and leaves the config as it was
+  cf="$W/home-pm2/.config/agent-mailbox/config"; cp "$cf" "$T/config.was"
+  out=$( (ulimit -f 0; as pm2 setup --store "$T/store" --adapter dir --name pm2 --human hx) 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*/config\$" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
+    cmp -s "$cf" "$T/config.was" && ok "setup that can't write its config stops, saying only so, and leaves it as it was" ||
+    no "setup under a size limit didn't stop with only its own message, or changed the config (exit $rc)" "$out"
 else no "trust that can't write its pin stops" "verify recorded no pin for pm1: $(ls -A "$PP" 2>&1)"; fi
 # a hold whose sender's key is gone from the registry still blocks in a strict store when the reader has a pin for it,
 # whatever is at the pin's path (here a folder): before, only a file there counted, and the hold was dropped
