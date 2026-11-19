@@ -4088,20 +4088,21 @@ for a in cl1 cl2 cl3; do as $a setup --store "$T/store" --adapter dir --name $a 
 as cl2 init >/dev/null; as cl1 register --kind t --about t --no-key >/dev/null 2>&1; as cl2 register --kind t --about t --no-key >/dev/null 2>&1
 [ -n "$SSH" ] && as cl3 register --kind t --about t >/dev/null 2>&1
 # race <sender> <topic> [<pause at> [<VAR=value for B>]]: A (paused) and B send <topic> to cl2 in the same second; their output, ending
-# with "exit <code>", is left in $T/a.out and $T/b.out
-race() { rm -f "$T/p.at" "$T/p.go" "$T/p.late" "$T/b.out.note"
+# with "exit <code>", is left in $T/a.out and $T/b.out. A race that didn't run as meant (A ended or never paused, or B
+# took too long) fails a check of its own, saying so, whatever the checks after it find
+race() { rm -f "$T/p.at" "$T/p.go" "$T/p.late" "$T/race.note"
   (echo from-a | env PATH="$T/cs:$PATH" PAUSE="$T/p" PAUSEAT="${3:-any}" AGENT_MAILBOX_STATE="$T/state-a-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/a.out" 2>&1
-   echo "exit $?" >> "$T/a.out") &
+   echo "exit $?" >> "$T/a.out") & ap=$!
   # (B starts only once A has paused, up to 60 s: on a loaded machine A's start, sync and signing can take more than
   # the 10 s this once allowed, and B then ran first, a different race from the one the check describes)
-  i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done
-  [ -e "$T/p.at" ] || echo "(A never reached its pause within 60 s: the race didn't run as meant)" >> "$T/b.out.note"
+  i=0; while [ ! -e "$T/p.at" ] && kill -0 "$ap" 2>/dev/null && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done
+  [ -e "$T/p.at" ] || echo "A ended, or didn't reach its pause within 60 s" >> "$T/race.note"
   echo from-b | env ${4:+"$4"} PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/b.out" 2>&1
   echo "exit $?" >> "$T/b.out"; : > "$T/p.go"; wait
-  [ ! -e "$T/p.late" ] || echo "(B took over 60 s, so A went on without it: the race didn't run as meant)" >> "$T/b.out.note"
-  [ ! -s "$T/b.out.note" ] || { cat "$T/b.out.note" >> "$T/a.out"; rm -f "$T/b.out.note"; }; }
+  [ ! -e "$T/p.late" ] || echo "B took over 60 s, so A went on without it" >> "$T/race.note"
+  [ ! -s "$T/race.note" ] || no "the $2 race ran as meant" "$(cat "$T/race.note"; echo ---; cat "$T/a.out"; echo ---; cat "$T/b.out")"; }
 # lost <out file>: that sender stopped with "exists" and a non-zero exit
 lost() { grep -q "exists" "$1" && [ "$(tail -n 1 "$1")" != "exit 0" ]; }
 race cl1 clob-u
