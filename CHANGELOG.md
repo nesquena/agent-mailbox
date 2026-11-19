@@ -12,12 +12,12 @@ isn't there.
   default) and blaming "another agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops
   the command with a message, where bash carried on without it; and `init` on a folder it can't write stops with a
   message, where bash reported it initialized without the `.keep` files. Under dash, the pin and init ended with the
-  shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register` and
-  `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, or `holds` decided) and recorded
-  nothing, so a later key swap would have gone unseen; and a pin write that fails leaves the pin as it was. `trust`
-  needs room for a new copy of the pin, so on a full disk it refuses where it used to rewrite the pin in place. And
-  `verify`, `read`, `reply` and `holds` stop when they can't write the list of keys a signature is checked against,
-  where good signatures read bad.
+  shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register`,
+  `update` and `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, `holds` decided, or
+  `register` and `update` reported the record) and recorded nothing, so a later key swap would have gone unseen; and a
+  pin write that fails leaves the pin as it was. `trust` and `update` need room for a new copy of the pin, so on a full
+  disk they refuse where they used to rewrite the pin in place. And `verify`, `read`, `reply` and `holds` stop when they
+  can't write the list of keys a signature is checked against, where good signatures read bad.
 - **A copy into the state folder that fails is no longer read as a verdict about the mail.** `read` and `holds` copy
   each message and its signature into the state folder before checking them. On a full disk, a read-only state folder
   or a file size limit, `holds` read a signed hold as unsigned, which a store requiring signatures drops, so it could
