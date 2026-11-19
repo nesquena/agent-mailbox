@@ -4073,7 +4073,9 @@ echo "== dir: two sends that pick the same file name at once can't overwrite eac
 T="$W/clobber"; mkdir -p "$T/store" "$T/cs"
 printf '%s\n' '#!/bin/sh' 'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20260101T000000Z; exit 0; fi' \
   "exec '$(command -v date)' \"\$@\"" > "$T/cs/date"
-pause='i=0; while [ ! -e "$PAUSE.go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done'
+# (A waits for B's go, up to 60 s, and notes it if it gave up: then B's send took longer, and the race didn't run as
+# the check means)
+pause='i=0; while [ ! -e "$PAUSE.go" ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done; [ -e "$PAUSE.go" ] || : > "$PAUSE.late"'
 for c in ln mv; do printf '%s\n' '#!/bin/sh' 'for a; do d=$a; done' \
   'case $d in (*-clob*.md.sig) k=sig ;; (*-clob*.md) k=md ;; (*) k= ;; esac' \
   'if [ -n "$k" ] && [ -n "${PAUSE:-}" ] && [ ! -e "$PAUSE.at" ] && { [ "${PAUSEAT:-any}" = any ] || [ "$PAUSEAT" = "$k" ]; }' \
@@ -4087,14 +4089,19 @@ as cl2 init >/dev/null; as cl1 register --kind t --about t --no-key >/dev/null 2
 [ -n "$SSH" ] && as cl3 register --kind t --about t >/dev/null 2>&1
 # race <sender> <topic> [<pause at> [<VAR=value for B>]]: A (paused) and B send <topic> to cl2 in the same second; their output, ending
 # with "exit <code>", is left in $T/a.out and $T/b.out
-race() { rm -f "$T/p.at" "$T/p.go"
+race() { rm -f "$T/p.at" "$T/p.go" "$T/p.late" "$T/b.out.note"
   (echo from-a | env PATH="$T/cs:$PATH" PAUSE="$T/p" PAUSEAT="${3:-any}" AGENT_MAILBOX_STATE="$T/state-a-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/a.out" 2>&1
    echo "exit $?" >> "$T/a.out") &
-  i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+  # (B starts only once A has paused, up to 60 s: on a loaded machine A's start, sync and signing can take more than
+  # the 10 s this once allowed, and B then ran first, a different race from the one the check describes)
+  i=0; while [ ! -e "$T/p.at" ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done
+  [ -e "$T/p.at" ] || echo "(A never reached its pause within 60 s: the race didn't run as meant)" >> "$T/b.out.note"
   echo from-b | env ${4:+"$4"} PATH="$T/cs:$PATH" AGENT_MAILBOX_STATE="$T/state-b-$2" HOME="$W/home-$1" XDG_CONFIG_HOME= \
     XDG_STATE_HOME= AGENT_MAILBOX_SESSION= CLAUDE_CODE_SESSION_ID= AGENT_MAILBOX_NAME= "$SH" "$CLI" send cl2 "$2" - > "$T/b.out" 2>&1
-  echo "exit $?" >> "$T/b.out"; : > "$T/p.go"; wait; }
+  echo "exit $?" >> "$T/b.out"; : > "$T/p.go"; wait
+  [ ! -e "$T/p.late" ] || echo "(B took over 60 s, so A went on without it: the race didn't run as meant)" >> "$T/b.out.note"
+  [ ! -s "$T/b.out.note" ] || { cat "$T/b.out.note" >> "$T/a.out"; rm -f "$T/b.out.note"; }; }
 # lost <out file>: that sender stopped with "exists" and a non-zero exit
 lost() { grep -q "exists" "$1" && [ "$(tail -n 1 "$1")" != "exit 0" ]; }
 race cl1 clob-u
