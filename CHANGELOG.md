@@ -1,43 +1,51 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-11-19)
+
+Commands that can't write or read a file they need now stop, saying why, where they used to say "verified", "bad",
+"pinned", "no mail" or "released"; a git command no longer fails while others take turns on the lock; and CI runs the
+tests in shards. If you wrote an adapter of your own, see the `holds` entry: `ad_show` must exit 1 only when a file
+isn't there.
 
 - **Commands that can't write a file they need now stop at once, saying why.** A lock write that fails on a full disk
   stops with "can't write the lock … (is the disk full?)", rather than waiting out the lock wait (two minutes by
   default) and blaming "another agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops
   the command with a message, where bash carried on without it; and `init` on a folder it can't write stops with a
   message, where bash reported it initialized without the `.keep` files. Under dash, the pin and init ended with the
-  shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register` and
-  `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, or `holds` decided) and recorded
-  nothing, so a later key swap would have gone unseen; and a pin write that fails leaves the pin as it was.
+  shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register`,
+  `update` and `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, `holds` decided, or
+  `register` and `update` reported the record) and recorded nothing, so a later key swap would have gone unseen; and a
+  pin write that fails leaves the pin as it was. `trust` and `update` need room for a new copy of the pin, so on a full
+  disk they refuse where they used to rewrite the pin in place. And `verify`, `read`, `reply` and `holds` stop when they
+  can't write the list of keys a signature is checked against, where good signatures read bad.
 - **A copy into the state folder that fails is no longer read as a verdict about the mail.** `read` and `holds` copy
   each message and its signature into the state folder before checking them. On a full disk, a read-only state folder
   or a file size limit, `holds` read a signed hold as unsigned, which a store requiring signatures drops, so it could
   report "released"; `read` showed signed mail as unsigned, or skipped every message and said "no mail". Both now stop,
   saying the state folder can't be written. `read` also stops at a message or signature in the store that it can't
   read, where it skipped the message or showed it as unsigned: `consume` it, or pass `--except`, to read the rest. A
-  folder or a link at a key's pin path is refused rather than taken as no pin (a folder got the pin moved into it, and
-  `verify` said verified), `trust` on a full disk refuses where it used to rewrite the pin in place, and
-  `trust --relax` says so when it can't lift the pin.
+  folder or a link at a key's pin path is refused: a folder there took no pin and `verify` said verified, and a link was
+  followed, so a pin kept as a link now stops every check until it's a plain file. `trust --relax` says so
+  when it can't lift the pin.
 - **`holds` no longer reads a signature it can't read as no signature.** With the dir adapter, a hold's `.sig` that was
   there but couldn't be read (its permissions) read as unsigned, so a store requiring signatures dropped the hold and
   `holds` could report "released"; it now stops, saying which file it can't read. Adapters: `ad_show` exits 1 only
   when the file isn't there in that version, and 2 when it's there and can't be read (adapters/README.md). An adapter
   of your own must exit 1, and only 1, when the file isn't there: any other failure now stops `holds`.
 - **An inbox folder, or the mailbox's inbox folder, that can't be listed stops `list`, `read`, `sent` and a retiring
-  `update`, saying so.** `list` and
-  `read` said "no mail", `sent` left that inbox out, and `update --status retired` retired as if the inbox were empty.
+  `update`, saying so.** `list` and `read` said "no mail", `sent` left that inbox out, and `update --status retired`
+  retired as if the inbox were empty.
 - **Without `sha256sum` or `shasum`, commands that open a store stop, saying so.** The store's id, a hash, names its
   key pins, the git adapter's copy and its locks in the state folder; without one every store shared them, and a key
-  pin left empty by an older version matched any key. (With #178, `verify`, `read`, `reply` and `holds` already
-  stopped at the first sender with no pin.)
+  pin left empty by an older version matched any key.
 - **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
   read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
   file a link kept in it leads to is now refused under every shell (under bash it used to be sent).
-  `register --key` with a key in such a folder says so rather than recording a wrong path, and the plugin's hooks and
-  `install.sh` no longer take an unreadable path for `/`. Two changes there fail closed: under dash, a body whose own
-  folder's path can't be read back is now refused, as bash already did; and under dash a CLI installed in such a folder
-  now says "can't find the folder this script is in" instead of looking for its adapters at `/`.
+  `register --key` with a key in such a folder says so rather than recording a wrong path; the plugin's hooks and
+  `install.sh` no longer take an unreadable path for `/`; and `watch` records a session's config as named. Two changes
+  there fail closed: under dash or busybox, a body whose own folder's path can't be read back is now refused, as bash
+  already did; and under dash or busybox a CLI installed in such a folder now says "can't find the folder this script
+  is in" instead of looking for its adapters at `/`.
 - **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
   command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped. It
   now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
@@ -47,7 +55,9 @@
 - **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`, and a
   scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot
   (approach 3): a GitHub Action on the store's repository calls a routine's webhook when mail lands in the bot's
-  inbox. Each is written from a working setup. The skill points to them.
+  inbox. Each is written from a working setup. The skill points to them. docs/listening.md, JOIN.md and the skill now
+  give a foreground `watch` a timeout that covers one interval and the lock wait `watch` may spend first (700 s, say,
+  for `watch 10 540`).
 - **`reply` says what a refused message's file name should be.** For a message whose file name doesn't match its
   header, `reply` now says "its file name doesn't name it as from <from> about <topic>", as `read` does, rather than
   guessing whether the sender or the topic is off (names may hold '-', so which part is off can't always be told).
@@ -62,7 +72,8 @@
   <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
   `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
   calling that header not plain.
-- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
+- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third
+  as long.
   `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
   the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
   section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed
