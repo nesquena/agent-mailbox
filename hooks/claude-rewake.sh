@@ -57,7 +57,9 @@ else n=$(stores | wc -l)
   else name=$(tr -d ' \n' 2>/dev/null < "$state/sessions/$sid"); conf=$(cat "$state/session-configs/$sid" 2>/dev/null); legacy=1; fi
 fi
 printf '%s\n' "$name" | grep -Eq '^[a-z0-9][a-z0-9.-]{0,62}$' || exit 0
-cli="$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P)/bin/agent-mailbox"
+# (a plugin folder whose path can't be read back comes back empty from some shells' pwd: then there's no CLI to run)
+pd=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd -P) && [ -n "$pd" ] || exit 0
+cli="$pd/bin/agent-mailbox"
 [ -f "$cli" ] || exit 0
 # args <pid>: that process's command line, its arguments joined by spaces
 args() { if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o args= 2>/dev/null; fi; }
@@ -82,8 +84,13 @@ mine() {
 # itself, as below. A run records the mail it woke for as pending; this hook adds it to that store's list only once it
 # has passed the wake on, so a stop in between wakes the session for it again rather than never
 if [ "$n" -ge 2 ]; then
-  # (in the system's temporary folder, so one a killed hook leaves is cleared as other temporary files are)
-  each=$(mktemp -d 2>/dev/null) || exit 0
+  # (in the temporary folder, so one a killed hook leaves is cleared as other temporary files are. Named under TMPDIR:
+  # macOS's mktemp with no template ignores TMPDIR, and a sandbox that gives the hook its own TMPDIR denies the folder
+  # it would use instead, so the hook would end without watching)
+  # (and when TMPDIR names a folder that isn't there, the system's own: a plain mktemp -d with TMPDIR unset, since GNU's
+  # and busybox's mktemp build theirs under TMPDIR too. The unset is in this substitution's subshell: the hook's own
+  # TMPDIR stays as it was)
+  each=$(mktemp -d "${TMPDIR:-/tmp}/agent-mailbox-rewake.XXXXXX" 2>/dev/null || { unset TMPDIR; mktemp -d; } 2>/dev/null) || exit 0
   printf '%s' "$input" > "$each/in"; stores > "$each/list"; kids="" i=0
   while IFS= read -r l; do split "$l"; printf '%s\n' "$state/rewake/$name/$sid@$store"; done < "$each/list" > "$each/dirs"
   # Claude Code waited for this hook at this prompt (a store's run woke the session at it): every store steps aside;
@@ -185,6 +192,9 @@ background() {
   # the command line split at spaces, where a prompt's words can't be told from options, so only a terminal counts
   if [ -r "/proc/$ccpid/cmdline" ]; then av=$(tr '\n\0' '\001\n' < "/proc/$ccpid/cmdline") px=1
   else av=$(args "$ccpid" | tr ' ' '\n') px=""; fi
+  # (no arguments read at all, as where ps can't start, in a macOS sandbox that blocks setuid programs: that's no
+  # evidence, and a headless run's -p would go unseen, so it declines)
+  [ -n "$(printf '%s' "$av" | tr -d '\n')" ] || return 1
   printf '%s\n' "$av" | sed 1d | grep -Eq -e '^--print(=|$)' -e '^-[A-Za-z]*p' -e '^--init-only$' -e '^--sdk-url' && return 1
   # (its input checked only where it can be read)
   if [ -n "$px" ] && [ "$(printf '%s\n' "$av" | sed -n 2p)" = --preload ]; then
@@ -280,7 +290,8 @@ ck=${AGENT_MAILBOX_REWAKE_CHECK:-15}; case "$ck" in ([1-9]|1[0-5]) ;; (*) ck=15 
 dl=$((start + max + iv + ck)); rm -f "$run/deadline"
 # (it checks every ck seconds, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
-    now=$(date +%s); [ "$now" -lt "$dl" ] || { : > "$run/deadline"; break; }
+    # (the note written in a subshell: under dash a failed write would end this one before it stops the hook)
+    now=$(date +%s); [ "$now" -lt "$dl" ] || { ( : > "$run/deadline" ) 2>/dev/null; break; }
     ds=$((dl - now)); [ "$ds" -le "$ck" ] || ds=$ck; sleep "$ds"; done
   kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!

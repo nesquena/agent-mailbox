@@ -301,6 +301,21 @@ ad_same_start() {
   { [ "${1#* }" = "$1" ] || [ "${2#* }" = "$2" ]; } && [ "${1%% *}" = "${2%% *}" ]
 }
 AD_LOCK="" AD_LOCKED=""
+# ad_lock_there: a lock file (or a link where it goes) is there
+ad_lock_there() { [ -e "$lk" ] || [ -L "$lk" ]; }
+# ad_can_make: a file can be made in the lock folder. Tried by making one, not by -w, which says yes where a sandbox,
+# a disk with no free inodes or a folder that can't be searched refuses one; in a subshell, since a failed redirection
+# on : ends a POSIX shell
+ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
+# ad_take: make the lock (noclobber, so only one taker does) and write its holder line, in one process, which leaves
+# only the moment between the open and the write for a kill to leave an empty lock behind (two processes left far
+# more; a stale empty lock is broken once it's a minute old). A write that fails (a disk whose blocks are full makes an empty
+# file but no more) removes the lock that same process made, and stops the command, rather than leaving an empty lock
+# that later takers wait out and blame on an unknown holder. (`|| exit 1` after the exec: a non-POSIX bash goes on
+# after a failed `exec 3>`, and would remove another taker's lock; XFSZ ignored, so a size limit fails the write
+# rather than killing the shell)
+ad_take() { ( trap '' XFSZ; set -C; exec 3> "$lk" || exit 1; printf '%s\n' "$mine" >&3 && exit 0; rm -f "$lk"; exit 3 ) 2>/dev/null
+  case $? in (0) return 0 ;; (3) die "can't write the lock $lk (is the disk full?)" ;; esac; return 1; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"
   lk="$ld/lock" host=$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-'); host=${host:-unknown}
@@ -309,11 +324,13 @@ ad_lock() {
   t0=$(date +%s)
   while :; do
     stale=""
-    (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-    # (no lock there, so it couldn't be created: try once more, in case one was released just then)
-    if [ ! -e "$lk" ] && [ ! -L "$lk" ]; then
-      (set -C; printf '%s\n' "$mine" > "$lk") 2>/dev/null && break
-      [ -e "$lk" ] || [ -L "$lk" ] || die "can't create the lock $lk"
+    ad_take && break
+    # (no lock there, so it couldn't be created: try once more, in case one was released just then. Still none, and no
+    # file can be made in the folder: it can't be made. One that can is another taker's lock, come and gone between the
+    # two tries: wait, and try again)
+    if ! ad_lock_there; then
+      ad_take && break
+      ad_lock_there || ad_can_make || die "can't create the lock $lk"
     fi
     held=$(cat "$lk" 2>/dev/null); hp="" he="" hh="" hs=""
     set -f; set -- $held; set +f; hp=${1:-} he=${2:-} hh=${3:-}; [ $# -lt 3 ] || { shift 3; hs="$*"; }
@@ -332,7 +349,7 @@ ad_lock() {
       fi
       # (still no guard there, and the folder can't be written: the stale lock can't be removed either. One that can
       # be is only another waiter's guard, come and gone: wait, and try again)
-      [ -e "$ld/break" ] || [ -w "$ld" ] || die "can't remove the stale lock $lk"
+      [ -e "$ld/break" ] || ad_can_make || die "can't remove the stale lock $lk"
       [ -z "$(find "$ld/break" -prune -mmin +1 2>/dev/null)" ] || rm -f "$ld/break"
     fi
     [ $(( $(date +%s) - t0 )) -lt "$lw" ] || {
@@ -449,5 +466,9 @@ ad_history() {
                  { split(r[++n], f, "\t"); b = /^[0-9a-f]+$/ ? $0 : "-"; if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
                  END { while (n < m) { split(r[++n], f, "\t"); print f[1], f[2] } }'
 }
-# ad_show <ref> <path>: a file's content as of <ref>
-ad_show() { ad_git show "$1:$2" 2>/dev/null; }
+# ad_show <ref> <path>: a file's content as of <ref>; 1 when that version has no such file (ls-tree lists no blob there:
+# a folder isn't one), 2 when it has and it can't be read, or when ls-tree itself fails (then it can't be told)
+# (one entry, exactly: ls-tree of an exact path lists one line or none, so more than one line can't be told, and is 2)
+ad_show() { as_l=$(ad_git --literal-pathspecs ls-tree "$1" -- "$2" 2>/dev/null) || return 2
+  case $as_l in (*"$NL"*) return 2 ;; ([0-7]*" blob "*) ;; (*) return 1 ;; esac
+  ad_git show "$1:$2" 2>/dev/null || return 2; }

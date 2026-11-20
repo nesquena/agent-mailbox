@@ -2,19 +2,18 @@
 
 ## Unreleased
 
-- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third as long.
-  `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
-  the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
-  section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed
-  first); a manual run and a release also run the whole suite once per OS.
-- **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
-  no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
-  (`CONTRIBUTING.md`).
-- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
-  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
-  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
-  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
-  calling that header not plain.
+- **An inbox, record, message or signature that can't be read stops the command, saying so, in more places.** With the
+  mailbox's inbox folder not searchable, `watch` said "no mail" and `holds` "nothing recorded"; both now stop at once.
+  A sender's registry record that can't be read (or whose folder can't be searched, or a link there whose target can't
+  be reached) read as having no key, so a store requiring signatures dropped that sender's hold if you hadn't pinned
+  its key, and `holds` could say "released"; it now stops, and so does `read`, which showed that sender's mail as
+  `[nokey]`. `verify` of a message or signature it can't read said "bad" (exit 6); it now says it can't read it and
+  exits 1, as other errors do: 6 still means read and not verified. `reply` of such a message now says it can't read
+  it (it stopped before, saying its header wasn't plain), and `sent` stops, saying it can't read a message of yours
+  (exit 1), where it left that message out.
+- **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
+  0.1.3 stopped there ("can't list"); the folder's absence is known, so it's no mail, as before. A folder that can't be
+  searched still stops the command.
 - **`doctor` says when the Claude Code plugin's Stop guard can't run, and whether a watcher is up.** Inside Claude Code
   it warns when `jq` isn't on its shell's PATH: the plugin's Stop guard needs it, and without it lets every turn end
   with no watcher running, silently (the other hook doesn't need it). Outside Claude Code it says nothing about `jq`,
@@ -24,6 +23,88 @@
   the plugin's hook declined to start one at the last turn end. On a turn the plugin's hook woke, when it starts the
   next watcher at the turn's end, that's an `info` line instead of a warning. These lines never make `doctor` fail. The watcher line is a new kind, `info`, printed alongside `ok`, `warn` and `FAIL`:
   a script that reads doctor's output by its first word should expect it.
+
+## 0.1.3 (2026-11-19)
+
+Commands that can't write or read a file they need now stop, saying why, where they used to say "verified", "bad",
+"pinned", "no mail" or "released"; a git command no longer fails while others take turns on the lock; and CI runs the
+tests in shards. If you wrote an adapter of your own, see the `holds` entry: `ad_show` must exit 1 only when a file
+isn't there.
+
+- **Commands that can't write a file they need now stop at once, saying why.** A lock write that fails on a full disk
+  stops with "can't write the lock … (is the disk full?)", rather than waiting out the lock wait (two minutes by
+  default) and blaming "another agent-mailbox command (pid unknown)". A strict store's pin that can't be recorded stops
+  the command with a message, where bash carried on without it; and `init` on a folder it can't write stops with a
+  message, where bash reported it initialized without the `.keep` files. Under dash, the pin and init ended with the
+  shell's own error. A key pin that can't be recorded now stops `verify`, `read`, `reply`, `holds`, `register`,
+  `update` and `trust` too, where they said "verified" or "pinned" (or `reply` sent and consumed, `holds` decided, or
+  `register` and `update` reported the record) and recorded nothing, so a later key swap would have gone unseen; and a
+  pin write that fails leaves the pin as it was. `trust` and `update` need room for a new copy of the pin, so on a full
+  disk they refuse where they used to rewrite the pin in place. And `verify`, `read`, `reply` and `holds` stop when they
+  can't write the list of keys a signature is checked against, where good signatures read bad.
+- **A copy into the state folder that fails is no longer read as a verdict about the mail.** `read` and `holds` copy
+  each message and its signature into the state folder before checking them. On a full disk, a read-only state folder
+  or a file size limit, `holds` read a signed hold as unsigned, which a store requiring signatures drops, so it could
+  report "released"; `read` showed signed mail as unsigned, or skipped every message and said "no mail". Both now stop,
+  saying the state folder can't be written. `read` also stops at a message or signature in the store that it can't
+  read, where it skipped the message or showed it as unsigned: `consume` it, or pass `--except`, to read the rest. A
+  folder or a link at a key's pin path is refused: a folder there took no pin and `verify` said verified, and a link was
+  followed, so a pin kept as a link now stops every check until it's a plain file. `trust --relax` says so
+  when it can't lift the pin.
+- **`holds` no longer reads a signature it can't read as no signature.** With the dir adapter, a hold's `.sig` that was
+  there but couldn't be read (its permissions) read as unsigned, so a store requiring signatures dropped the hold and
+  `holds` could report "released"; it now stops, saying which file it can't read. Adapters: `ad_show` exits 1 only
+  when the file isn't there in that version, and 2 when it's there and can't be read (adapters/README.md). An adapter
+  of your own must exit 1, and only 1, when the file isn't there: any other failure now stops `holds`.
+- **An inbox folder, or the mailbox's inbox folder, that can't be listed stops `list`, `read`, `sent` and a retiring
+  `update`, saying so.** `list` and `read` said "no mail", `sent` left that inbox out, and `update --status retired`
+  retired as if the inbox were empty.
+- **Without `sha256sum` or `shasum`, commands that open a store stop, saying so.** The store's id, a hash, names its
+  key pins, the git adapter's copy and its locks in the state folder; without one every store shared them, and a key
+  pin left empty by an older version matched any key.
+- **`send` no longer refuses every body under dash or busybox where ~/.ssh (or the config or state folder) can't be
+  read back**, as in a macOS sandbox that hides it: the folder is checked as named. Where it can still be listed, a
+  file a link kept in it leads to is now refused under every shell (under bash it used to be sent).
+  `register --key` with a key in such a folder says so rather than recording a wrong path; the plugin's hooks and
+  `install.sh` no longer take an unreadable path for `/`; and `watch` records a session's config as named. Two changes
+  there fail closed: under dash or busybox, a body whose own folder's path can't be read back is now refused, as bash
+  already did; and under dash or busybox a CLI installed in such a folder now says "can't find the folder this script
+  is in" instead of looking for its adapters at `/`.
+- **git: a command no longer fails with "can't create the lock" while others are taking turns.** When another
+  command's lock came and went between its two tries, a command took that for a lock it couldn't make, and stopped. It
+  now stops only when no file can be made in the lock's folder, and otherwise waits its turn. It finds that out by
+  making one rather than asking `test -w`, which says yes where a sandbox or a disk with no free inodes refuses one,
+  so there a stale lock it can't remove now stops it at once, saying so, instead of waiting out the lock wait and
+  blaming the dead holder.
+- **docs/listening.md has two more worked examples.** Codex: a worker detects new mail with a bounded `watch`, and a
+  scheduled check is what wakes an idle session in the tested setup, with what isn't yet established there. A Grok Bot
+  (approach 3): a GitHub Action on the store's repository calls a routine's webhook when mail lands in the bot's
+  inbox. Each is written from a working setup. The skill points to them. docs/listening.md, JOIN.md and the skill now
+  give a foreground `watch` a timeout that covers one interval and the lock wait `watch` may spend first (700 s, say,
+  for `watch 10 540`).
+- **`reply` says what a refused message's file name should be.** For a message whose file name doesn't match its
+  header, `reply` now says "its file name doesn't name it as from <from> about <topic>", as `read` does, rather than
+  guessing whether the sender or the topic is off (names may hold '-', so which part is off can't always be told).
+- **Claude Code plugin: the rewake hook works, or declines safely, where a sandbox blocks `ps` and the shared temp
+  folder.** Watching several stores, it made its temporary folder with `mktemp -d` and no template; on macOS that
+  ignores TMPDIR, so inside a sandbox that gives the hook its own TMPDIR it ended without watching. It now makes it
+  under TMPDIR (or, when TMPDIR names a folder that isn't there, in the system's temporary folder). Where it can't
+  read Claude Code's arguments at all (macOS won't start `ps`, a setuid program, inside a sandbox), it declines as it
+  does when it can't tell, rather than missing a `claude -p` and waiting at every turn end.
+- **`read` and `holds` say what's actually wrong.** For a message whose file name doesn't match its header, and whose
+  topic is a valid name, `read` now says what the name should be ("its file name doesn't name it as from <from> about
+  <topic>"), rather than saying the file name doesn't name the sender, which was wrong when only the topic differed.
+  `holds` says a record blocks because its `sent:` time or its `hold:` or `release:` line doesn't parse, rather than
+  calling that header not plain.
+- **CI runs the tests in four shards per shell**, side by side, so a pull request's tests on Linux take about a third
+  as long.
+  `test/run.sh --list`, `--only <id>` and `--shard i/n` run part of the suite, and `test/shards-cover.sh` checks that
+  the shards run every section once (`CONTRIBUTING.md`); with no options `test/run.sh` runs it all, as before. Each
+  section runs in a folder of its own. A push to main runs the shards in a shuffled order (`--order`, its seed printed
+  first); a manual run and a release also run the whole suite once per OS.
+- **CI: pull requests run the tests on Linux only**, and every push to main (except a prose-only one, which runs
+  no tests), manual run and release runs Linux and macOS. A pull request with the `macos` label runs macOS too
+  (`CONTRIBUTING.md`).
 
 ## 0.1.2 (2026-11-12)
 

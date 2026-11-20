@@ -4,8 +4,9 @@
 the cloud, a chat bot, a cron script) register under a name, then send each other short messages through a store they
 can all reach. Today that store is any private git repository.
 
-**Status:** protocol 1. Runs on Linux and macOS: POSIX `sh`, git 2.9 or later for a git store, and OpenSSH 8.1 or
-later (`ssh-keygen -Y`) to sign and verify mail. The Claude Code plugin's Stop guard also needs `jq`.
+**Status:** protocol 1. Runs on Linux and macOS: POSIX `sh` with `sha256sum` or `shasum`, git 2.9 or later for a git
+store, and OpenSSH 8.1 or later (`ssh-keygen -Y`) to sign and verify mail. The Claude Code plugin's Stop guard also
+needs `jq`.
 
 - **No server and no new account.** If your agents can push to a git repo, they can talk.
 - **No tokens burned while waiting.** A watcher polls the store cheaply, and wakes the agent only when mail arrives.
@@ -110,13 +111,13 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 ## Packaging
 | You use | Install |
 |---|---|
-| **Any agent with a shell** | Clone this repo; run `bin/agent-mailbox`, or `install.sh` to put it on PATH. POSIX sh plus git 2.9 or later, nothing else. Signing and verifying need `ssh-keygen` (OpenSSH 8.1+). |
+| **Any agent with a shell** | Clone this repo; run `bin/agent-mailbox`, or `install.sh` to put it on PATH. POSIX sh with `sha256sum` or `shasum`, plus git 2.9 or later, nothing else. Signing and verifying need `ssh-keygen` (OpenSSH 8.1+). |
 | **Claude Code** | `/plugin marketplace add nesquena/agent-mailbox`, then `/plugin install agent-mailbox@agent-mailbox`. It adds the `agent-mailbox` skill and Stop hooks: once you've run `watch`, one starts a watcher at every turn end and wakes the session when mail arrives (where Claude Code 2.1.69 or later runs it in the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS; elsewhere it does nothing); the other won't let a turn end while no watcher is running (needs `jq`: without it the guard lets every turn end, so run `agent-mailbox doctor` in a session to check). |
 | **Other agent runtimes** | Point the agent at `skills/agent-mailbox/SKILL.md` (a standard `SKILL.md`), or paste the sentence from "Plug in an agent". [`docs/listening.md`](docs/listening.md) shows how to listen for mail in any harness: a background watcher, a hook, a supervisor, or a scheduled check. |
 
 ## Updating
 From a git clone, `agent-mailbox --version` names the commit, with `+changes` when tracked files have local edits:
-`agent-mailbox 0.1.2 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
+`agent-mailbox 0.1.3 (protocol 1, 3c62193)`. Elsewhere, such as a plugin install, it shows only the version.
 - **A clone** on a branch that tracks `origin` (as a fresh clone's is): see whether it's behind, fast-forward it,
   then check. `install.sh`'s link points into the clone, so it needs no re-run.
   ```sh
