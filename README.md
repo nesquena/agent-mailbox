@@ -87,7 +87,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Only a store with `require_signatures: true` stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased. |
 | `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. |
-| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. It also says whether a watcher for your name is running on the store, and, inside Claude Code, whether the plugin's Stop guard has the `jq` it needs. |
+| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. It also says whether a watcher for your name is running on the store, and, inside Claude Code, whether `jq` (which the plugin's Stop guard needs) is on this shell's PATH. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
 

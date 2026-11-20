@@ -1324,17 +1324,25 @@ doctor)
     elif session_watches; then
       # on a turn the plugin's hook woke (new mail, its daily note, an error), the hook's watch has exited and it starts
       # another at this turn's end, so there's nothing to re-arm: the hook keeps a folder for this session (per store,
-      # or per name before store folders), with a `declined` note when it wouldn't run
-      rw="$STATE/rewake/$ME/$SESSION@$STORE_ID"; [ -d "$rw" ] || rw="$STATE/rewake/$ME/$SESSION"
+      # or per name before store folders), with a `declined` note when it wouldn't run. The hook keeps the older folder
+      # for a record from before store lines, which names one store, and its watch --also then adds that store's line;
+      # so doctor reads it only while this store is the session's only one (another store's note isn't this one's)
+      ss="$STATE/session-stores/$SESSION"; rw="$STATE/rewake/$ME/$SESSION@$STORE_ID"
+      [ -d "$rw" ] || [ -n "$(awk -v s="$STORE_ID" 'NF >= 3 && $1 != s' "$ss" 2>/dev/null)" ] || rw="$STATE/rewake/$ME/$SESSION"
       if [ -d "$rw" ] && [ ! -f "$rw/declined" ]; then
         echo "info no watcher for $ME is running right now; the Claude Code plugin's hook starts one at this turn's end"
       else
-        # the re-arm is the command the plugin's Stop guard prints: this session's config, and --also when the session
-        # watches several stores, so the others stay watched (a plain watch makes this store the session's only one)
-        cli=agent-mailbox; command -v agent-mailbox >/dev/null 2>&1 || cli=$0
-        sc=$(cat "$STATE/session-configs/$SESSION" 2>/dev/null)
-        ns=$(awk 'NF >= 3 { k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); cf[k] = c }
-          END { for (k in cf) if (cf[k] != "-") n++; print n + 0 }' "$STATE/session-stores/$SESSION" 2>/dev/null)
+        # the re-arm is the command the plugin's Stop guard prints: the config on this store and name's latest line in
+        # session-stores (what session_watches read into $c), or for a record from before store lines the session's
+        # last config; and --also when the session watches several stores, so the others stay watched (a plain watch
+        # makes this store the session's only one). The CLI's path is made absolute, as the guard prints it, so the
+        # command works from any folder
+        cli=agent-mailbox
+        command -v agent-mailbox >/dev/null 2>&1 || { cli=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P) &&
+          cli="${cli%/}/$(basename -- "$0")" || cli=$0; }
+        if [ -s "$ss" ]; then sc=$c; else sc=$(cat "$STATE/session-configs/$SESSION" 2>/dev/null); fi
+        ns=$(awk 'NF >= 3 && $1 ~ /^[A-Za-z0-9]+$/ && length($1) <= 64 && $2 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($2) <= 63 { k = $1 " " $2; c = $0; sub(/^[^ ]+ [^ ]+ /, "", c); cf[k] = c }
+          END { for (k in cf) if (cf[k] != "-") n++; print n + 0 }' "$ss" 2>/dev/null)
         also=""; [ "${ns:-0}" -lt 2 ] || also=" --also"
         printf "warn no watcher for %s is running on this store, though this session ran watch for it: new mail won't wake the session; run watch again, as a background command: %s%s --as %s watch 120 0%s\n" \
           "$ME" "$(word "$cli")" "${sc:+ --config $(word "$sc")}" "$ME" "$also"

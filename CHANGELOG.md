@@ -19,10 +19,12 @@
   with no watcher running, silently (the other hook doesn't need it). Outside Claude Code it says nothing about `jq`,
   which the CLI itself never uses. It also says whether a watcher for the name is running on the store (with its pid),
   and warns when this session ran `watch` for the name and none is running now, giving the re-arm command the Stop
-  guard gives (with this session's `--config`, and `--also` when the session watches several stores), and adding when
-  the plugin's hook declined to start one at the last turn end. On a turn the plugin's hook woke, when it starts the
-  next watcher at the turn's end, that's an `info` line instead of a warning. These lines never make `doctor` fail. The watcher line is a new kind, `info`, printed alongside `ok`, `warn` and `FAIL`:
-  a script that reads doctor's output by its first word should expect it.
+  guard gives (with the `--config` this session watched the store with, and `--also` when the session watches several
+  stores), and adding when the plugin's hook declined to start one at the last turn end. On a turn the plugin's hook
+  woke, when it starts the next watcher at the turn's end, that's an `info` line instead of a warning. These lines
+  never make `doctor` fail. The watcher lines that aren't warnings (a watcher running, none running, or the hook
+  starting one) are a new first word, `info`, printed alongside `ok`, `busy`, `warn` and `FAIL`: a script that reads
+  doctor's output by its first word should expect it.
 
 ## 0.1.3 (2026-11-19)
 
