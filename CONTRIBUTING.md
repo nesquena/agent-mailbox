@@ -44,11 +44,12 @@ the CLI they drive runs under `TEST_SHELL` (default `sh`). A new test goes in a 
 it needs itself (its own store, homes and helper files), so any of them runs alone or in any order: `--order <seed>`
 shuffles them, to check that none leans on what another did. A shuffled run prints its seed first (`order: seed N`):
 the same options with `--order N` run that order again. `--shard i/n` runs shard i of n, the sections split so the
-shards take about as long: by the seconds each takes alone, in `test/section-costs`, one `<id> <seconds>` line each.
-A new section needs a line there (time `test/run.sh --only <id>`). `sh test/shards-cover.sh` checks that the shards
-of 4, and of 3, run every section once between them, and that `test/section-costs` has a well-formed line for each
-section, and nothing else; `sh test/shards-cover.sh --logs <whole run's output> <each shard's output>...` checks that
-the shards printed the same checks as a whole run.
+shards take about as long: by the seconds each takes alone, in `test/section-costs`, one `<id> <seconds>` line each. A
+new section needs a line there (time `test/run.sh --only <id>`). A section that tests one adapter names it (`section
+<id> <function> git`, or `dir`), so a run of only the other adapter (`test/run.sh dir`, or `git`) leaves it out. `sh
+test/shards-cover.sh` checks that the shards of 4, and of 3, run every section once between them, and that
+`test/section-costs` has a well-formed line for each section, and nothing else; `sh test/shards-cover.sh --logs <whole
+run's output> <each shard's output>...` checks that the shards printed the same checks as a whole run.
 
 To find the slow checks, set `TEST_TIMES=<file>`, one file per run (each starts it afresh, so shards run side by side
 need one each): each check's own time goes in that file, one `<ms><tab><section><tab><status><tab><check>` line each,

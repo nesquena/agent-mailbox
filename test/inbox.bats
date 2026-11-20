@@ -181,3 +181,34 @@ mailbox/inbox/bob/20200101T000012Z-alice-y.md from alice topic z age old stale n
 @test "an empty inbox still exits 3 with --long" {
   expect 3 "^no mail for carol$" as carol list --long
 }
+
+# unreadable <file name> <args...>: run the CLI as bob with a message in his inbox that can't be read (skipped where
+# this user reads any file, as root does)
+unreadable() { local f=$1; shift
+  pm "$f" alice review proj-x 2020-01-01T00:00:00Z none; chmod 000 "$T/store/mailbox/inbox/bob/$f"
+  if cat "$T/store/mailbox/inbox/bob/$f" >/dev/null 2>&1; then rm -f "$T/store/mailbox/inbox/bob/$f"; skip "this user reads any file"; fi
+  run as bob "$@"
+  chmod 644 "$T/store/mailbox/inbox/bob/$f"; rm -f "$T/store/mailbox/inbox/bob/$f"; }
+
+@test "a message that can't be read stops list --long, saying so, rather than showing it as ?" {
+  unreadable 20200101T000022Z-alice-review.md list --long
+  [ "$status" -eq 1 ] && ! printf '%s\n' "$output" | grep -q ' from ' || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  expect 0 "^agent-mailbox: can't read mailbox/inbox/bob/20200101T000022Z-alice-review\.md \(consume it to list the rest\)$" printf '%s\n' "$output"
+}
+
+@test "and a filtered list, rather than leaving it out" {
+  unreadable 20200101T000022Z-alice-review.md list --from carol
+  [ "$status" -eq 1 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  expect 0 "^agent-mailbox: can't read mailbox/inbox/bob/20200101T000022Z-alice-review\.md" printf '%s\n' "$output"
+}
+
+@test "and a filtered read, as it stops a plain read" {
+  unreadable 20200101T000022Z-alice-review.md read --from carol
+  [ "$status" -eq 1 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  expect 0 "^agent-mailbox: can't read mailbox/inbox/bob/20200101T000022Z-alice-review\.md \(consume it, or pass --except" printf '%s\n' "$output"
+}
+
+@test "plain list doesn't read messages, so it still lists one it can't read" {
+  unreadable 20200101T000022Z-alice-review.md list
+  [ "$status" -eq 0 ] && printf '%s\n' "$output" | grep -q -- 'T000022Z-alice-review\.md$' || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+}

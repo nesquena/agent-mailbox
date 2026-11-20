@@ -120,7 +120,7 @@ setup_file() {
 @test "a message whose from: header and file name name different senders is refused, and nothing is sent" {
   for ad in git dir; do
     plant $ad alice 20260101T000000Z-carol-spoof.md bob spoof
-    expect 1 "from: header names bob, but its file name doesn't name bob as the sender" \
+    expect 1 "20260101T000000Z-carol-spoof\.md: its file name doesn't name it as from bob about spoof; answer with send" \
       as $ad alice reply 20260101T000000Z-carol-spoof.md - <<< "a"
     expect 3 - as $ad bob list; expect 3 - as $ad carol list
     expect 0 "20260101T000000Z-carol-spoof\.md" as $ad alice list
@@ -131,9 +131,24 @@ setup_file() {
 @test "a message whose topic: header isn't its file name's topic is refused" {
   for ad in git dir; do
     plant $ad alice 20260101T000000Z-bob-one.md bob two
-    expect 1 "topic: header \(two\) isn't the topic its file name names" as $ad alice reply 20260101T000000Z-bob-one.md - <<< "a"
+    expect 1 "20260101T000000Z-bob-one\.md: its file name doesn't name it as from bob about two; answer with send" \
+      as $ad alice reply 20260101T000000Z-bob-one.md - <<< "a"
     expect 3 - as $ad bob list
     as $ad alice consume 20260101T000000Z-bob-one.md >/dev/null
+  done
+}
+
+@test "a file name that can be read two ways, or has no stamp, gets the same note, and nothing is sent" {
+  for ad in git dir; do
+    # (bob about ops-x, or bob-ops about x: names may hold '-', so the note doesn't guess which part is off)
+    plant $ad alice 20260101T000000Z-bob-ops-x.md bob x
+    expect 1 "20260101T000000Z-bob-ops-x\.md: its file name doesn't name it as from bob about x; answer with send" \
+      as $ad alice reply 20260101T000000Z-bob-ops-x.md - <<< "a"
+    plant $ad alice 2026-bob-two.md bob two
+    expect 1 "2026-bob-two\.md: its file name doesn't name it as from bob about two; answer with send" \
+      as $ad alice reply 2026-bob-two.md - <<< "a"
+    expect 3 - as $ad bob list
+    as $ad alice consume 20260101T000000Z-bob-ops-x.md >/dev/null; as $ad alice consume 2026-bob-two.md >/dev/null
   done
 }
 
