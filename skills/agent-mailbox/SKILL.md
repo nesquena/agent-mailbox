@@ -42,10 +42,11 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
 
    With a lot of mail, `agent-mailbox list --long` first shows one line per message: its sender, topic, age and
    `needs`, and `stale` once it has waited over 24 hours (raise stale mail with your human). Those values come from
-   each header, unverified: a sender or topic that isn't a plain name shows `?`, and `name mismatch` means the file
-   name names someone else. Then read just some: `read <file>...`, or `read --from <name>`, `--topic <t>`,
-   `--context <c>` (these filters work on `list` too, and also go by the unverified header). The statuses above still
-   decide what you trust.
+   each header, unverified: a sender or topic that isn't a plain name shows `?`; `name mismatch` means the file name
+   isn't `<stamp>-<from>-<topic>.md` for its header (another sender, or another topic), and `read` says what it should
+   be; and `header not plain (see read)` means the header can't be read as one, so none of its values are shown. Then
+   read just some: `read <file>...`, or `read --from <name>`, `--topic <t>`, `--context <c>` (these filters work on
+   `list` too, and also go by the unverified header). The statuses above still decide what you trust.
 2. **Act** on each message, oldest first, skipping a request its sender has withdrawn (see withdraws below).
 3. **Reply and consume in one step:**
    `agent-mailbox reply <file> reply.md`.

@@ -182,6 +182,30 @@ mailbox/inbox/bob/20200101T000012Z-alice-y.md from alice topic z age old stale n
   expect 3 "^no mail for carol$" as carol list --long
 }
 
+@test "list --long never cuts the path, so a row's path can be passed to read" {
+  n=$(printf 'a%.0s' $(seq 63)); fr=$(printf 'b%.0s' $(seq 63)); tp=$(printf 'c%.0s' $(seq 63))
+  as $n setup --store "$T/store" --adapter dir --name $n >/dev/null
+  as $n register --kind test --about "long name" --no-key >/dev/null
+  mkdir -p "$T/store/mailbox/inbox/$n"; f="20200101T000020Z-$fr-$tp.md"
+  printf -- '---\nprotocol: 1\nfrom: %s\nto: %s\ntopic: %s\ncontext: none\nsent: 2020-01-01T00:00:00Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' \
+    "$fr" "$n" "$tp" > "$T/store/mailbox/inbox/$n/$f"
+  run as $n list --long
+  [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  p=$(printf '%s\n' "$output" | cut -d' ' -f1)
+  [ "$p" = "mailbox/inbox/$n/$f" ] && [ ${#p} -gt 200 ] || { printf 'path %s (%s bytes)\n%s\n' "$p" "${#p}" "$output" >&2; return 1; }
+  expect 0 "^===== mailbox/inbox/$n/$f " as $n read "$p"
+}
+
+@test "list --long cuts a needs over 200 bytes, with ..." {
+  nd=$(printf 'x%.0s' $(seq 300))
+  pm 20200101T000021Z-alice-big.md alice big proj-x 2020-01-01T00:00:00Z "$nd"
+  run as bob list --long
+  rm -f "$T/store/mailbox/inbox/bob/20200101T000021Z-alice-big.md"
+  [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  row=$(printf '%s\n' "$output" | grep -- '-alice-big\.md ')
+  case $row in (*" needs: $(printf 'x%.0s' $(seq 200))...") ;; (*) printf 'row: %s\n' "$row" >&2; return 1 ;; esac
+}
+
 # unreadable <file name> <args...>: run the CLI as bob with a message in his inbox that can't be read (skipped where
 # this user reads any file, as root does)
 unreadable() { local f=$1; shift

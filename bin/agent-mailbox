@@ -37,9 +37,9 @@
 #                                       names and from: headers, not signatures
 #   read [<file>...] [--except <file>]... [--from <name>] [--topic <t>] [--context <c>]
 #                                       every message in full, or just the files named (in your inbox), with its
-#                                       signature status (exit 0 / 3). On list and read, --from, --topic and --context
-#                                       keep only mail whose header has that value: unverified headers, so only read's
-#                                       status says who signed it
+#                                       signature status (exit 0 / 3; 1 when a file named isn't in your inbox). On
+#                                       list and read, --from, --topic and --context keep only mail whose header has
+#                                       that value: unverified headers, so only read's status says who signed it
 #   consume [--] <file>...              remove messages you've acted on (the read receipt)
 #   verify <file>                       check one message's signature, and its routing when it sits in an inbox;
 #                                       a bare file name is looked up in your inbox (exit 0: verified, 6: not)
@@ -268,16 +268,18 @@ picked() { [ -n "$MF$MT$MC" ] || return 0; hdr_ok "$1" || return 1
   [ -z "$MF" ] || [ "$(field from "$1")" = "$MF" ] || return 1
   [ -z "$MT" ] || [ "$(field topic "$1")" = "$MT" ] || return 1
   [ -z "$MC" ] || [ "$(field context "$1")" = "$MC" ]; }
-# one_name <option> <value>: refuse an option value that isn't one name; agents', setup's, register's, update's, list's
-# and read's name options all check with this, so the rule and its message are the same everywhere
+# one_name <option> <value>: refuse an option value that isn't one name; agents' filters, register's and update's
+# --human and --env (valid_claim), and list's and read's filters all check with this, so the rule and its message are
+# the same (an agent's own name, from setup --name or --as, is checked by valid_name)
 one_name() { matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'"; }
 # filter_opt <option> <value>: take one of list's and read's filters, once each; the value must be a name, as send
 # writes them
 filter_opt() { once "$1"; one_name "$1" "$2"
   case "$1" in (--from) MF=$2 ;; (--topic) MT=$2 ;; (--context) MC=$2 ;; esac; }
 # names_sender <file name> <from> <topic>: the file name is <stamp>-<from>-<topic>.md, as send writes it (only
-# <stamp>-<from>- when the topic isn't a name). The header, not the file name, says who sent a message, so read and
-# list --long point out a file name that names another sender. Call it only for a from that is a name
+# <stamp>-<from>- when the topic isn't a name). The header, not the file name, says who sent a message and about
+# what, so read and list --long point out a file name that isn't the one send would write for its header (another
+# sender, or another topic). Call it only for a from that is a name
 names_sender() { ns='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z'
   if matches "$NAME_RE" "$3"; then case "$1" in ($ns-"$2-$3".md) return 0 ;; esac
   else case "$1" in ($ns-"$2"-*) return 0 ;; esac; fi; return 1; }
@@ -1012,20 +1014,22 @@ list)
       if picked "$p"; then printf '%s\n' "$p"; fi; done) || exit 1
   fi
   [ -n "$mail" ] || no_mail "$(filter_note)"
-  [ -n "$long" ] || { printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean; exit 0; }
+  [ -n "$long" ] || { printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean; exit; }
   # --long: <path> from <from> topic <topic> age <age>[ stale][ <mark>][ needs: <needs>], from the header as written
   # (not checked against a signature: read does that). A from or topic that isn't a name shows "?", so no header can
-  # spell out a row of its own; a file name that doesn't name the header's sender is marked, as read marks it; and
-  # needs, the only free text, comes last. Each message goes to awk as six lines (path, from, topic, sent, needs, and
-  # ok, bad or mismatch), so no header value can shift another; a header that isn't plain (hdr_ok) is read as no values
+  # spell out a row of its own; a file name that isn't <stamp>-<from>-<topic>.md for its header is marked, as read
+  # marks it; and needs, the only free text, comes last, cut at 200 bytes as sent cuts it (the path is never cut, so
+  # it can be passed to read; from, topic and sent are bounded by their patterns). Each message goes to awk as six
+  # lines (path, from, topic, sent, needs, and ok, bad or mismatch), so no header value can shift another; a header
+  # that isn't plain (hdr_ok) is read as no values
   printf '%s\n' "$mail" | while IFS= read -r p; do
     if hdr_ok "$p"; then s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
       fr=$(field from "$p"); tp=$(field topic "$p"); mk=ok
       if matches "$NAME_RE" "$fr"; then names_sender "${p##*/}" "$fr" "$tp" || mk=mismatch; else fr=""; fi
       matches "$NAME_RE" "$tp" || tp=""
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$(rel "$p")" "$fr" "$tp" "$s" "$(field needs "$p")" "$mk"
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$(rel "$p")" "$fr" "$tp" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")" "$mk"
     else printf '%s\n\n\n?\n\nbad\n' "$(rel "$p")"; fi
-  done | LC_ALL=C sed "$CAP" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
+  done | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
     { r[NR % 6] = $0 } NR % 6 == 0 { st = age(r[4], now)
       print r[1] " from " (r[2] == "" ? "?" : r[2]) " topic " (r[3] == "" ? "?" : r[3]) " age " AGE (st ? " stale" : "") \
         (r[0] == "bad" ? " header not plain (see read)" : r[0] == "mismatch" ? " name mismatch (see read)" : "") \
@@ -1074,19 +1078,22 @@ read)
     ids="$ids $b"; shift
   done
   need_me; load_adapter; ad_sync; need_store
-  if [ -n "$ids" ]; then all=$(inbox_files "$ME") || exit 1; all="$NL$all$NL"
-    for b in $ids; do case "$all" in (*"$NL$M/inbox/$ME/$b$NL"*) ;; (*) die "not in your inbox: $b" ;; esac; done; fi
+  # the files named are checked against the same listing read goes through, so one consumed after the check is still
+  # met in the loop, and stops read there
+  ib=$(inbox_files "$ME") || exit 1
+  for b in $ids; do case "$NL$ib$NL" in (*"$NL$M/inbox/$ME/$b$NL"*) ;; (*) die "not in your inbox: $b" ;; esac; done
   # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
   # file swapped in the store meanwhile can't be shown under another's status; the filters are checked on that copy too
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
-  ib=$(inbox_files "$ME") || { rm -rf "$rt"; exit 1; }
   shown=$(printf '%s\n' "$ib" | while IFS= read -r p; do [ -n "$p" ] || continue
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     [ -z "$ids" ] || case " $ids " in (*" ${p##*/} "*) ;; (*) continue ;; esac
-    # (a message consumed since it was listed is skipped; one still there that can't be copied or read stops read, as
-    # does its .sig: neither is read as no mail, or as unsigned. The filters are checked on the copy, before its .sig)
+    # (a message consumed since it was listed is skipped, unless it was named, which stops read as one not in the inbox
+    # does; one still there that can't be copied or read stops read, as does its .sig: neither is read as no mail, or
+    # as unsigned. The filters are checked on the copy, before its .sig)
     copy_in "$rt/m" "$(rel "$p")" cat -- "$p" ||
-      { ! there "$p" || die "can't read $(rel "$p") (consume it, or pass --except, to read the rest)"; continue; }
+      { ! there "$p" || die "can't read $(rel "$p") (consume it, or pass --except, to read the rest)"
+        [ -z "$ids" ] || die "not in your inbox: ${p##*/} (consumed since read started)"; continue; }
     picked "$rt/m" || continue
     if [ -f "$p.sig" ] && [ ! -L "$p.sig" ]; then
       copy_in "$rt/m.sig" "$(rel "$p.sig")" cat -- "$p.sig" || ! there "$p.sig" ||
