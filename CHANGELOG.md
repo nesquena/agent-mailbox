@@ -25,6 +25,15 @@
   never make `doctor` fail. The watcher lines that aren't warnings (a watcher running, none running, or the hook
   starting one) are a new first word, `info`, printed alongside `ok`, `busy`, `warn` and `FAIL`: a script that reads
   doctor's output by its first word should expect it.
+- **`list` and `read`: sender, topic and age, filters, and stale mail.** `list --long` shows each message's sender,
+  topic, age and `needs`, and marks it `stale` once it has waited over 24 hours, with the same age rule as `sent`, so
+  the recipient can raise stale mail too (`PROTOCOL.md` section 5). Its values come from the header, unverified, with
+  control characters spelled out; a sender or topic that isn't a plain name shows `?`, a file name that isn't
+  `<stamp>-<from>-<topic>.md` for its header is marked `name mismatch` (`read` says what the name should be), and a
+  header that isn't plain is marked `header not plain (see read)`. `--from`, `--topic` and `--context` on `list` and
+  `read` keep only mail whose unverified header has that value, and `read <file>...` reads just the messages named,
+  refusing any that isn't in your inbox. A message that can't be read stops `list --long` and a filtered `list` or
+  `read`, as it stops `read`, rather than being left out. Plain `list` prints exactly what it did before.
 
 ## 0.1.3 (2026-11-19)
 

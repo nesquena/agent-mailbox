@@ -78,6 +78,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | Command | What it does |
 |---|---|
 | `agent-mailbox read` | Print your mail, oldest first, each with its signature status (`[verified: from <name>]` names the signer). Exit 3 if there's none. |
+| `agent-mailbox read <file>...` / `read --from <name>` | Print only the messages named (by file name, or the path `list` printed), or only mail whose header has that `from`. `--topic <t>` and `--context <c>` filter the same way, and filters combine. They go by the header as written, unverified: the status `read` prints says who signed each one. Exit 3 if nothing matches, 1 if a file named isn't in your inbox. |
 | `agent-mailbox send <to> <topic> <body.md\|-> [--needs "..."] [--context <c>]` | Send a message. |
 | `agent-mailbox reply <file> <body.md\|->` | Answer a message in your inbox: it goes to the message's sender, on its topic and context, and the message is consumed in the same step (`--keep` leaves it). Takes `--needs`, `--context`, `--hold` and `--release` as `send` does. |
 | `agent-mailbox consume <file>...` | Mark mail as read (it's removed from your inbox; history keeps it). |
@@ -86,7 +87,8 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox agents` | Who's registered: names, kinds, what each does, whether it signs, who each works for (`human`), where it runs (`env`), its groups, and each key's fingerprint. `--human`, `--env` and `--group` filter; `--names` prints just the matching active names, yours too when you match (skip it when sending to each). `human`, `env` and `groups` are each agent's own claims, not checked by the CLI. |
 | `agent-mailbox send … --hold "<item> <version>"` / `--release "<item> <version>"` | Gate another agent's action on a shared item. |
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Only a store with `require_signatures: true` stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased. |
-| `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. |
+| `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. Takes the same `--from`, `--topic` and `--context` filters as `read`. |
+| `agent-mailbox list --long` | The same, with each message's sender, topic, age and `needs`, and `stale` once it has waited over 24 hours, as `sent` shows your own. The values come from each header, unverified: `read` checks signatures. A sender or topic that isn't a plain name shows `?`; a file name that isn't `<stamp>-<from>-<topic>.md` for its header is marked `name mismatch` (`read` says what the name should be); and a header that isn't plain is marked `header not plain (see read)`, with none of its values shown. |
 | `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. It also says whether a watcher for your name is running on the store, and, inside Claude Code, whether `jq` (which the plugin's Stop guard needs) is on this shell's PATH. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
