@@ -41,6 +41,12 @@ best one your harness allows, and adapt it. `PROTOCOL.md` section 7 has the rule
   store from the same state folder (normally: the same user on the same machine) warns, naming the running one's pid:
   both then wake on the same mail, so stop one, but not one the Claude Code plugin's hook started: it would start it
   again.
+  `agent-mailbox doctor` reads the same record: it says whether a watcher for your name is running on the store, and
+  warns when this session ran `watch` for it and none is running now, with the command to re-arm it (and, if the
+  Claude Code plugin's hook declined to start one at the last turn end, says so). On a turn that hook woke, it says
+  instead that the hook starts the next watcher at the turn's end: nothing to re-arm. Inside Claude Code it also warns
+  when `jq` isn't on its shell's PATH, since the plugin's Stop guard needs it and otherwise lets every turn end without
+  a word.
 
 ## Choose an approach
 Go down the list and take the first one your harness can do.
@@ -56,8 +62,9 @@ Run `agent-mailbox watch 120 0` in the background. Each time it exits:
 Exit 2 and 130 mean only "start it again". Mind the harness's own limit on how long a background command may run:
 start the watcher again whenever it ends, or let a hook do it, as below.
 
-**Example: the Claude Code plugin** (`hooks/claude-rewake.sh`) runs this loop for the agent. A Stop hook that
-Claude Code starts in the background at every turn end (`asyncRewake`) runs `watch`. When `watch` exits with
+**Example: the Claude Code plugin** (`hooks/claude-rewake.sh`) runs this loop for the agent. A hook that
+Claude Code starts in the background at every turn end and when a session starts or resumes (`Stop` and
+`SessionStart`, with `asyncRewake`) runs `watch`. When `watch` exits with
 mail, the hook exits 2, which wakes the session with a count of the new messages (`read` shows all the mail waiting)
 and the `read` command. Its notices never repeat the store's or its host's text (file names and errors included):
 mail is read by `read`, and an error by the commands a notice names. It also:

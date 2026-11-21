@@ -3113,6 +3113,57 @@ expect "retiring the name on one store records it in the session's list" 0 - tes
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
 wakes "and the hook then watches only the other store" "rx-r.md" rewake r9
+# plugin manifest: hooks/hooks.json registers claude-rewake.sh on SessionStart (matching Stop: asyncRewake, timeout
+# 86400), and running that registered command on SessionStart JSON starts a watcher (and wakes on mail) only for a
+# session that already ran watch
+ss_cmd=$(python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+hooks = data.get("hooks", {})
+def flat(ev):
+    return [h for e in hooks.get(ev, []) if isinstance(e, dict) for h in e.get("hooks", []) if isinstance(h, dict)]
+stop_rw = [h for h in flat("Stop") if "claude-rewake.sh" in str(h.get("command", ""))]
+ss_rw = [h for h in flat("SessionStart") if "claude-rewake.sh" in str(h.get("command", ""))]
+assert len(stop_rw) == 1 and stop_rw[0].get("asyncRewake") is True and stop_rw[0].get("timeout") == 86400, f"Stop: {stop_rw}"
+assert len(ss_rw) == 1 and ss_rw[0].get("type") == "command" and ss_rw[0].get("asyncRewake") is True and ss_rw[0].get("timeout") == 86400, f"SessionStart: {ss_rw}"
+assert ss_rw[0].get("command") == stop_rw[0].get("command"), f"mismatch: {ss_rw[0]} vs {stop_rw[0]}"
+print(ss_rw[0]["command"])
+' "$ROOTDIR/hooks/hooks.json" 2>"$T/ss.err") && [ -n "$ss_cmd" ] &&
+  ok "hooks/hooks.json registers claude-rewake.sh on SessionStart with asyncRewake and timeout 86400" ||
+  no "hooks/hooks.json registers claude-rewake.sh on SessionStart with asyncRewake and timeout 86400" "$(cat "$T/ss.err" 2>/dev/null)"
+printf '%s\n' 'j=$1; shift; [ -z "${CCERR:-}" ] || exec 2>"$CCERR"' \
+  'printf "%s" "$j" | env CLAUDE_PID="$$" CLAUDE_PLUGIN_ROOT="$RPLUG" "$RSH" -c "$RCMD"; exit $?' > "$T/ccss.sh"
+rewakess() { [ -n "$ss_cmd" ] || return 1; j=$1; shift; ccenv RPLUG="$P" RCMD="$ss_cmd" "$@" "$SH" "$T/onterm.sh" "$SH" "$T/ccss.sh" "$j"; }
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
+echo hi | as rx send rw rw-ss - >/dev/null 2>&1
+wakes "SessionStart wakes a session that ran watch when mail is waiting" "rw-ss.md" \
+  rewakess '{"session_id":"r1","hook_event_name":"SessionStart","source":"resume"}'
+# (and with no new mail waiting, SessionStart starts a live watcher for that session)
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"
+: > "$T/ss.out"; rewakess '{"session_id":"r1","hook_event_name":"SessionStart","source":"startup"}' AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/ss.out" & sbg=$!
+if [ -n "$ss_cmd" ] && up "$R1/pid" && up "$RS/run/rw.pid"; then
+  ok "SessionStart starts a live watcher for a session that ran watch"
+  kill -TERM "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" 2>/dev/null; wait "$sbg" 2>/dev/null
+else no "SessionStart starts a live watcher for a session that ran watch" "$(cat "$T/ss.out" 2>/dev/null)"
+  kill "$sbg" 2>/dev/null; wait "$sbg" 2>/dev/null; fi
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+# (a legacy session with only sessions/ and session-configs/, no session-stores/, wakes on SessionStart too)
+mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r-leg"
+printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r-leg"
+rm -f "$RS/session-stores/r-leg" "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+wakes "SessionStart wakes a session with legacy session-configs record" "rw-ss.md" \
+  rewakess '{"session_id":"r-leg","hook_event_name":"SessionStart","source":"resume"}'
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+# (a session that never ran watch starts nothing on SessionStart, whether startup or clear)
+expect "SessionStart does nothing for a session that never ran watch (startup)" 0 '^$' \
+  rewakess '{"session_id":"never-watched","hook_event_name":"SessionStart","source":"startup"}'
+expect "SessionStart does nothing for a fresh session after clear" 0 '^$' \
+  rewakess '{"session_id":"after-clear","hook_event_name":"SessionStart","source":"clear"}'
+[ -z "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null)" ] && [ ! -e "$RS/run/rw.pid" ] &&
+  ok "and starts no watcher or state for sessions that never ran watch" ||
+  no "SessionStart left watcher or state for unwatched sessions" "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null; ls -A "$RS/run" 2>/dev/null)"
 # (at the end, every hook and watcher the section left running is stopped, with what it started, by the pid its pid file
 # holds: their command lines name the plugin, not this run's folder, so the exit cleanup wouldn't find them, and one
 # still running holds the run's output open until its 60 s limit)
@@ -4647,10 +4698,10 @@ else
   # one rule for a record path: anything there that isn't a file that can be read, and isn't known to be absent, stops
   # the command (a folder or a FIFO there read as no key)
   mv "$A/ua.md" "$A/ua.kept"; mkdir "$A/ua.md"
-  expect "verify with a folder at the sender's record path stops, saying so" 1 "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record" as ub verify "$f"
+  expect "verify with a folder at the sender's record path stops, saying so" 1 "^agent-mailbox: mailbox/agents/ua\.md isn't a file" as ub verify "$f"
   rmdir "$A/ua.md"
   if mkfifo "$A/ua.md" 2>/dev/null; then
-    expect "and with a FIFO there" 1 "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record" as ub verify "$f"; rm -f "$A/ua.md"
+    expect "and with a FIFO there" 1 "^agent-mailbox: mailbox/agents/ua\.md isn't a file" as ub verify "$f"; rm -f "$A/ua.md"
   else sk "verify with a FIFO at the sender's record path (no mkfifo here)"; fi
   mv "$A/ua.kept" "$A/ua.md"
   # a record that can't be read isn't a retired or keyless agent: send to it, watch as it, agents (with --names) and
@@ -4682,6 +4733,49 @@ else
   chmod 600 "$I2"; t0=$(date +%s); out=$(as wb watch 10 30 2>&1); rc=$?; t1=$(date +%s); chmod 755 "$I2"
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't list mailbox/inbox" && [ $((t1 - t0)) -le 3 ] &&
     ok "and one already unsearchable stops it before its first wait" || no "watch waited before stopping on an unsearchable inbox (exit $rc, $((t1 - t0))s)" "$out"
+  # your own record that can't be read: update and register stop before writing anything (update rewrote it with its
+  # fields blank, dropping the key and the body), list with no mail says so rather than "no mail", and doctor says it
+  # once, in its own line
+  ck=$(cksum < "$A/ub.md"); chmod 000 "$A/ub.md"
+  expect "update with your own record unreadable stops, saying so" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" \
+    as ub update --status active
+  expect "and so does update --about" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as ub update --about x
+  expect "and register" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as ub register --kind t --about t
+  out=$(as ub doctor 2>&1)
+  printf '%s\n' "$out" | grep -q "^FAIL ub is registered and active: its record (mailbox/agents/ub\.md) can't be read" &&
+    ! printf '%s\n' "$out" | grep -q "^agent-mailbox: \|run register" &&
+    ok "doctor says once that your record can't be read" || no "doctor didn't say once that your record can't be read" "$out"
+  chmod 644 "$A/ub.md"
+  [ "$(cksum < "$A/ub.md")" = "$ck" ] && ok "and the record is left as it was" || no "an update that couldn't read the record changed it" "$(cat "$A/ub.md")"
+  chmod 000 "$A/uc.md"
+  expect "list with no mail and your own record unreadable stops, saying so, not no mail" 1 "^agent-mailbox: can't read mailbox/agents/uc\.md, uc's record" as uc list
+  chmod 644 "$A/uc.md"
+  # agents checks the records folder and every record before printing anything: a list cut short reads as the whole
+  for m in 000 600; do chmod "$m" "$A"
+    out=$(as uc agents --names 2>&1); rc=$?
+    [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't list mailbox/agents" ] && ok "agents --names with the records folder at $m stops before printing anything" ||
+      no "agents --names with the records folder at $m printed, or didn't stop (exit $rc)" "$out"; done
+  chmod 755 "$A"; chmod 000 "$A/ub.md"
+  out=$(as uc agents --names 2>&1); rc=$?
+  [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/ub.md, ub's record" ] &&
+    ok "agents --names with a later record unreadable prints no name before stopping" || no "agents --names printed names before a record it couldn't read (exit $rc)" "$out"
+  out=$(as uc agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/ub.md, ub's record" ] &&
+    ok "and agents prints no header" || no "agents printed before a record it couldn't read (exit $rc)" "$out"
+  chmod 644 "$A/ub.md"
+  # a file, or a link that leads nowhere, where an inbox folder should be isn't an inbox with no mail
+  rm -rf "$I/uc"; : > "$I/uc"
+  expect "list with a file where your inbox folder should be stops, saying so" 1 "^agent-mailbox: mailbox/inbox/uc isn't a folder" as uc list
+  rm -f "$I/uc"; ln -s "$T/nowhere" "$I/uc"
+  expect "and so does one with a link there that leads nowhere" 1 "^agent-mailbox: mailbox/inbox/uc isn't a folder" as uc list
+  rm -f "$I/uc"
+  # send --consume with your inbox searchable but not listable or writable (111) stops before sending: it sent, and
+  # didn't consume
+  n0=$(ls "$I/ua" 2>/dev/null | wc -l); chmod 111 "$I/ub"
+  expect "send --consume with your inbox searchable only stops before sending, saying so" 1 "^agent-mailbox: can't list mailbox/inbox/ub\$" \
+    as ub send ua t3 "$T/rb" --consume "$f"
+  chmod 755 "$I/ub"
+  [ "$(ls "$I/ua" 2>/dev/null | wc -l)" = "$n0" ] && ok "and sends nothing" || no "send --consume that couldn't consume sent" "$(ls "$I/ua")"
 fi
 chmod -R u+rwX "$T/store" 2>/dev/null
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
