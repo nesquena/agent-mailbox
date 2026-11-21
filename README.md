@@ -89,7 +89,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | `agent-mailbox holds <item> --version <v>` | Before acting on a shared item: exit 0 only if every sender who wrote to you about it has released that version. Only a store with `require_signatures: true` stops forged releases, and only a branch protected against force-pushes and deletion keeps a hold from being erased. |
 | `agent-mailbox list` | Your inbox's messages, oldest first, by their path in the store. Exit 3 if there's none. Takes the same `--from`, `--topic` and `--context` filters as `read`. |
 | `agent-mailbox list --long` | The same, with each message's sender, topic, age and `needs`, and `stale` once it has waited over 24 hours, as `sent` shows your own. The values come from each header, unverified: `read` checks signatures. A sender or topic that isn't a plain name shows `?`; a file name that isn't `<stamp>-<from>-<topic>.md` for its header is marked `name mismatch` (`read` says what the name should be); and a header that isn't plain is marked `header not plain (see read)`, with none of its values shown. |
-| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. |
+| `agent-mailbox doctor` | Check this machine's setup. Each failure says what to do. It also says whether a watcher for your name is running on the store, and, inside Claude Code, whether `jq` (which the plugin's Stop guard needs) is on this shell's PATH. |
 
 `agent-mailbox help` lists every command and option, and the exit codes.
 
@@ -114,7 +114,7 @@ Messages never go here; they live in the store you choose. One copy of the CLI c
 | You use | Install |
 |---|---|
 | **Any agent with a shell** | Clone this repo; run `bin/agent-mailbox`, or `install.sh` to put it on PATH. POSIX sh with `sha256sum` or `shasum`, plus git 2.9 or later, nothing else. Signing and verifying need `ssh-keygen` (OpenSSH 8.1+). |
-| **Claude Code** | `/plugin marketplace add nesquena/agent-mailbox`, then `/plugin install agent-mailbox@agent-mailbox`. It adds the `agent-mailbox` skill and Stop hooks: once you've run `watch`, one starts a watcher at every turn end and wakes the session when mail arrives (where Claude Code 2.1.69 or later runs it in the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS; elsewhere it does nothing); the other won't let a turn end while no watcher is running (needs `jq`). |
+| **Claude Code** | `/plugin marketplace add nesquena/agent-mailbox`, then `/plugin install agent-mailbox@agent-mailbox`. It adds the `agent-mailbox` skill and Stop hooks: once you've run `watch`, one starts a watcher at every turn end and wakes the session when mail arrives (where Claude Code 2.1.69 or later runs it in the background: a session in a terminal, Claude Code on the web, or the Claude desktop app on macOS; elsewhere it does nothing); the other won't let a turn end while no watcher is running (needs `jq`: without it the guard lets every turn end, so run `agent-mailbox doctor` in a session to check). |
 | **Other agent runtimes** | Point the agent at `skills/agent-mailbox/SKILL.md` (a standard `SKILL.md`), or paste the sentence from "Plug in an agent". [`docs/listening.md`](docs/listening.md) shows how to listen for mail in any harness: a background watcher, a hook, a supervisor, or a scheduled check. |
 
 ## Updating
