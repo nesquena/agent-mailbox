@@ -265,7 +265,9 @@ claim() { cv=$(field "$1" "$2" 2>/dev/null); case "$1" in (groups) matches "$GRO
 valid_claim() { [ -n "$2" ] || return 0
   case "$1" in (--groups) matches "$GROUPS_RE" "$2" || die "--groups takes up to 16 names (lowercase a-z, 0-9, '.', '-'; up to 63 each), separated by spaces, not '$2'" ;;
     (*) matches "$NAME_RE" "$2" || die "$1 takes one name (lowercase a-z, 0-9, '.', '-'; up to 63), not '$2'" ;; esac; }
-# write $2 to $1 atomically: a temp file in the same directory, then a rename
+# write $2 to $1 atomically: a temp file in the same directory, then a rename. (Each write here, and put_signed's and
+# sign_file's, ignores XFSZ, so under a size limit it fails with the CLI's own message rather than the shell's; and its
+# subshell's own output goes nowhere, as bash's printf, failing that way, prints what it couldn't write there on exit)
 # put and put_signed clear their temp paths, then create them with noclobber (set -C), so a link left at a guessable
 # temp name isn't followed, and check each temp is a plain file right before moving it into place, so a link found there
 # then isn't published. ceiling: a writer racing a live run can still have a write land on a device or FIFO behind a
@@ -273,7 +275,7 @@ valid_claim() { [ -n "$2" ] || return 0
 # security model (docs/security.md)
 put() { [ ! -d "$1" ] || die "$(rel "$1") isn't a file"; tmp="$1.tmp.$$"
   { rm -f "$tmp" && [ ! -L "$tmp" ]; } || die "can't clear $(rel "$tmp")"
-  (set -C; printf '%s\n' "$2" > "$tmp") 2>/dev/null && plain "$tmp" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }
+  (trap '' XFSZ; set -C; printf '%s\n' "$2" > "$tmp") >/dev/null 2>&1 && plain "$tmp" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }
   if [ -n "$PUT_NEW" ]; then
     if land "$tmp" "$1"; then :; else lr=$?; rm -f "$tmp"; [ "$lr" != 1 ] || taken "$1"; die "can't write $(rel "$1")"; fi
   else mv -f "$tmp" "$1" || { rm -f "$tmp"; die "can't write $(rel "$1")"; }; fi; }
@@ -470,8 +472,10 @@ hdr_ok() { awk 'NR == 1 { if ($0 != "---") exit 1; next } $0 == "---" { c = 1; e
 there() { [ -e "$1" ] || [ -L "$1" ]; }
 keep_pin() { [ -n "$2" ] || die "can't work out the fingerprint of $3 (is sha256sum or shasum installed?)"
   ! there "$1" || plain "$1" || die "can't record $3: $1 isn't a plain file (move it aside)"
+  # (a pin that's already this fingerprint is left as it is: nothing to write, so a read-only pins folder doesn't stop it)
+  ! plain "$1" || [ "$(cat -- "$1" 2>/dev/null)" != "$2" ] || return 0
   kp_t="${1%/*}/.${1##*/}.tmp.$$"; mkdir -p "${1%/*}" 2>/dev/null
-  { rm -f "$kp_t" && ( trap '' XFSZ; set -C; printf '%s\n' "$2" > "$kp_t" ) 2>/dev/null && plain "$kp_t" &&
+  { rm -f "$kp_t" && ( trap '' XFSZ; set -C; printf '%s\n' "$2" > "$kp_t" ) >/dev/null 2>&1 && plain "$kp_t" &&
     mv -f "$kp_t" "$1" 2>/dev/null; } ||
     { rm -f "$kp_t"; die "can't record $3 ($1): check that the state folder can be written${4:+; $4}"; }; }
 # copy_in <to> <what> <command...>: the command's output (a message or its .sig, from the store) into <to>, a file in
@@ -514,14 +518,14 @@ verify_sig() {
   else keep_pin "$pins/$from" "$fp" "$from's key"; fi
   # (a key list that can't be written stops it too, rather than reading a good signature as bad)
   allowed="$STATE/tmp.allowed.$$"; mkdir -p "$STATE" 2>/dev/null
-  { rm -f "$allowed" && ( trap '' XFSZ; set -C; printf '%s %s\n' "$from" "$pub" > "$allowed" ) 2>/dev/null; } ||
+  { rm -f "$allowed" && ( trap '' XFSZ; set -C; printf '%s %s\n' "$from" "$pub" > "$allowed" ) >/dev/null 2>&1; } ||
     { rm -f "$allowed"; die "can't write $allowed to check $from's signature: check that the state folder can be written"; }
   if ssh-keygen -Y verify -f "$allowed" -I "$from" -n "$NS" -s "$f.sig" < "$f" >/dev/null 2>&1; then r=verified; else r=bad; fi
   rm -f "$allowed"; echo "$r"
 }
 # sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
-sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
-  else (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null; fi || die "signing failed with $KEY"; }
+sign_file() { if askpass_never; then (trap '' XFSZ; set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
+  else (trap '' XFSZ; set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null; fi || die "signing failed with $KEY"; }
 # askpass_never: signing reads the message on stdin, so ssh-keygen asks for a key's passphrase through an askpass
 # program whenever DISPLAY is set, even in a terminal. When this command's own stdin is a terminal and
 # SSH_ASKPASS_REQUIRE isn't set, sign with SSH_ASKPASS_REQUIRE=never, so the passphrase is asked in the terminal.
@@ -539,10 +543,10 @@ askpass_never() { [ -t 0 ] && [ -z "${SSH_ASKPASS_REQUIRE+set}" ] || return 1
 put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
   for pd in "$1" "$1.sig"; do [ ! -d "$pd" ] || die "$(rel "$pd") isn't a file"; done
   for pd in "$ps" "$ps.sig" "$ps.old" "$ps.ok"; do { rm -f "$pd" && [ ! -L "$pd" ]; } || die "can't clear $(rel "$pd")"; done
-  (set -C; printf '%s\n' "$2" > "$ps") 2>/dev/null || { rm -f "$ps"; die "can't write $(rel "$1")"; }
+  (trap '' XFSZ; set -C; printf '%s\n' "$2" > "$ps") >/dev/null 2>&1 || { rm -f "$ps"; die "can't write $(rel "$1")"; }
   (sign_file "$ps") || { rm -f "$ps" "$ps.sig"; exit 1; }
   if [ -n "${3:-}" ]; then
-    { (set -C; printf '%s %s\n' "$ME" "$3" > "$ps.ok") 2>/dev/null &&
+    { (trap '' XFSZ; set -C; printf '%s %s\n' "$ME" "$3" > "$ps.ok") >/dev/null 2>&1 &&
       ssh-keygen -Y verify -f "$ps.ok" -I "$ME" -n "$NS" -s "$ps.sig" < "$ps" >/dev/null 2>&1; } ||
       { rm -f "$ps" "$ps.sig" "$ps.ok"; die "the signature made with $KEY doesn't verify against your registry record's key"; }
     rm -f "$ps.ok"
@@ -560,7 +564,7 @@ put_signed() { ps="$1.tmp.$$"; [ ! -L "$1.sig" ] || rm -f "$1.sig"
   # a failed move puts back the signature the file had (none, for a new file), so the pair still verifies
   # (only a regular file is kept: a .sig that's a link is replaced, never read, so nothing outside the store is copied in)
   old=; if [ -f "$1.sig" ] && [ ! -L "$1.sig" ]; then
-    (set -C; cat "$1.sig" > "$ps.old") 2>/dev/null && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
+    (trap '' XFSZ; set -C; cat "$1.sig" > "$ps.old") 2>/dev/null && old=1 || { rm -f "$ps" "$ps.sig" "$ps.old"; die "can't write $(rel "$1")"; }; fi
   if plain "$ps" "$ps.sig" && mv -f "$ps.sig" "$1.sig" && mv -f "$ps" "$1"; then rm -f "$ps.old"; return 0; fi
   rm -f "$ps" "$ps.sig"; if [ -n "$old" ]; then mv -f "$ps.old" "$1.sig"; else rm -f "$1.sig"; fi
   die "can't write $(rel "$1")"; }
@@ -936,12 +940,12 @@ send)
     last="$STATE/gates/$STORE_ID/$ME"
     while [ "$(cat "$last" 2>/dev/null)" = "$stamp" ]; do sleep 1; stamp=$(date -u +%Y%m%dT%H%M%SZ); done
     # (in a subshell, ignoring XFSZ: under a size limit the write fails, saying so, rather than ending the shell)
-    { mkdir -p "$STATE/gates/$STORE_ID" && ( trap '' XFSZ; printf '%s\n' "$stamp" > "$last" ) 2>/dev/null; } || die "can't write $last"
+    { mkdir -p "$STATE/gates/$STORE_ID" && ( trap '' XFSZ; printf '%s\n' "$stamp" > "$last" ) >/dev/null 2>&1; } || die "can't write $last"
   fi
   ( trap '' XFSZ; mkdir -p "$STATE/names/$STORE_ID" &&
     if { IFS= read -r us < "$used"; } 2>/dev/null && [ "$us" = "$stamp" ]; then
       printf '%s\n' "$to/$stamp-$ME-$topic.md" >> "$used"
-    else printf '%s\n%s\n' "$stamp" "$to/$stamp-$ME-$topic.md" > "$used"; fi ) 2>/dev/null ||
+    else printf '%s\n%s\n' "$stamp" "$to/$stamp-$ME-$topic.md" > "$used"; fi ) >/dev/null 2>&1 ||
     warn "can't record this send's file name in $used, so a send in the same second may reuse it; sending anyway"
   f="$M/inbox/$to/$stamp-$ME-$topic.md"
   { [ -e "$f" ] || [ -L "$f" ]; } && die "$(rel "$f") exists (one message per topic per second)"
@@ -1097,8 +1101,10 @@ holds)
       basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       # a listed version it can't read stops holds, like a history it can't read
       # (as in read, a copy that can't be written stops holds; only a version with no .sig reads unsigned)
-      copy_in "$tmpd/m" "$p as of $ref" ad_show "$ref" "$p" || { echo '!'; continue; }
-      copy_in "$tmpd/m.sig" "$p.sig as of $ref" ad_show "$ref" "$p.sig" || :
+      # (an adapter without history lists - as the ref: then there's no "as of" to say)
+      ao=" as of $ref"; [ "$ref" != - ] || ao=""
+      copy_in "$tmpd/m" "$p$ao" ad_show "$ref" "$p" || { echo '!'; continue; }
+      copy_in "$tmpd/m.sig" "$p.sig$ao" ad_show "$ref" "$p.sig" || :
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
       from=$(field from "$tmpd/m"); sent=$(field sent "$tmpd/m")

@@ -26,6 +26,13 @@
   starting one) are a new first word, `info`, printed alongside `ok`, `busy`, `warn` and `FAIL`: a script that reads
   doctor's output by its first word should expect it.
 
+- **`update` and `trust` with a key whose pin is unchanged no longer stop on a read-only pins folder.** There's
+  nothing to write, so the pin is left as it is; before, both stopped with "can't record ...'s key".
+- **Under a file size limit, a write that fails prints only the CLI's own message.** The shell's "File size limit
+  exceeded" no longer comes first; and under bash, what couldn't be written (a config file's text, a key's fingerprint)
+  is no longer printed to the terminal.
+- **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
+
 ## 0.1.3 (2026-11-19)
 
 Commands that can't write or read a file they need now stop, saying why, where they used to say "verified", "bad",
