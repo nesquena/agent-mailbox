@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
+  session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
+  sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update agent-mailbox`
+  and `claude plugin update agent-mailbox@agent-mailbox`); new and resumed sessions pick it up.
 - **An inbox, record, message or signature that can't be read stops the command, saying so, in more places.** With the
   mailbox's inbox folder not searchable, `watch` said "no mail" and `holds` "nothing recorded"; both now stop at once.
   A sender's registry record that can't be read (or whose folder can't be searched, or a link there whose target can't
@@ -14,6 +18,26 @@
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
   0.1.3 stopped there ("can't list"); the folder's absence is known, so it's no mail, as before. A folder that can't be
   searched still stops the command.
+- **`doctor` says when the Claude Code plugin's Stop guard can't run, and whether a watcher is up.** Inside Claude Code
+  it warns when `jq` isn't on its shell's PATH: the plugin's Stop guard needs it, and without it lets every turn end
+  with no watcher running, silently (the other hook doesn't need it). Outside Claude Code it says nothing about `jq`,
+  which the CLI itself never uses. It also says whether a watcher for the name is running on the store (with its pid),
+  and warns when this session ran `watch` for the name and none is running now, giving the re-arm command the Stop
+  guard gives (with the `--config` this session watched the store with, and `--also` when the session watches several
+  stores), and adding when the plugin's hook declined to start one at the last turn end. On a turn the plugin's hook
+  woke, when it starts the next watcher at the turn's end, that's an `info` line instead of a warning. These lines
+  never make `doctor` fail. The watcher lines that aren't warnings (a watcher running, none running, or the hook
+  starting one) are a new first word, `info`, printed alongside `ok`, `busy`, `warn` and `FAIL`: a script that reads
+  doctor's output by its first word should expect it.
+- **`list` and `read`: sender, topic and age, filters, and stale mail.** `list --long` shows each message's sender,
+  topic, age and `needs`, and marks it `stale` once it has waited over 24 hours, with the same age rule as `sent`, so
+  the recipient can raise stale mail too (`PROTOCOL.md` section 5). Its values come from the header, unverified, with
+  control characters spelled out; a sender or topic that isn't a plain name shows `?`, a file name that isn't
+  `<stamp>-<from>-<topic>.md` for its header is marked `name mismatch` (`read` says what the name should be), and a
+  header that isn't plain is marked `header not plain (see read)`. `--from`, `--topic` and `--context` on `list` and
+  `read` keep only mail whose unverified header has that value, and `read <file>...` reads just the messages named,
+  refusing any that isn't in your inbox. A message that can't be read stops `list --long` and a filtered `list` or
+  `read`, as it stops `read`, rather than being left out. Plain `list` prints exactly what it did before.
 
 - **`update` and `trust` with a key whose pin is unchanged no longer stop on a read-only pins folder.** There's
   nothing to write, so the pin is left as it is; before, both stopped with "can't record ...'s key".
