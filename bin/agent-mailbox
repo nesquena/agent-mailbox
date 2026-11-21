@@ -368,7 +368,16 @@ reg_key() { rk=$(field key "$1" 2>/dev/null); matches "$KEY_RE" "$rk" && printf 
 # without ssh-keygen. fpnote <public key>: that, or a note when ssh-keygen can't read the key
 fingerprint() { printf '%s\n' "$1" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2; }
 fpnote() { fn=$(fingerprint "$1"); [ -n "$fn" ] || ! have_ssh || fn="ssh-keygen can't read this key"; printf '%s' "$fn"; }
-active() { [ -f "$(record "$1")" ] && [ "$(field status "$(record "$1")")" = active ]; }
+# record_ok <name>: 0 when that agent's record is a file that can be read; 1 when it's known not to be there (its folder
+# can be searched). Anything else stops the command, saying so: a record that can't be read, or something there that
+# isn't a file (a folder, a FIFO, a link that leads nowhere), or a folder that hides whether it's there. One rule, so
+# none of them reads as an agent with no key, or a retired one. RH, when set, is added to the message (read sets it)
+RH=""
+record_ok() { ro_r=$(record "$1")
+  if [ -f "$ro_r" ]; then cat -- "$ro_r" >/dev/null 2>&1 && return 0
+  elif known_absent "$ro_r"; then return 1; fi
+  die "can't read $(rel "$ro_r"), $1's record${RH:-}"; }
+active() { record_ok "$1" && [ "$(field status "$(record "$1")")" = active ]; }
 # you must be active to send or watch; a retired agent is told how to come back
 need_active_me() { active "$ME" && return 0; [ -f "$(record "$ME")" ] && die "'$ME' (you) is retired in this mailbox: run 'update --status active' to come back"
   die "'$ME' (you) isn't registered in this mailbox: register first (JOIN.md)"; }
@@ -496,11 +505,9 @@ verify_sig() {
   # (a .sig that's a link isn't the message's own signature, as read's copy, which skips one, would also say)
   { [ -f "$f.sig" ] && [ ! -L "$f.sig" ]; } || { echo unsigned; return; }
   cat -- "$f.sig" >/dev/null 2>&1 || die "can't read $(rel "$f.sig")"
-  # (a record that can't be read, or whose folder hides whether it's there, stops the command, rather than reading as
-  # no key, which a store requiring signatures drops a hold for)
-  # (a link there whose target can't be reached is a record that can't be read, too)
-  rec=$(record "$from"); [ -f "$rec" ] || { known_absent "$rec" || [ ! -L "$rec" ] || die "can't read $(rel "$rec"), $from's record"; echo nokey; return; }
-  cat -- "$rec" >/dev/null 2>&1 || die "can't read $(rel "$rec"), $from's record"
+  # (a record that can't be read as one stops the command (record_ok), rather than reading as no key, which a store
+  # requiring signatures drops a hold for)
+  record_ok "$from" || { echo nokey; return; }; rec=$(record "$from")
   pub=$(reg_key "$rec"); [ -n "$pub" ] || { echo nokey; return; }
   have_ssh || { echo nokey; return; }
   # trust on first use: pin the key's fingerprint per store; a different key later is "changed" until `trust`
@@ -815,9 +822,13 @@ agents)
   done
   load_adapter; ad_sync; need_store
   [ -n "$names" ] || printf '%-24s %-8s %-10s %-4s %-16s %-8s %-24s %s\n' NAME STATUS KIND KEY HUMAN ENV GROUPS ABOUT; fps=
+  # (a records folder that can't be listed, or a record that can't be read, stops it: one left out, or shown as a record
+  # with no name, would read as an agent that isn't there)
+  listable "$M/agents"
   for r in "$M"/agents/*.md; do
-    [ -f "$r" ] || continue
+    { [ -e "$r" ] || [ -L "$r" ]; } || continue
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
+    record_ok "$n" || continue
     h=$(claim human "$r"); e=$(claim env "$r"); g=$(claim groups "$r")
     [ -z "$fh" ] || [ "$h" = "$fh" ] || continue
     [ -z "$fe" ] || [ "$e" = "$fe" ] || continue
@@ -842,6 +853,7 @@ trust)
     ! there "$STATE/pins/$STORE_ID/.strict" || die "can't remove $STATE/pins/$STORE_ID/.strict: check that the state folder can be written"
     echo "this store is strict for you only while its store.md requires signatures"; exit 0; fi
   valid_name "$1"; load_adapter; ad_sync
+  record_ok "$1" || die "'$1' has no registered key"
   pub=$(reg_key "$(record "$1")"); [ -n "$pub" ] || die "'$1' has no registered key"
   keep_pin "$STATE/pins/$STORE_ID/$1" "$(printf '%s\n' "$pub" | sha)" "$1's key"
   fp=$(fpnote "$pub")
@@ -908,7 +920,7 @@ send)
   # removals go through your own inbox folder, never a link to elsewhere (a link inside it is removed as a link)
   [ -z "$consume" ] || no_link "$M/inbox/$ME"
   for c in $consume; do valid_msg "$c"
-    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+    [ -f "$M/inbox/$ME/$c" ] || { inbox_ok "$ME"; die "not in your inbox: $c"; }; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
   if [ -z "$ctx_set" ] && matches "$MSG_RE" "$reply" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
@@ -1016,6 +1028,8 @@ read)
   # file swapped in the store meanwhile can't be shown under another's status
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
   ib=$(inbox_files "$ME") || { rm -rf "$rt"; exit 1; }
+  # (a sender's record it can't read stops read too, saying how to read the rest, as for a message it can't read)
+  RH=" (consume its message, or pass --except, to read the rest)"
   shown=$(printf '%s\n' "$ib" | while IFS= read -r p; do [ -n "$p" ] || continue
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     # (a message consumed since it was listed is skipped; one still there that can't be copied or read stops read, as
@@ -1055,6 +1069,8 @@ consume)
   [ $# -ge 1 ] || die "usage: consume [--] <file>..."
   need_me; load_adapter; ad_sync; need_store
   paths=""; no_link "$M/inbox/$ME"
+  # (an inbox that can't be read stops it, saying so, rather than "not in your inbox")
+  inbox_ok "$ME"
   for a in "$@"; do
     b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
     valid_msg "$b"
@@ -1070,7 +1086,7 @@ verify)
   # (by name it's checked as mail to you, so a copy addressed to someone else reads misrouted, as in read)
   f=$1 inb=""; [ -f "$f" ] || f="$AD_DIR/$1"
   if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && { need_me; f="$M/inbox/$ME/$b" inb=$ME; }; fi
-  [ -n "$f" ] && [ -f "$f" ] || die "no such message $1"
+  [ -n "$f" ] && [ -f "$f" ] || { [ -z "$inb" ] || inbox_ok "$ME"; die "no such message $1"; }
   # by path, a message sitting in an inbox is checked against that inbox, so a misrouted copy reads misrouted there too
   if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
   v=$(verify_file "$f" "$inb") && [ -n "$v" ] || exit 1; echo "$v"; [ "$v" = verified ] || exit 6 ;;
@@ -1097,7 +1113,9 @@ holds)
       basename "$p" | grep -Eq '^[A-Za-z0-9._-]+\.md$' || continue
       # a listed version it can't read stops holds, like a history it can't read
       # (as in read, a copy that can't be written stops holds; only a version with no .sig reads unsigned)
-      copy_in "$tmpd/m" "$p as of $ref" ad_show "$ref" "$p" || { echo '!'; continue; }
+      # (with no history (ref -), a message gone since the peek was consumed meanwhile, and is passed over, as read does;
+      # with history, a listed version it can't find stops holds)
+      copy_in "$tmpd/m" "$p as of $ref" ad_show "$ref" "$p" || { [ "$ref" = - ] || echo '!'; continue; }
       copy_in "$tmpd/m.sig" "$p.sig as of $ref" ad_show "$ref" "$p.sig" || :
       kind=hold; rec=$(field hold "$tmpd/m"); [ -n "$rec" ] || { kind=release; rec=$(field release "$tmpd/m"); }
       [ -n "$rec" ] || continue
@@ -1229,8 +1247,9 @@ watch)
   trap unmark EXIT
   trap 'exit 130' INT TERM
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"
-  # (an inbox that can't be read, here or after a check that failed, stops watch at once, saying so: it isn't a store
-  # that can't be reached for a moment, and a dir store's peek can't tell it from an empty inbox)
+  # (an inbox that can't be read, here and at every tick, stops watch at once, saying so: it isn't a store that can't
+  # be reached for a moment, a dir store's peek can't tell it from an empty inbox, and the poll's token needn't change
+  # when it goes. It's a look at the folder here, so it costs no more than the poll)
   check() { files=$(ad_peek "$ROOT/inbox/$ME") || return 1
             printf '%s\n' "$files" | while IFS= read -r p; do
               b=$(basename "$p"); matches "$MSG_RE" "$b" || continue
@@ -1240,12 +1259,11 @@ watch)
   # a store it can't reach or read ends the watch loudly after 10 failures in a row, so the agent wakes and sees why
   start=$(date +%s); fails=0
   while [ "$max" -eq 0 ] || [ $(( $(date +%s) - start )) -lt "$max" ]; do
-    sleep "$interval"
+    sleep "$interval"; inbox_ok "$ME"
     if now=$(ad_poll 2>/dev/null) && [ -n "$now" ]; then :; else
       fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't reach the store ($fails tries in a row)"
     fi
     [ "$now" != "$last" ] || { fails=0; continue; }
-    inbox_ok "$ME"
     if ! mail=$(check); then fails=$((fails+1)); [ "$fails" -lt 10 ] && continue; die "watch: can't read the store ($fails tries in a row)"; fi
     fails=0; last=$now
     [ -n "$mail" ] && { echo "mail for $ME:"; printf '%s\n' "$mail" | clean; exit 0; }
