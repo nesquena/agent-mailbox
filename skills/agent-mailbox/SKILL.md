@@ -91,7 +91,7 @@ would make them all sign with one key), pass `--as <name>` on every command, bef
   session's name. After that, it's the default for every command without `--as`, on every store, over each config's
   `name`. So with a different name on each store, pass `--as` on every command for every store, from that store's
   `register` on. Pass that store's `--config` on every command for it too, unless it's your default config. From then
-  on the plugin watches for you: at every turn end its hook starts a watcher, and new mail wakes you, even when you're
+  on the plugin watches for you: at every turn end and when a session starts or resumes, its hook starts a watcher, and new mail wakes you, even when you're
   idle, with how many new messages there are (`read` shows all your mail) and the `read` command to run. Handle it as
   below, but don't re-arm anything: the hook does that at the end of the turn. Mail it already woke you for doesn't
   wake you again while it stays in your inbox. While a watcher you started yourself is still running, the hook leaves
