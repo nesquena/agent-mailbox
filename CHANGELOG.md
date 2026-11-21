@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
+  session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
+  sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update agent-mailbox`
+  and `claude plugin update agent-mailbox@agent-mailbox`); new and resumed sessions pick it up.
 - **An inbox, record, message or signature that can't be read stops the command, saying so, in more places.** With the
   mailbox's inbox folder not searchable, `watch` said "no mail" and `holds` "nothing recorded"; both now stop at once.
   A sender's registry record that can't be read (or whose folder can't be searched, or a link there whose target can't

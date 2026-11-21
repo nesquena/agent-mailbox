@@ -3113,6 +3113,57 @@ expect "retiring the name on one store records it in the session's list" 0 - tes
 for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$RS/rewake/rw/r9@$S1/woke"; done
 echo hi | as rx send rw rx-r - >/dev/null 2>&1
 wakes "and the hook then watches only the other store" "rx-r.md" rewake r9
+# plugin manifest: hooks/hooks.json registers claude-rewake.sh on SessionStart (matching Stop: asyncRewake, timeout
+# 86400), and running that registered command on SessionStart JSON starts a watcher (and wakes on mail) only for a
+# session that already ran watch
+ss_cmd=$(python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+hooks = data.get("hooks", {})
+def flat(ev):
+    return [h for e in hooks.get(ev, []) if isinstance(e, dict) for h in e.get("hooks", []) if isinstance(h, dict)]
+stop_rw = [h for h in flat("Stop") if "claude-rewake.sh" in str(h.get("command", ""))]
+ss_rw = [h for h in flat("SessionStart") if "claude-rewake.sh" in str(h.get("command", ""))]
+assert len(stop_rw) == 1 and stop_rw[0].get("asyncRewake") is True and stop_rw[0].get("timeout") == 86400, f"Stop: {stop_rw}"
+assert len(ss_rw) == 1 and ss_rw[0].get("type") == "command" and ss_rw[0].get("asyncRewake") is True and ss_rw[0].get("timeout") == 86400, f"SessionStart: {ss_rw}"
+assert ss_rw[0].get("command") == stop_rw[0].get("command"), f"mismatch: {ss_rw[0]} vs {stop_rw[0]}"
+print(ss_rw[0]["command"])
+' "$ROOTDIR/hooks/hooks.json" 2>"$T/ss.err") && [ -n "$ss_cmd" ] &&
+  ok "hooks/hooks.json registers claude-rewake.sh on SessionStart with asyncRewake and timeout 86400" ||
+  no "hooks/hooks.json registers claude-rewake.sh on SessionStart with asyncRewake and timeout 86400" "$(cat "$T/ss.err" 2>/dev/null)"
+printf '%s\n' 'j=$1; shift; [ -z "${CCERR:-}" ] || exec 2>"$CCERR"' \
+  'printf "%s" "$j" | env CLAUDE_PID="$$" CLAUDE_PLUGIN_ROOT="$RPLUG" "$RSH" -c "$RCMD"; exit $?' > "$T/ccss.sh"
+rewakess() { [ -n "$ss_cmd" ] || return 1; j=$1; shift; ccenv RPLUG="$P" RCMD="$ss_cmd" "$@" "$SH" "$T/onterm.sh" "$SH" "$T/ccss.sh" "$j"; }
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
+echo hi | as rx send rw rw-ss - >/dev/null 2>&1
+wakes "SessionStart wakes a session that ran watch when mail is waiting" "rw-ss.md" \
+  rewakess '{"session_id":"r1","hook_event_name":"SessionStart","source":"resume"}'
+# (and with no new mail waiting, SessionStart starts a live watcher for that session)
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do echo "$f" >> "$R1/woke"; done
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"
+: > "$T/ss.out"; rewakess '{"session_id":"r1","hook_event_name":"SessionStart","source":"startup"}' AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/ss.out" & sbg=$!
+if [ -n "$ss_cmd" ] && up "$R1/pid" && up "$RS/run/rw.pid"; then
+  ok "SessionStart starts a live watcher for a session that ran watch"
+  kill -TERM "$(cut -d' ' -f1 "$R1/pid" 2>/dev/null)" 2>/dev/null; wait "$sbg" 2>/dev/null
+else no "SessionStart starts a live watcher for a session that ran watch" "$(cat "$T/ss.out" 2>/dev/null)"
+  kill "$sbg" 2>/dev/null; wait "$sbg" 2>/dev/null; fi
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+# (a legacy session with only sessions/ and session-configs/, no session-stores/, wakes on SessionStart too)
+mkdir -p "$RS/sessions" "$RS/session-configs"; echo rw > "$RS/sessions/r-leg"
+printf '%s\n' "$(cd "$W/home-rw/.config/agent-mailbox" && pwd -P)/config" > "$RS/session-configs/r-leg"
+rm -f "$RS/session-stores/r-leg" "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+wakes "SessionStart wakes a session with legacy session-configs record" "rw-ss.md" \
+  rewakess '{"session_id":"r-leg","hook_event_name":"SessionStart","source":"resume"}'
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+# (a session that never ran watch starts nothing on SessionStart, whether startup or clear)
+expect "SessionStart does nothing for a session that never ran watch (startup)" 0 '^$' \
+  rewakess '{"session_id":"never-watched","hook_event_name":"SessionStart","source":"startup"}'
+expect "SessionStart does nothing for a fresh session after clear" 0 '^$' \
+  rewakess '{"session_id":"after-clear","hook_event_name":"SessionStart","source":"clear"}'
+[ -z "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null)" ] && [ ! -e "$RS/run/rw.pid" ] &&
+  ok "and starts no watcher or state for sessions that never ran watch" ||
+  no "SessionStart left watcher or state for unwatched sessions" "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null; ls -A "$RS/run" 2>/dev/null)"
 # (at the end, every hook and watcher the section left running is stopped, with what it started, by the pid its pid file
 # holds: their command lines name the plugin, not this run's folder, so the exit cleanup wouldn't find them, and one
 # still running holds the run's output open until its 60 s limit)
