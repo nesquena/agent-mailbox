@@ -1006,15 +1006,11 @@ list)
   done
   need_me; load_adapter; ad_sync; need_store
   mail=$(inbox_files "$ME") || exit 1
-  # a filter and --long read each message: one that can't be read stops list, saying so, as it stops read (it's never
-  # left out, or shown as "?"); one consumed since the listing is left out
-  if [ -n "$long$MF$MT$MC" ]; then
-    mail=$(printf '%s\n' "$mail" | while IFS= read -r p; do [ -n "$p" ] || continue
-      cat -- "$p" >/dev/null 2>&1 || { ! there "$p" || die "can't read $(rel "$p") (consume it to list the rest)"; continue; }
-      if picked "$p"; then printf '%s\n' "$p"; fi; done) || exit 1
-  fi
-  [ -n "$mail" ] || no_mail "$(filter_note)"
-  [ -n "$long" ] || { printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean; exit; }
+  [ -n "$long$MF$MT$MC" ] || { [ -n "$mail" ] || no_mail; printf '%s\n' "$mail" | while IFS= read -r p; do rel "$p"; done | clean; exit; }
+  # a filter and --long read each message once, into a private copy, as read does, and go by that copy alone, so a
+  # message consumed or changed in the store meanwhile can't give a row of values it never held. One consumed since
+  # the listing is left out; one still there that can't be read stops list, saying so (it's never left out, or shown
+  # as "?"). Without --long, a row is the message's path.
   # --long: <path> from <from> topic <topic> age <age>[ stale][ <mark>][ needs: <needs>], from the header as written
   # (not checked against a signature: read does that). A from or topic that isn't a name shows "?", so no header can
   # spell out a row of its own; a file name that isn't <stamp>-<from>-<topic>.md for its header is marked, as read
@@ -1022,14 +1018,23 @@ list)
   # it can be passed to read; from, topic and sent are bounded by their patterns). Each message goes to awk as six
   # lines (path, from, topic, sent, needs, and ok, bad or mismatch), so no header value can shift another; a header
   # that isn't plain (hdr_ok) is read as no values
-  printf '%s\n' "$mail" | while IFS= read -r p; do
-    if hdr_ok "$p"; then s=$(field sent "$p"); matches "$SENT_RE" "$s" || s="?"
-      fr=$(field from "$p"); tp=$(field topic "$p"); mk=ok
+  rt="$STATE/tmp.list.$$"; mkdir -p "$rt" || die "can't create $rt"
+  rows=$(printf '%s\n' "$mail" | while IFS= read -r p; do [ -n "$p" ] || continue
+    copy_in "$rt/m" "$(rel "$p")" cat -- "$p" ||
+      { ! there "$p" || die "can't read $(rel "$p") (consume it to list the rest)"; continue; }
+    picked "$rt/m" || continue
+    if [ -z "$long" ]; then rel "$p"
+    elif hdr_ok "$rt/m"; then s=$(field sent "$rt/m"); matches "$SENT_RE" "$s" || s="?"
+      fr=$(field from "$rt/m"); tp=$(field topic "$rt/m"); mk=ok
       if matches "$NAME_RE" "$fr"; then names_sender "${p##*/}" "$fr" "$tp" || mk=mismatch; else fr=""; fi
       matches "$NAME_RE" "$tp" || tp=""
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$(rel "$p")" "$fr" "$tp" "$s" "$(field needs "$p" | LC_ALL=C sed "$CAP")" "$mk"
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$(rel "$p")" "$fr" "$tp" "$s" "$(field needs "$rt/m" | LC_ALL=C sed "$CAP")" "$mk"
     else printf '%s\n\n\n?\n\nbad\n' "$(rel "$p")"; fi
-  done | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
+  done) || { rm -rf "$rt"; exit 1; }
+  rm -rf "$rt"
+  [ -n "$rows" ] || no_mail "$(filter_note)"
+  [ -n "$long" ] || { printf '%s\n' "$rows" | clean; exit; }
+  printf '%s\n' "$rows" | LC_ALL=C awk -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGE_AWK"'
     { r[NR % 6] = $0 } NR % 6 == 0 { st = age(r[4], now)
       print r[1] " from " (r[2] == "" ? "?" : r[2]) " topic " (r[3] == "" ? "?" : r[3]) " age " AGE (st ? " stale" : "") \
         (r[0] == "bad" ? " header not plain (see read)" : r[0] == "mismatch" ? " name mismatch (see read)" : "") \

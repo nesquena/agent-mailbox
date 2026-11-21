@@ -6,6 +6,9 @@ load helpers
 
 # as <agent> <args...>: run the CLI as that agent, in its own home
 as() { local a=$1; shift; HOME="$T/home-$a" AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
+# as_cat <on> <rm> <agent> <args...>: as, with the cat stand-in (setup_file) first on PATH
+as_cat() { local on=$1 rm=$2 a=$3; shift 3
+  env PATH="$T/catx:$PATH" CAT_ON="$on" CAT_RM="$rm" CAT_LOG="$T/cat.log" HOME="$T/home-$a" AGENT_MAILBOX_NAME= "$SH" "$CLI" "$@"; }
 # pm <file name> <from> <topic> <context> <sent> <needs>: plant an unsigned message in bob's inbox, as anyone with write
 # access to the store could
 pm() { printf -- '---\nprotocol: 1\nfrom: %s\nto: bob\ntopic: %s\ncontext: %s\nsent: %s\nin_reply_to: none\nneeds: %s\n---\n\nhi\n' \
@@ -24,6 +27,11 @@ setup_file() {
   pm 20200101T000002Z-carol-deploy.md carol deploy proj-y "$(ago 25)" none
   pm 20200101T000003Z-alice-review.md alice review proj-y "$(ago 23)" none
   pm 20200101T000004Z-carol-notes.md carol notes proj-x yesterday none
+  # a cat that, after printing a file whose name ends in $CAT_ON, removes $CAT_RM (another agent consuming it in that
+  # window), and logs each message it reads to $CAT_LOG
+  mkdir -p "$T/catx"; real=$(command -v cat)
+  printf '#!/bin/sh\n"%s" "$@"; rc=$?\nfor f; do case $f in (*.md) [ -z "${CAT_LOG:-}" ] || echo "${f##*/}" >> "$CAT_LOG" ;; esac\n  [ -n "${CAT_ON:-}" ] || continue; case $f in (*"$CAT_ON") rm -f "$CAT_RM" ;; esac; done\nexit $rc\n' "$real" > "$T/catx/cat"
+  chmod +x "$T/catx/cat"
 }
 
 @test "plain list is the bare paths, as before" {
@@ -108,8 +116,10 @@ mailbox/inbox/bob/20200101T000004Z-carol-notes.md from carol topic notes age ?"
 }
 
 @test "read <file> refuses a file that isn't in your inbox, before reading any" {
-  expect 1 "^agent-mailbox: not in your inbox: 20990101T000000Z-alice-none\.md$" as bob read 20200101T000001Z-alice-review.md 20990101T000000Z-alice-none.md
-  [ "$(printf '%s\n' "$output" | grep -c '^=====')" = 0 ]
+  rm -f "$T/cat.log"
+  expect 1 "^agent-mailbox: not in your inbox: 20990101T000000Z-alice-none\.md$" as_cat "" "" bob read 20200101T000001Z-alice-review.md 20990101T000000Z-alice-none.md
+  # (no message was read: its output is dropped on exit 1 either way, so the cat log says it)
+  [ ! -s "$T/cat.log" ] || { echo "read a message before refusing:"; cat "$T/cat.log"; return 1; } >&2
   expect 1 "not in your inbox" as carol read 20200101T000001Z-alice-review.md
 }
 
@@ -235,4 +245,29 @@ unreadable() { local f=$1; shift
 @test "plain list doesn't read messages, so it still lists one it can't read" {
   unreadable 20200101T000022Z-alice-review.md list
   [ "$status" -eq 0 ] && printf '%s\n' "$output" | grep -q -- 'T000022Z-alice-review\.md$' || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+}
+
+@test "list --long reads each message once: one consumed right after its read still gets its own row" {
+  pm 20200101T000023Z-alice-gone.md alice gone proj-x 2020-01-01T00:00:00Z none
+  run as_cat 20200101T000023Z-alice-gone.md "$T/store/mailbox/inbox/bob/20200101T000023Z-alice-gone.md" bob list --long
+  rm -f "$T/store/mailbox/inbox/bob/20200101T000023Z-alice-gone.md"
+  [ "$status" -eq 0 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  expect 0 "^mailbox/inbox/bob/20200101T000023Z-alice-gone\.md from alice topic gone age [0-9dhms]+ stale$" printf '%s\n' "$output"
+  ! printf '%s\n' "$output" | grep -q "not plain\|cannot open" || { printf '%s\n' "$output" >&2; return 1; }
+}
+
+@test "and so does a filtered list" {
+  pm 20200101T000023Z-alice-gone.md alice gone proj-x 2020-01-01T00:00:00Z none
+  run as_cat 20200101T000023Z-alice-gone.md "$T/store/mailbox/inbox/bob/20200101T000023Z-alice-gone.md" bob list --topic gone
+  rm -f "$T/store/mailbox/inbox/bob/20200101T000023Z-alice-gone.md"
+  [ "$status" -eq 0 ] && [ "$output" = "mailbox/inbox/bob/20200101T000023Z-alice-gone.md" ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+}
+
+@test "read <file> stops on a named message consumed since read started" {
+  pm 20200101T000024Z-alice-gone.md alice gone proj-x 2020-01-01T00:00:00Z none
+  run as_cat 20200101T000001Z-alice-review.md "$T/store/mailbox/inbox/bob/20200101T000024Z-alice-gone.md" bob \
+    read 20200101T000001Z-alice-review.md 20200101T000024Z-alice-gone.md
+  rm -f "$T/store/mailbox/inbox/bob/20200101T000024Z-alice-gone.md"
+  [ "$status" -eq 1 ] || { printf 'exit %s\n%s\n' "$status" "$output" >&2; return 1; }
+  expect 0 "^agent-mailbox: not in your inbox: 20200101T000024Z-alice-gone\.md \(consumed since read started\)$" printf '%s\n' "$output"
 }
