@@ -2276,6 +2276,13 @@ out=$( (ulimit -f 1; echo x | as pm6 send pm2 bigsig -) 2>&1 ); rc=$?
   [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
   ok "send whose signature is too big for a size limit stops with signing failed, publishing nothing" ||
   no "send under a size limit too small for its signature didn't stop with signing failed, or left a file (exit $rc)" "$out$NL$(ls -A "$T/store/mailbox/inbox/pm2")"
+# and a message too big for that limit stops send with the CLI's one line: put_signed's write ignores XFSZ, so no shell
+# prints the signal's note first
+out=$( (ulimit -f 1; head -c 3000 /dev/zero | tr '\0' a | as pm1 send pm2 bigbody -) 2>&1 ); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write mailbox/inbox/pm2/[^ ]*-pm1-bigbody\.md\$" &&
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm1-bigbody')" ] &&
+  ok "send of a message too big for a size limit stops, saying only so, publishing nothing" ||
+  no "send of a message too big for a size limit didn't stop with only its own message, or left a file (exit $rc)" "$out"
 # a hold whose sender's key is gone from the registry still blocks in a strict store when the reader has a pin for it,
 # whatever is at the pin's path (here a folder): before, only a file there counted, and the hold was dropped
 as pm5 setup --store "$T/store" --adapter dir --name pm5 >/dev/null; as pm5 register --kind t --about t >/dev/null
