@@ -20,7 +20,8 @@ taken the folder meanwhile; an adapter without races can ignore it). It can call
 sed script, not text. When sourced, it sets `AD_HISTORY`: `full` when `ad_history` lists every version of every file,
 consumed and removed ones included (git), or `current` when it lists only the files there now (dir). Unset counts as
 `current`, and `holds` then warns on stderr that a consumed or deleted hold or release isn't seen, though its verdict
-and exit code stay the same. It defines:
+and exit code stay the same. It may also set `AD_IN_PLACE=1` when writes into `AD_DIR` land directly in the store
+rather than waiting for `ad_commit` (dir), so error messages after partial writes say accurately what was published. It defines:
 
 | Function | Must |
 |---|---|

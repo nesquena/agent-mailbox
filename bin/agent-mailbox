@@ -66,8 +66,9 @@ NS=agent-mailbox
 AD_LEFTOVER= AD_UNSTICK=
 # (adapter state the CLI reads, set only by the adapter: never taken from the environment. AD_PUBLISHED: this
 # command's sync published what an earlier one left; AD_UNCHANGED: its last commit wrote nothing new; AD_HISTORY, set
-# when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not)
-AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY=
+# when it's sourced: full when ad_history lists every version, anything else (or unset) when it may not; AD_IN_PLACE:
+# non-empty when writes into AD_DIR land directly in the store, without waiting for ad_commit)
+AD_DIR= AD_PUBLISHED= AD_UNCHANGED= AD_HISTORY= AD_IN_PLACE=
 NAME_RE='^[a-z0-9][a-z0-9.-]{0,62}$'
 # a record's groups: up to 16 names, one space between each (PROTOCOL.md section 4)
 GROUPS_RE='^[a-z0-9][a-z0-9.-]{0,62}( [a-z0-9][a-z0-9.-]{0,62}){0,15}$'
@@ -1042,8 +1043,13 @@ send)
   for c in $consume; do
     p="$M/inbox/$ME/$c"
     rm -f "$p" "$p.sig" 2>/dev/null || :
-    ! there "$p" || die "sent $(rel "$f"), but can't remove $(rel "$p")"
-    { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"), but can't remove $(rel "$p").sig"
+    if [ -n "${AD_IN_PLACE:-}" ]; then
+      ! there "$p" || die "sent $(rel "$f"), but can't remove $(rel "$p")"
+      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"), but can't remove $(rel "$p").sig"
+    else
+      ! there "$p" || die "can't remove $(rel "$p"); nothing was sent"
+      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig; nothing was sent"
+    fi
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
     else paths="$paths $ROOT/inbox/$ME/$c.sig"; fi
     paths="$paths $ROOT/inbox/$ME/$c"
@@ -1196,14 +1202,18 @@ consume)
     valid_msg "$b"
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"
   done
+  done_c=""
   for a in "$@"; do
     b=$(basename -- "$a"); p="$M/inbox/$ME/$b"
     rm -f "$p" "$p.sig" 2>/dev/null || :
-    ! there "$p" || die "can't remove $(rel "$p")"
-    { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig"
+    # (on an in-place adapter, earlier messages in this call are already gone; name them if a later one fails)
+    pf=""; [ -z "${AD_IN_PLACE:-}" ] || [ -z "$done_c" ] || pf="consumed $done_c; "
+    ! there "$p" || die "${pf}can't remove $(rel "$p")"
+    { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "${pf}can't remove $(rel "$p").sig"
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
     else paths="$paths $ROOT/inbox/$ME/$b.sig"; fi
     paths="$paths $ROOT/inbox/$ME/$b"
+    done_c="${done_c:+$done_c, }$b"
   done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename -- "$a" .md; done | tr '\n' ' ')" $paths
