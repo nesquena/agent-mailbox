@@ -33,7 +33,7 @@ AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 # that prompts on its own (after a git upgrade, macOS's git-credential-osxkeychain can make Keychain ask once to let the
 # new helper in); and, for an SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
 ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_EDITOR=: git -c submodule.recurse=false -c core.hooksPath=/dev/null \
-  -c core.fsmonitor= "$@"; }
+  -c core.fsmonitor= -c gc.autoDetach=false -c maintenance.autoDetach=false "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 # ad_gist: git's error output as one line for a die or warn. In the C locale, so a byte that isn't UTF-8 can't make grep
@@ -82,6 +82,7 @@ ad_open() {
   AD_DIR="$STATE/checkouts/$AD_ID"
   mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
   ad_lock
+  ad_clear_locks
   if [ ! -d "$AD_DIR/.git" ]; then
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
@@ -370,13 +371,22 @@ ad_lock() {
 # ad_unlock: release the lock, if this command still holds it
 ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
 
+# ad_clear_locks: under ad_lock, remove any regular, non-symlink git lock file older than a minute (outside objects/),
+# plus index.lock at once (as before). Git holds ref, HEAD, packed-refs, rebase and peek locks for milliseconds, so a
+# lock older than a minute is debris from a command killed mid-git; a fresh one may belong to a live watcher's peek or
+# an orphaned git child whose shell was killed, so it's left alone. Runs inside .git with relative paths so
+# metacharacters in $STATE never confuse -path './objects'
+ad_clear_locks() { [ -d "$AD_DIR/.git" ] || return 0
+  ( CDPATH= cd -P -- "$AD_DIR/.git" || exit 0
+    if [ -f index.lock ] && [ ! -L index.lock ]; then rm -f -- index.lock; fi
+    find . -path './objects' -prune -o -type f -name '*.lock' -mmin +1 -exec rm -f -- {} + ) >/dev/null 2>&1 || :; }
+
 ad_sync() {
-  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: a rebase it
-  # was in, git's own lock on the index, and changes it never committed (a message written but not added, a consumed
-  # one removed but not committed). Commits it made but couldn't push are kept, and published below
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris (ad_open already
+  # cleared stale git lock files): a rebase it was in, and changes it never committed (a message written but not added,
+  # a consumed one removed but not committed). Commits it made but couldn't push are kept, and published below
   if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
-  rm -f "$AD_DIR/.git/index.lock"
   if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
   # (-x: files the store's own .gitignore names are debris too)
   ad_git clean -fdqx -- "$ROOT" 2>/dev/null
@@ -424,8 +434,9 @@ ad_ls_branch() {
 ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
+# (no auto-gc/maintenance outside ad_lock: a watcher shouldn't run pack-refs or repack concurrently with lock-holding commands)
 ad_peek() {
-  ad_git fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }

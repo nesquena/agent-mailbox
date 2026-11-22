@@ -67,9 +67,16 @@
 
 - **`update` and `trust` with a key whose pin is unchanged no longer stop on a read-only pins folder.** There's
   nothing to write, so the pin is left as it is; before, both stopped with "can't record ...'s key".
-- **Under a file size limit, a write or signing that fails prints only the CLI's own message.** The shell's "File size
-  limit exceeded" no longer comes first; and under bash, what couldn't be written (a key's fingerprint, a lock line) is
-  no longer printed to the terminal.
+- **Under a file size limit, a write to the CLI's own files or signing that fails prints only the CLI's own message.**
+  The shell's "File size limit exceeded" no longer comes first (git's own writes in the git adapter still print git's
+  or the shell's line); and under bash, what couldn't be written (a key's fingerprint, a lock line) is no longer
+  printed to the terminal.
+- **The git adapter now clears stale git lock files older than a minute** (outside `.git/objects/`, such as `HEAD.lock`,
+  branch locks, `REBASE_HEAD.lock` and a stalled watcher's `peek.lock`) left by an earlier command killed mid-git
+  (`SIGXFSZ`, `SIGKILL`, or a crash), so the next command recovers instead of failing until the lock file is removed by
+  hand; fresh locks are left alone. Git's automatic housekeeping (`gc`, `maintenance`) now runs before the command
+  returns (`autoDetach=false`) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
+  housekeeping off.
 - **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
 
 ## 0.1.3 (2026-11-19)
