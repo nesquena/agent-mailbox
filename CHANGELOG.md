@@ -36,8 +36,9 @@
   `consume`, `send --consume` and `verify` by name stop when `mailbox/inbox` can't be searched (they said "not in your
   inbox" or "no such message"). A file or dangling link at `mailbox/inbox/<you>` stops `list`, `read` and `watch` with
   "isn't a folder", where they said no mail. `consume` and `send --consume` stop before acting when your inbox folder
-  can't be written (e.g. read-only), and fail if removing a message leaves the file behind, where `consume` reported
-  "consumed" and `send --consume` sent without consuming. `watch` looks at the inbox at every tick, so one that becomes
+  can't be written (e.g. read-only), and fail if removing a message (or its `.sig`) leaves the file behind — reporting
+  what was already sent or consumed on in-place adapters (`dir`), or that nothing was sent on staged ones (`git`) —
+  where before `consume` reported "consumed" and `send --consume` sent without consuming. `watch` looks at the inbox at every tick, so one that becomes
   unsearchable mid-watch stops it at once, even when no inbox holds a message (it ran to its limit and said "no mail").
 - **`holds` with an adapter that keeps no history (dir) passes over a message consumed while it reads**, as `read`
   does; it stopped, saying it couldn't read the store's history.
