@@ -1297,35 +1297,64 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   expect "a rebase left half-removed doesn't stop the next command" 3 "no mail" as lp list
   : > "$ck/.git/index.lock"; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
   expect "nor does git's lock on the index, and a file written but never added isn't taken for mail" 3 "no mail" as lp list
-  # nor stale git locks left by a command killed mid-commit (HEAD.lock, refs/heads/main.lock, next-index-*.lock,
-  # config.lock, packed-refs.lock); a live watcher's peek lock is left alone
-  mkdir -p "$ck/.git/refs/agent-mailbox"
-  : > "$ck/.git/HEAD.lock"; : > "$ck/.git/refs/heads/main.lock"; : > "$ck/.git/next-index-99999.lock"
-  : > "$ck/.git/config.lock"; : > "$ck/.git/packed-refs.lock"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
-  expect "nor do stale git locks (HEAD, branch, next-index, config, packed-refs) stop the next send" 0 "^sent " as lp send lr after-stale-locks "$T/m"
-  [ ! -e "$ck/.git/HEAD.lock" ] && [ ! -e "$ck/.git/refs/heads/main.lock" ] &&
-    [ ! -e "$ck/.git/next-index-99999.lock" ] && [ ! -e "$ck/.git/config.lock" ] &&
-    [ ! -e "$ck/.git/packed-refs.lock" ] && [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] &&
-    ok "stale git locks are removed while a watcher's peek lock is kept" ||
-    no "stale git locks weren't cleared cleanly" "$(find "$ck/.git" -name '*.lock' 2>&1)"
-  rm -f "$ck/.git/HEAD.lock" "$ck/.git/refs/heads/main.lock" "$ck/.git/next-index-99999.lock" "$ck/.git/config.lock" "$ck/.git/packed-refs.lock" "$ck/.git/refs/agent-mailbox/peek.lock"
-  # ad_clear_locks uses relative paths inside .git, so glob metacharacters in the state path never break peek.lock's exclusion
-  mk="$T/st[1]/.git"; mkdir -p "$mk/refs/agent-mailbox" "$mk/refs/heads"
-  : > "$mk/HEAD.lock"; : > "$mk/refs/heads/main.lock"; : > "$mk/refs/agent-mailbox/peek.lock"
+  [ ! -e "$ck/.git/index.lock" ] && ok "and a fresh index.lock is removed at once" || no "fresh index.lock remained"
+  # other git locks are cleared only once older than a minute (outside objects/, non-symlinks); fresh locks are left alone
+  : > "$ck/.git/HEAD.lock"
+  expect "a fresh HEAD.lock is left alone and stops send" 1 "git commit failed|can't update from the store" as lp send lr fresh-head "$T/m"
+  [ -f "$ck/.git/HEAD.lock" ] && ok "and the fresh HEAD.lock stays in place" || no "fresh HEAD.lock was removed"
+  touch -t 202001010000 "$ck/.git/HEAD.lock"
+  expect "a stale HEAD.lock is cleared and send succeeds" 0 "^sent " as lp send lr stale-head "$T/m"
+  [ ! -e "$ck/.git/HEAD.lock" ] && ok "and the stale HEAD.lock was removed" || no "stale HEAD.lock remained"
+  : > "$ck/.git/refs/heads/main.lock"
+  expect "a fresh branch lock is left alone and stops send" 1 "git commit failed|can't update from the store" as lp send lr fresh-branch "$T/m"
+  [ -f "$ck/.git/refs/heads/main.lock" ] && ok "and the fresh branch lock stays in place" || no "fresh branch lock was removed"
+  touch -t 202001010000 "$ck/.git/refs/heads/main.lock"
+  expect "a stale branch lock is cleared and send succeeds" 0 "^sent " as lp send lr stale-branch "$T/m"
+  [ ! -e "$ck/.git/refs/heads/main.lock" ] && ok "and the stale branch lock was removed" || no "stale branch lock remained"
+  git clone -q "$T/store.git" "$T/rhc" && echo remote > "$T/rhc/mailbox/rh-conflict" &&
+    git -C "$T/rhc" add mailbox/rh-conflict && git -C "$T/rhc" -c user.name=s -c user.email=s@s commit -qm rh-remote &&
+    git -C "$T/rhc" push -q origin HEAD:main
+  echo local > "$ck/mailbox/rh-conflict" && git -C "$ck" add mailbox/rh-conflict &&
+    git -C "$ck" -c user.name=lp -c user.email=lp@e commit -qm rh-local
+  : > "$ck/.git/REBASE_HEAD.lock"
+  expect "a fresh REBASE_HEAD.lock is left alone and stops a conflicted send" 1 "can't update from the store" as lp send lr fresh-rebase-head "$T/m"
+  [ -f "$ck/.git/REBASE_HEAD.lock" ] && ok "and the fresh REBASE_HEAD.lock stays in place" || no "fresh REBASE_HEAD.lock was removed"
+  touch -t 202001010000 "$ck/.git/REBASE_HEAD.lock"
+  expect "a stale REBASE_HEAD.lock is cleared and a conflicted send recovers" 0 "^sent " as lp send lr stale-rebase-head "$T/m"
+  [ ! -e "$ck/.git/REBASE_HEAD.lock" ] && ok "and the stale REBASE_HEAD.lock was removed" || no "stale REBASE_HEAD.lock remained"
+  as lr send lp for-peek "$T/m" >/dev/null 2>&1
+  mkdir -p "$ck/.git/refs/agent-mailbox"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
+  expect "a fresh peek.lock is left alone and watch fails" 1 "watch: can't read the store" as lp watch 1 15
+  [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] && ok "and the fresh peek.lock stays in place" || no "fresh peek.lock was removed"
+  touch -t 202001010000 "$ck/.git/refs/agent-mailbox/peek.lock"
+  expect "a stale peek.lock is cleared and watch wakes on waiting mail" 0 "^mail for lp:" as lp watch 1 5
+  [ ! -e "$ck/.git/refs/agent-mailbox/peek.lock" ] && ok "and the stale peek.lock was removed" || no "stale peek.lock remained"
+  : > "$ck/.git/refs/agent-mailbox/peek.lock"; touch -t 202001010000 "$ck/.git/refs/agent-mailbox/peek.lock"
+  expect "a stale peek.lock is also cleared before send" 0 "^sent " as lp send lr stale-peek "$T/m"
+  [ ! -e "$ck/.git/refs/agent-mailbox/peek.lock" ] && ok "and send removed the stale peek.lock" || no "send left stale peek.lock"
+  # ad_clear_locks uses relative paths inside .git, so metacharacters in $STATE never break -path './objects'; symlinks and fresh locks stay
+  mk="$T/st[1]/.git"; mkdir -p "$mk/objects/pack" "$mk/refs/heads"
+  echo keep > "$mk/keep"; touch -t 202001010000 "$mk/keep"
+  ln -s keep "$mk/link.lock"; touch -h -t 202001010000 "$mk/link.lock" 2>/dev/null || :
+  ln -s keep "$mk/index.lock"
+  : > "$mk/objects/pack/p.lock"; touch -t 202001010000 "$mk/objects/pack/p.lock"
+  : > "$mk/HEAD.lock"; touch -t 202001010000 "$mk/HEAD.lock"
+  : > "$mk/refs/heads/main.lock"
   "$SH" -c 'BRANCH=main AD_DIR=$2; . "$1"; ad_clear_locks' sh "$ROOTDIR/adapters/git.sh" "$T/st[1]"
-  [ ! -e "$mk/HEAD.lock" ] && [ ! -e "$mk/refs/heads/main.lock" ] && [ -f "$mk/refs/agent-mailbox/peek.lock" ] &&
-    ok "ad_clear_locks keeps peek.lock even when the path holds glob metacharacters" ||
-    no "ad_clear_locks mishandled metacharacters in path" "$(find "$mk" -name '*.lock' 2>&1)"
-  # ad_peek runs outside ad_lock, so it turns off auto-gc and auto-maintenance (no pack-refs/gc --auto outside the lock)
+  [ ! -e "$mk/HEAD.lock" ] && [ -f "$mk/refs/heads/main.lock" ] && [ -f "$mk/objects/pack/p.lock" ] &&
+    [ -L "$mk/link.lock" ] && [ -L "$mk/index.lock" ] && [ -f "$mk/keep" ] &&
+    ok "ad_clear_locks skips objects/, symlinks and fresh locks even with metacharacters in path" ||
+    no "ad_clear_locks mishandled objects/, symlinks or metacharacters" "$(find "$mk" -maxdepth 3 2>&1)"
+  # ad_peek runs outside ad_lock, so it turns off auto-gc and auto-maintenance (no pack-refs/repack outside the lock)
   as lr send lp pk1 "$T/m" >/dev/null 2>&1; as lr send lp pk2 "$T/m" >/dev/null 2>&1
   : > "$T/peek.trace"
   GIT_TRACE="$T/peek.trace" GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=gc.autoPackLimit GIT_CONFIG_VALUE_0=1 \
     GIT_CONFIG_KEY_1=transfer.unpackLimit GIT_CONFIG_VALUE_1=1 \
     "$SH" -c 'BRANCH=main AD_DIR=$2; . "$1"; ad_peek mailbox/inbox/lp >/dev/null' \
     sh "$ROOTDIR/adapters/git.sh" "$ck" 2>/dev/null
-  grep -q "fetch" "$T/peek.trace" && ! grep -Eq "pack-refs|gc --auto|maintenance run" "$T/peek.trace" &&
-    ok "ad_peek turns off auto-gc and maintenance (no pack-refs outside ad_lock)" ||
-    no "ad_peek ran housekeeping outside ad_lock" "$(grep -E 'fetch|pack-refs|gc|maintenance' "$T/peek.trace" 2>&1 | head -n 10)"
+  grep -q "fetch" "$T/peek.trace" && ! grep -Eq "pack-refs|maintenance run|repack" "$T/peek.trace" &&
+    ok "ad_peek turns off auto-gc and maintenance (no pack-refs/repack outside ad_lock)" ||
+    no "ad_peek ran housekeeping outside ad_lock" "$(grep -E 'fetch|pack-refs|gc|maintenance|repack' "$T/peek.trace" 2>&1 | head -n 10)"
   for m in $(as lp list 2>/dev/null | sed 's#.*/##'); do as lp consume "$m" >/dev/null 2>&1; done
   # nor one the store's own .gitignore names
   git clone -q "$T/store.git" "$T/gi" && printf '*-junk.md\n' > "$T/gi/mailbox/inbox/lp/.gitignore" &&

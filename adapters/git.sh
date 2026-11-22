@@ -371,28 +371,20 @@ ad_lock() {
 # ad_unlock: release the lock, if this command still holds it
 ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
 
-# ad_clear_locks: under ad_lock, no other lock-holding command is in this clone, ad_g keeps gc and maintenance from
-# detaching past the lock, and ad_peek turns auto-gc/maintenance off outside the lock. So any lock left on the index,
-# HEAD, packed-refs, config, refs/ or logs/ (other than peek's own ref/reflog locks) is debris from a command killed by
-# SIGXFSZ, SIGKILL or a crash. Runs inside .git with relative paths so metacharacters in $STATE never break ! -path
+# ad_clear_locks: under ad_lock, remove any regular, non-symlink git lock file older than a minute (outside objects/),
+# plus index.lock at once (as before). Git holds ref, HEAD, packed-refs, rebase and peek locks for milliseconds, so a
+# lock older than a minute is debris from a command killed mid-git; a fresh one may belong to a live watcher's peek or
+# an orphaned git child whose shell was killed, so it's left alone. Runs inside .git with relative paths so
+# metacharacters in $STATE never confuse -path './objects'
 ad_clear_locks() { [ -d "$AD_DIR/.git" ] || return 0
   ( CDPATH= cd -P -- "$AD_DIR/.git" || exit 0
-    for f in index.lock HEAD.lock packed-refs.lock config.lock next-index-*.lock; do
-      [ -f "$f" ] && [ ! -L "$f" ] && rm -f -- "$f"
-    done
-    for d in refs logs; do
-      [ -d "$d" ] || continue
-      find "$d" -type f -name '*.lock' \
-        ! -path 'refs/agent-mailbox/peek.lock' \
-        ! -path 'logs/refs/agent-mailbox/peek.lock' \
-        -exec rm -f -- {} +
-    done ) 2>/dev/null || :; }
+    if [ -f index.lock ] && [ ! -L index.lock ]; then rm -f -- index.lock; fi
+    find . -path './objects' -prune -o -type f -name '*.lock' -mmin +1 -exec rm -f -- {} + ) >/dev/null 2>&1 || :; }
 
 ad_sync() {
-  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: stale git lock
-  # files, a rebase it was in, and changes it never committed (a message written but not added, a consumed one removed
-  # but not committed). Commits it made but couldn't push are kept, and published below
-  ad_clear_locks
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris (ad_open already
+  # cleared stale git lock files): a rebase it was in, and changes it never committed (a message written but not added,
+  # a consumed one removed but not committed). Commits it made but couldn't push are kept, and published below
   if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
@@ -442,8 +434,7 @@ ad_ls_branch() {
 ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
-# (no auto-gc/maintenance outside ad_lock: pack-refs or reflog expire would take refs/, HEAD or packed-refs locks while
-# another command holds ad_lock and clears stale locks)
+# (no auto-gc/maintenance outside ad_lock: a watcher shouldn't run pack-refs or repack concurrently with lock-holding commands)
 ad_peek() {
   ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
