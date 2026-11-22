@@ -4745,6 +4745,102 @@ else
   chmod 644 "$I/ub/$f.sig"
   expect "with both readable, verify says verified" 0 "^verified$" as ub verify "$f"
   expect "and sent lists both" 0 "-ua-m1\.md to ub" as ua sent
+  # the inbox not searchable: consume, send --consume and verify by name stop, saying so, as reply does (they said "not
+  # in your inbox" and "no such message")
+  chmod 600 "$I"
+  expect "consume with the mailbox's inbox not searchable stops, saying so" 1 "^agent-mailbox: can't list mailbox/inbox\$" as ub consume "$f"
+  expect "and so does send --consume" 1 "^agent-mailbox: can't list mailbox/inbox\$" as ub send ua t "$T/rb" --consume "$f"
+  expect "and verify by name" 1 "^agent-mailbox: can't list mailbox/inbox\$" as ub verify "$f"
+  expect "and reply" 1 "^agent-mailbox: can't list mailbox/inbox\$" as ub reply "$f" "$T/rb"
+  chmod 755 "$I"
+  # a sender's record that can't be read stops read, saying how to read the rest
+  chmod 000 "$A/ua.md"
+  expect "read with a sender's record that can't be read stops, saying how to read the rest" 1 \
+    "^agent-mailbox: can't read mailbox/agents/ua\.md, ua's record \(consume its message, or pass --except, to read the rest\)" as ub read
+  chmod 644 "$A/ua.md"
+  # one rule for a record path: anything there that isn't a file that can be read, and isn't known to be absent, stops
+  # the command (a folder or a FIFO there read as no key)
+  mv "$A/ua.md" "$A/ua.kept"; mkdir "$A/ua.md"
+  expect "verify with a folder at the sender's record path stops, saying so" 1 "^agent-mailbox: mailbox/agents/ua\.md isn't a file" as ub verify "$f"
+  rmdir "$A/ua.md"
+  if mkfifo "$A/ua.md" 2>/dev/null; then
+    expect "and with a FIFO there" 1 "^agent-mailbox: mailbox/agents/ua\.md isn't a file" as ub verify "$f"; rm -f "$A/ua.md"
+  else sk "verify with a FIFO at the sender's record path (no mkfifo here)"; fi
+  mv "$A/ua.kept" "$A/ua.md"
+  # a record that can't be read isn't a retired or keyless agent: send to it, watch as it, agents (with --names) and
+  # trust stop, saying so (they said "isn't an active agent", "(you) is retired", showed it as (!name) or left it out,
+  # and "has no registered key")
+  chmod 000 "$A/ub.md"
+  expect "send to an agent whose record can't be read stops, saying so" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" \
+    as ua send ub t2 "$T/rb"
+  expect "and so does watch, as that agent" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as ub watch 1 2
+  expect "and agents" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as uc agents
+  out=$(as uc agents --names 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" &&
+    ok "and agents --names, rather than leaving it out" || no "agents --names left out a record it couldn't read (exit $rc)" "$out"
+  expect "and trust" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as uc trust ub
+  chmod 644 "$A/ub.md"
+  # watch looks at the inbox every tick: one that becomes unsearchable mid-watch, where no inbox holds a message (so
+  # the poll's token needn't change), stops it at once, saying so; and one already unsearchable stops it before its
+  # first wait (a store of its own, with no mail)
+  for a in wa wb; do as $a setup --store "$T/s2" --adapter dir --name $a >/dev/null; done
+  as wa init >/dev/null; for a in wa wb; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  I2="$T/s2/mailbox/inbox"
+  (as wb watch 1 30 > "$T/w2.out" 2>&1; echo "exit $?" >> "$T/w2.out") & wj=$!
+  sleep 3; chmod 600 "$I2"; t0=$(date +%s); i=0
+  while kill -0 "$wj" 2>/dev/null && [ $i -lt 40 ]; do sleep 0.5; i=$((i+1)); done; t1=$(date +%s)
+  kill_tree "$wj"; wait "$wj" 2>/dev/null; chmod 755 "$I2"
+  grep -q "^agent-mailbox: can't list mailbox/inbox" "$T/w2.out" && grep -qx "exit 1" "$T/w2.out" && [ $((t1 - t0)) -le 5 ] &&
+    ok "watch stops within a tick when the inbox becomes unsearchable, with no mail anywhere (after $((t1 - t0))s)" ||
+    no "watch didn't stop within a tick when the inbox became unsearchable ($((t1 - t0))s)" "$(cat "$T/w2.out")"
+  chmod 600 "$I2"; t0=$(date +%s); out=$(as wb watch 10 30 2>&1); rc=$?; t1=$(date +%s); chmod 755 "$I2"
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't list mailbox/inbox" && [ $((t1 - t0)) -le 3 ] &&
+    ok "and one already unsearchable stops it before its first wait" || no "watch waited before stopping on an unsearchable inbox (exit $rc, $((t1 - t0))s)" "$out"
+  # your own record that can't be read: update and register stop before writing anything (update rewrote it with its
+  # fields blank, dropping the key and the body), list with no mail says so rather than "no mail", and doctor says it
+  # once, in its own line
+  ck=$(cksum < "$A/ub.md"); chmod 000 "$A/ub.md"
+  expect "update with your own record unreadable stops, saying so" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" \
+    as ub update --status active
+  expect "and so does update --about" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as ub update --about x
+  expect "and register" 1 "^agent-mailbox: can't read mailbox/agents/ub\.md, ub's record" as ub register --kind t --about t
+  out=$(as ub doctor 2>&1)
+  printf '%s\n' "$out" | grep -q "^FAIL ub is registered and active: its record (mailbox/agents/ub\.md) can't be read" &&
+    ! printf '%s\n' "$out" | grep -q "^agent-mailbox: \|run register" &&
+    ok "doctor says once that your record can't be read" || no "doctor didn't say once that your record can't be read" "$out"
+  chmod 644 "$A/ub.md"
+  [ "$(cksum < "$A/ub.md")" = "$ck" ] && ok "and the record is left as it was" || no "an update that couldn't read the record changed it" "$(cat "$A/ub.md")"
+  chmod 000 "$A/uc.md"
+  expect "list with no mail and your own record unreadable stops, saying so, not no mail" 1 "^agent-mailbox: can't read mailbox/agents/uc\.md, uc's record" as uc list
+  # (and read, with no hint about other messages: there are none)
+  expect "and so does read, with no hint about other messages" 1 "^agent-mailbox: can't read mailbox/agents/uc\.md, uc's record\$" as uc read
+  chmod 644 "$A/uc.md"
+  # agents checks the records folder and every record before printing anything: a list cut short reads as the whole
+  for m in 000 600; do chmod "$m" "$A"
+    out=$(as uc agents --names 2>&1); rc=$?
+    [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't list mailbox/agents" ] && ok "agents --names with the records folder at $m stops before printing anything" ||
+      no "agents --names with the records folder at $m printed, or didn't stop (exit $rc)" "$out"; done
+  chmod 755 "$A"; chmod 000 "$A/ub.md"
+  out=$(as uc agents --names 2>&1); rc=$?
+  [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/ub.md, ub's record" ] &&
+    ok "agents --names with a later record unreadable prints no name before stopping" || no "agents --names printed names before a record it couldn't read (exit $rc)" "$out"
+  out=$(as uc agents 2>&1); rc=$?
+  [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/ub.md, ub's record" ] &&
+    ok "and agents prints no header" || no "agents printed before a record it couldn't read (exit $rc)" "$out"
+  chmod 644 "$A/ub.md"
+  # a file, or a link that leads nowhere, where an inbox folder should be isn't an inbox with no mail
+  rm -rf "$I/uc"; : > "$I/uc"
+  expect "list with a file where your inbox folder should be stops, saying so" 1 "^agent-mailbox: mailbox/inbox/uc isn't a folder" as uc list
+  rm -f "$I/uc"; ln -s "$T/nowhere" "$I/uc"
+  expect "and so does one with a link there that leads nowhere" 1 "^agent-mailbox: mailbox/inbox/uc isn't a folder" as uc list
+  rm -f "$I/uc"
+  # send --consume with your inbox searchable but not listable or writable (111) stops before sending: it sent, and
+  # didn't consume
+  n0=$(ls "$I/ua" 2>/dev/null | wc -l); chmod 111 "$I/ub"
+  expect "send --consume with your inbox searchable only stops before sending, saying so" 1 "^agent-mailbox: can't list mailbox/inbox/ub\$" \
+    as ub send ua t3 "$T/rb" --consume "$f"
+  chmod 755 "$I/ub"
+  [ "$(ls "$I/ua" 2>/dev/null | wc -l)" = "$n0" ] && ok "and sends nothing" || no "send --consume that couldn't consume sent" "$(ls "$I/ua")"
 fi
 chmod -R u+rwX "$T/store" 2>/dev/null
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
@@ -4754,6 +4850,14 @@ mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/
 out=$(PATH="$T/shim:$PATH"; export PATH; as ua sent 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-ua-h1\.md to ub" && ! printf '%s\n' "$out" | grep -q -- "-ua-m1\.md\|can't read" &&
   ok "sent passes over a message consumed while it lists, and lists the rest" || no "sent stopped on, or listed, a message consumed while it listed (exit $rc)" "$out"
+# a message consumed between holds' peek and its copy (here a stand-in find that removes one after the peek lists it)
+# is passed over, as read does: with no history there's no version to read, and before, holds stopped, blaming the store
+echo hi2 | as ua send ub m2 - >/dev/null; m2=$(ls "$I/ub" | grep -- '-ua-m2\.md$')
+printf '%s\n' '#!/bin/sh' "'$(command -v find)' \"\$@\"; rc=\$?" 'case " $* " in (*" mailbox/inbox/ub -maxdepth 1 "*) rm -f "$RACE_RM" ;; esac' \
+  'exit $rc' > "$T/shim/find"; chmod +x "$T/shim/find"
+out=$(PATH="$T/shim:$PATH" RACE_RM="$I/ub/$m2"; export PATH RACE_RM; as ub holds "u#1" --version v1 2>&1); rc=$?
+[ "$rc" = 5 ] && printf '%s\n' "$out" | grep -q "u#1 is held by ua" && [ ! -e "$I/ub/$m2" ] &&
+  ok "holds passes over a message consumed after its peek, and decides on the rest" || no "holds stopped on a message consumed after its peek (exit $rc)" "$out"
 else sk "dir-unreadable (no ssh-keygen -Y)"; fi
 }
 section dir-unreadable sec_dir_unreadable dir
