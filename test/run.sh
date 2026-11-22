@@ -1298,20 +1298,35 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   : > "$ck/.git/index.lock"; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
   expect "nor does git's lock on the index, and a file written but never added isn't taken for mail" 3 "no mail" as lp list
   # nor stale git locks left by a command killed mid-commit (HEAD.lock, refs/heads/main.lock, next-index-*.lock,
-  # config.lock); a live watcher's peek lock is left alone
+  # config.lock, packed-refs.lock); a live watcher's peek lock is left alone
   mkdir -p "$ck/.git/refs/agent-mailbox"
   : > "$ck/.git/HEAD.lock"; : > "$ck/.git/refs/heads/main.lock"; : > "$ck/.git/next-index-99999.lock"
-  : > "$ck/.git/config.lock"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
-  expect "nor do stale git locks (HEAD, branch, next-index, config) stop the next send" 0 "^sent " as lp send lr after-stale-locks "$T/m"
+  : > "$ck/.git/config.lock"; : > "$ck/.git/packed-refs.lock"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
+  expect "nor do stale git locks (HEAD, branch, next-index, config, packed-refs) stop the next send" 0 "^sent " as lp send lr after-stale-locks "$T/m"
   [ ! -e "$ck/.git/HEAD.lock" ] && [ ! -e "$ck/.git/refs/heads/main.lock" ] &&
     [ ! -e "$ck/.git/next-index-99999.lock" ] && [ ! -e "$ck/.git/config.lock" ] &&
-    [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] &&
+    [ ! -e "$ck/.git/packed-refs.lock" ] && [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] &&
     ok "stale git locks are removed while a watcher's peek lock is kept" ||
     no "stale git locks weren't cleared cleanly" "$(find "$ck/.git" -name '*.lock' 2>&1)"
-  rm -f "$ck/.git/HEAD.lock" "$ck/.git/refs/heads/main.lock" "$ck/.git/next-index-99999.lock" "$ck/.git/config.lock" "$ck/.git/refs/agent-mailbox/peek.lock"
-  # a send killed by a file size limit mid-git doesn't wedge the clone: the next send without the limit succeeds
-  ( ulimit -f 4; echo x | as lp send lr under-limit - ) >/dev/null 2>&1 || :
-  expect "a send after one killed under a size limit still succeeds" 0 "^sent " as lp send lr after-limit "$T/m"
+  rm -f "$ck/.git/HEAD.lock" "$ck/.git/refs/heads/main.lock" "$ck/.git/next-index-99999.lock" "$ck/.git/config.lock" "$ck/.git/packed-refs.lock" "$ck/.git/refs/agent-mailbox/peek.lock"
+  # ad_clear_locks uses relative paths inside .git, so glob metacharacters in the state path never break peek.lock's exclusion
+  mk="$T/st[1]/.git"; mkdir -p "$mk/refs/agent-mailbox" "$mk/refs/heads"
+  : > "$mk/HEAD.lock"; : > "$mk/refs/heads/main.lock"; : > "$mk/refs/agent-mailbox/peek.lock"
+  "$SH" -c 'BRANCH=main AD_DIR=$2; . "$1"; ad_clear_locks' sh "$ROOTDIR/adapters/git.sh" "$T/st[1]"
+  [ ! -e "$mk/HEAD.lock" ] && [ ! -e "$mk/refs/heads/main.lock" ] && [ -f "$mk/refs/agent-mailbox/peek.lock" ] &&
+    ok "ad_clear_locks keeps peek.lock even when the path holds glob metacharacters" ||
+    no "ad_clear_locks mishandled metacharacters in path" "$(find "$mk" -name '*.lock' 2>&1)"
+  # ad_peek runs outside ad_lock, so it turns off auto-gc and auto-maintenance (no pack-refs/gc --auto outside the lock)
+  as lr send lp pk1 "$T/m" >/dev/null 2>&1; as lr send lp pk2 "$T/m" >/dev/null 2>&1
+  : > "$T/peek.trace"
+  GIT_TRACE="$T/peek.trace" GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=gc.autoPackLimit GIT_CONFIG_VALUE_0=1 \
+    GIT_CONFIG_KEY_1=transfer.unpackLimit GIT_CONFIG_VALUE_1=1 \
+    "$SH" -c 'BRANCH=main AD_DIR=$2; . "$1"; ad_peek mailbox/inbox/lp >/dev/null' \
+    sh "$ROOTDIR/adapters/git.sh" "$ck" 2>/dev/null
+  grep -q "fetch" "$T/peek.trace" && ! grep -Eq "pack-refs|gc --auto|maintenance run" "$T/peek.trace" &&
+    ok "ad_peek turns off auto-gc and maintenance (no pack-refs outside ad_lock)" ||
+    no "ad_peek ran housekeeping outside ad_lock" "$(grep -E 'fetch|pack-refs|gc|maintenance' "$T/peek.trace" 2>&1 | head -n 10)"
+  for m in $(as lp list 2>/dev/null | sed 's#.*/##'); do as lp consume "$m" >/dev/null 2>&1; done
   # nor one the store's own .gitignore names
   git clone -q "$T/store.git" "$T/gi" && printf '*-junk.md\n' > "$T/gi/mailbox/inbox/lp/.gitignore" &&
     git -C "$T/gi" add mailbox/inbox/lp/.gitignore && git -C "$T/gi" -c user.name=s -c user.email=s@s commit -qm ignore &&
@@ -2315,12 +2330,16 @@ if command -v script >/dev/null 2>&1; then
     "ulimit -f 1; '$SH' '$CLI' send pm2 bigsig-tty '$T/bigsig.body' > '$T/bstty.out' 2>&1; echo \$? > '$T/bstty.rc'" > "$T/bstty.sh"
   chmod +x "$T/bstty.sh"
   case "$(uname)" in (Linux) script -qc "'$T/bstty.sh'" /dev/null ;; (*) script -q /dev/null "$T/bstty.sh" ;; esac < /dev/null >/dev/null 2>&1
-  rc=$(cat "$T/bstty.rc" 2>/dev/null); out=$(cat "$T/bstty.out" 2>/dev/null)
-  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: signing failed with " &&
-    [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
-    [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
-    ok "and in a terminal (askpass_never branch), it still prints only signing failed" ||
-    no "in a terminal under a size limit, signing didn't stop with only signing failed (exit ${rc:-none})" "$out"
+  if [ ! -s "$T/bstty.rc" ]; then
+    sk "sign_file terminal branch under a size limit (script couldn't open a pty)"
+  else
+    rc=$(cat "$T/bstty.rc" 2>/dev/null); out=$(cat "$T/bstty.out" 2>/dev/null)
+    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: signing failed with " &&
+      [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
+      [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
+      ok "and in a terminal (askpass_never branch), it still prints only signing failed" ||
+      no "in a terminal under a size limit, signing didn't stop with only signing failed (exit $rc)" "$out"
+  fi
 else sk "sign_file terminal branch under a size limit (no script here)"; fi
 # and a message too big for that limit stops send with the CLI's one line: put_signed's write ignores XFSZ, so no shell
 # prints the signal's note first

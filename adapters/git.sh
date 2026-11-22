@@ -33,7 +33,7 @@ AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 # that prompts on its own (after a git upgrade, macOS's git-credential-osxkeychain can make Keychain ask once to let the
 # new helper in); and, for an SSH store, ssh's own prompts (a key's passphrase, an unknown host key)
 ad_g() { GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_EDITOR=: git -c submodule.recurse=false -c core.hooksPath=/dev/null \
-  -c core.fsmonitor= "$@"; }
+  -c core.fsmonitor= -c gc.autoDetach=false -c maintenance.autoDetach=false "$@"; }
 ad_git() { ad_g -C "$AD_DIR" "$@"; }
 ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.2 + $1 / 255 * 1.8; exit}')"; }
 # ad_gist: git's error output as one line for a die or warn. In the C locale, so a byte that isn't UTF-8 can't make grep
@@ -371,14 +371,22 @@ ad_lock() {
 # ad_unlock: release the lock, if this command still holds it
 ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
 
-# ad_clear_locks: under ad_lock, no other lock-holding command is in this clone, so any git *.lock left behind is
-# debris from a command killed by SIGXFSZ, SIGKILL or a crash. A live watch releases ad_lock and only fetches into
-# refs/agent-mailbox/peek, so peek's own ref/reflog locks are left alone
+# ad_clear_locks: under ad_lock, no other lock-holding command is in this clone, ad_g keeps gc and maintenance from
+# detaching past the lock, and ad_peek turns auto-gc/maintenance off outside the lock. So any lock left on the index,
+# HEAD, packed-refs, config, refs/ or logs/ (other than peek's own ref/reflog locks) is debris from a command killed by
+# SIGXFSZ, SIGKILL or a crash. Runs inside .git with relative paths so metacharacters in $STATE never break ! -path
 ad_clear_locks() { [ -d "$AD_DIR/.git" ] || return 0
-  find "$AD_DIR/.git" -type f -name '*.lock' \
-    ! -path "$AD_DIR/.git/refs/agent-mailbox/peek.lock" \
-    ! -path "$AD_DIR/.git/logs/refs/agent-mailbox/peek.lock" \
-    -exec rm -f -- {} + 2>/dev/null || :; }
+  ( CDPATH= cd -P -- "$AD_DIR/.git" || exit 0
+    for f in index.lock HEAD.lock packed-refs.lock config.lock next-index-*.lock; do
+      [ -f "$f" ] && [ ! -L "$f" ] && rm -f -- "$f"
+    done
+    for d in refs logs; do
+      [ -d "$d" ] || continue
+      find "$d" -type f -name '*.lock' \
+        ! -path 'refs/agent-mailbox/peek.lock' \
+        ! -path 'logs/refs/agent-mailbox/peek.lock' \
+        -exec rm -f -- {} +
+    done ) 2>/dev/null || :; }
 
 ad_sync() {
   # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: stale git lock
@@ -434,8 +442,10 @@ ad_ls_branch() {
 ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
+# (no auto-gc/maintenance outside ad_lock: pack-refs or reflog expire would take refs/, HEAD or packed-refs locks while
+# another command holds ad_lock and clears stale locks)
 ad_peek() {
-  ad_git fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
