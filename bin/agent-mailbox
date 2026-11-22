@@ -1038,9 +1038,13 @@ send)
   else warn "sending unsigned (no key at $KEY, no ssh-keygen -Y (OpenSSH 8.1+), its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   PUT_NEW=""
   for c in $consume; do
-    rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig" 2>/dev/null || :
-    { ! there "$M/inbox/$ME/$c" && ! there "$M/inbox/$ME/$c.sig"; } || die "can't remove $(rel "$M/inbox/$ME/$c")"
-    paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"
+    p="$M/inbox/$ME/$c"
+    rm -f "$p" "$p.sig" 2>/dev/null || :
+    ! there "$p" || die "sent $(rel "$f"), but can't remove $(rel "$p")"
+    { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"), but can't remove $(rel "$p").sig"
+    if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
+    else paths="$paths $ROOT/inbox/$ME/$c.sig"; fi
+    paths="$paths $ROOT/inbox/$ME/$c"
   done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -1188,12 +1192,16 @@ consume)
   for a in "$@"; do
     b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
     valid_msg "$b"
-    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
+    [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"
   done
   for a in "$@"; do
-    b=$(basename -- "$a")
-    rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig" 2>/dev/null || :
-    { ! there "$M/inbox/$ME/$b" && ! there "$M/inbox/$ME/$b.sig"; } || die "can't remove $(rel "$M/inbox/$ME/$b")"
+    b=$(basename -- "$a"); p="$M/inbox/$ME/$b"
+    rm -f "$p" "$p.sig" 2>/dev/null || :
+    ! there "$p" || die "can't remove $(rel "$p")"
+    { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig"
+    if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
+    else paths="$paths $ROOT/inbox/$ME/$b.sig"; fi
+    paths="$paths $ROOT/inbox/$ME/$b"
   done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename -- "$a" .md; done | tr '\n' ' ')" $paths

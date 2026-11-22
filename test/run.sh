@@ -4699,7 +4699,7 @@ for a in ua ub uc; do as $a setup --store "$T/store" --adapter dir --name $a >/d
 as ua init --require-signatures >/dev/null; for a in ua ub uc; do as $a register --kind t --about t >/dev/null 2>&1; done
 echo r | as uc send ub r1 - --release "u#1 v1" >/dev/null; sleep 1
 echo h | as ua send ub h1 - --hold "u#1 v1" >/dev/null; echo hi | as ua send ub m1 - >/dev/null
-I="$T/store/mailbox/inbox"; A="$T/store/mailbox/agents"; f=$(ls "$I/ub" | grep -- '-ua-m1\.md$')
+I="$T/store/mailbox/inbox"; A="$T/store/mailbox/agents"; f=$(ls "$I/ub" | grep -- '-ua-m1\.md$'); echo x > "$T/rb"
 chmod 000 "$A/ua.md"
 if cat "$A/ua.md" >/dev/null 2>&1; then chmod 644 "$A/ua.md"; sk "unreadable inboxes, records and messages (this user reads any file)"
 else
@@ -4904,13 +4904,40 @@ out=$(as ub doctor 2>&1); rc=$?
   ok "doctor says when your own record path isn't a file" ||
   no "doctor didn't say your own record path isn't a file (exit $rc)" "$out"
 rmdir "$A/ub.md"; mv "$A/ub.kept" "$A/ub.md"
-# consume fails loud if the file survives rm (here a stand-in rm that leaves it behind on a writable inbox)
-mkdir -p "$T/norm"; printf '%s\n' '#!/bin/sh' 'exit 1' > "$T/norm/rm"; chmod +x "$T/norm/rm"
+# consume and send --consume fail loud if the file survives rm (here a stand-in rm that leaves m1 behind on a writable inbox)
+mkdir -p "$T/norm"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) exit 1 ;; esac; done' \
+  'exec /bin/rm "$@"' > "$T/norm/rm"; chmod +x "$T/norm/rm"
 out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$f" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/ub/$f\$" &&
   ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$f" ] &&
   ok "consume fails loud when rm leaves the file behind" ||
   no "consume reported success when rm left the file behind (exit $rc)" "$out"
+out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfail "$T/rb" --consume "$f" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmfail\.md, but can't remove mailbox/inbox/ub/$f\$" &&
+  [ -f "$I/ub/$f" ] && ok "and send --consume says it sent, then fails loud when rm leaves the file behind" ||
+  no "send --consume didn't report sent + removal failure when rm left the file behind (exit $rc)" "$out"
+# a folder planted at <msg>.md.sig doesn't block consuming the message: the .md is removed, the folder is left with a warning
+echo hi3 | as ua send ub m3 - >/dev/null; m3=$(ls "$I/ub" | grep -- '-ua-m3\.md$')
+rm -f "$I/ub/$m3.sig"; mkdir "$I/ub/$m3.sig"
+out=$(as ub consume "$m3" 2>"$T/cs.err"); rc=$?; err=$(cat "$T/cs.err")
+[ "$rc" = 0 ] && [ "$out" = consumed ] && [ ! -e "$I/ub/$m3" ] && [ -d "$I/ub/$m3.sig" ] &&
+  printf '%s\n' "$err" | grep -qx "agent-mailbox: left mailbox/inbox/ub/$m3.sig (isn't a file)" &&
+  ok "consume removes the message and warns when a folder sits at its .sig (dir)" ||
+  no "consume failed on a folder at .sig (dir, exit $rc)" "out:$NL$out${NL}err:$NL$err"
+rmdir "$I/ub/$m3.sig"
+# and the same on the git adapter (where a writer commits a file inside <msg>.md.sig/)
+git init --bare -q "$T/gs.git"
+for a in ga gb; do as $a setup --store "$T/gs.git" --adapter git --name $a >/dev/null; done
+as ga init >/dev/null; for a in ga gb; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+echo hi3 | as ga send gb m3 - >/dev/null 2>&1
+m3g=$(basename "$(as gb list | grep -- '-ga-m3\.md$')")
+git clone -q -b main "$T/gs.git" "$T/gw" && mkdir -p "$T/gw/mailbox/inbox/gb/$m3g.sig" && echo x > "$T/gw/mailbox/inbox/gb/$m3g.sig/x" &&
+  git -C "$T/gw" add -A && git -C "$T/gw" -c user.name=t -c user.email=t@t commit -qm plant && git -C "$T/gw" push -q origin main
+out=$(as gb consume "$m3g" 2>"$T/csg.err"); rc=$?; err=$(cat "$T/csg.err")
+[ "$rc" = 0 ] && [ "$out" = consumed ] && ! as gb list 2>/dev/null | grep -q -- "$m3g" &&
+  printf '%s\n' "$err" | grep -qx "agent-mailbox: left mailbox/inbox/gb/$m3g.sig (isn't a file)" &&
+  ok "and on the git adapter too" ||
+  no "consume failed on a folder at .sig (git, exit $rc)" "out:$NL$out${NL}err:$NL$err"
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
 # row: sent lists the rest, as it did before it stopped on one it can't read
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \
