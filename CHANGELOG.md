@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
+  Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
+  name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give
+  `--consume` once for each message.
 - **A watcher stopped right as it starts no longer leaves its pid files behind.** `watch` wrote its pid files before it
   set the traps that remove them, so a TERM or INT in between (a harness ending it at once) left stale files. The traps
   now come first.
@@ -81,8 +85,8 @@
   branch locks, `REBASE_HEAD.lock` and a stalled watcher's `peek.lock`) left by an earlier command killed mid-git
   (`SIGXFSZ`, `SIGKILL`, or a crash), so the next command recovers instead of failing until the lock file is removed by
   hand; fresh locks are left alone (`index.lock`, as before, is cleared at once). Git's automatic housekeeping (`gc`,
-  `maintenance`) now runs before the command returns (`autoDetach=false`, so any housekeeping warnings print on the
-  command's own stderr) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
+  `maintenance`) now runs before the command returns (`autoDetach=false`, so a commit's housekeeping warnings print on
+  the command's own stderr) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
   housekeeping off.
 - **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
 

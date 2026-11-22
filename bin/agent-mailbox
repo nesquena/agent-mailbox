@@ -941,12 +941,13 @@ send)
       (*) once "$1" ;; esac
     case "$1" in
       --context) context=$2; ctx_set=1 ;; --in-reply-to) reply=$(basename -- "$2") ;; --needs) needs=$2 ;;
-      --consume) consume="$consume $(basename -- "$2")" ;; --hold) hold=$2 ;; --release) release=$2 ;;
+      --consume) c=$(basename -- "$2"); valid_msg "$c"
+        case " $consume " in (*" $c "*) ;; (*) consume="${consume:+$consume }$c" ;; esac ;; --hold) hold=$2 ;; --release) release=$2 ;;
       *) unknown "$1" ;;
     esac; shift 2
   done
   need_me; valid_name "$to"
-  [ -n "$reply" ] || reply=$(echo $consume | cut -d' ' -f1); [ -n "$reply" ] || reply=none
+  [ -n "$reply" ] || reply=${consume%% *}; [ -n "$reply" ] || reply=none
   [ -n "$hold" ] && [ -n "$release" ] && die "a message records a hold or a release, not both"
   for h in "$hold" "$release"; do [ -z "$h" ] || matches "$ITEM_RE" "$h" || die "a hold or release is \"<item> <version>\", not '$h'"; done
   for v in context:"$context" topic:"$topic" in_reply_to:"$reply" needs:"$needs" hold:"$hold" release:"$release"; do one_line "${v%%:*}" "${v#*:}"; done
@@ -990,12 +991,7 @@ send)
   # list but not write would send and then fail to consume)
   [ -z "$consume" ] || { no_link "$M/inbox/$ME"; inbox_ok "$ME"
     [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"; }
-  uc=""
-  for c in $consume; do valid_msg "$c"
-    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"
-    case " $uc " in (*" $c "*) ;; (*) uc="${uc:+$uc }$c" ;; esac
-  done
-  consume=$uc
+  for c in $consume; do [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
   if [ -z "$ctx_set" ] && matches "$MSG_RE" "$reply" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
@@ -1047,15 +1043,17 @@ send)
   done_c=""
   for c in $consume; do
     p="$M/inbox/$ME/$c"
-    rm -f "$p" "$p.sig" 2>/dev/null || :
+    rm -f "$p" 2>/dev/null || :
     if [ -n "${AD_IN_PLACE:-}" ]; then
       if [ -n "$done_c" ]; then pf="sent $(rel "$f"); consumed $done_c; "
       else pf="sent $(rel "$f"), but "; fi
       ! there "$p" || die "${pf}can't remove $(rel "$p")"
       done_c="${done_c:+$done_c, }$c"
+      rm -f "$p.sig" 2>/dev/null || :
       { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"); consumed $done_c; can't remove $(rel "$p").sig"
     else
       ! there "$p" || die "can't remove $(rel "$p"); nothing was sent"
+      rm -f "$p.sig" 2>/dev/null || :
       { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig; nothing was sent"
     fi
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
@@ -1215,11 +1213,12 @@ consume)
   done_c=""
   for b in $uc; do
     p="$M/inbox/$ME/$b"
-    rm -f "$p" "$p.sig" 2>/dev/null || :
+    rm -f "$p" 2>/dev/null || :
     # (on an in-place adapter, removed messages are already gone; name them if a removal or .sig removal fails)
     pf=""; [ -z "${AD_IN_PLACE:-}" ] || [ -z "$done_c" ] || pf="consumed $done_c; "
     ! there "$p" || die "${pf}can't remove $(rel "$p")"
     done_c="${done_c:+$done_c, }$b"
+    rm -f "$p.sig" 2>/dev/null || :
     pf=""; [ -z "${AD_IN_PLACE:-}" ] || pf="consumed $done_c; "
     { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "${pf}can't remove $(rel "$p").sig"
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"

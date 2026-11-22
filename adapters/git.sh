@@ -378,9 +378,10 @@ ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" !
 # lock older than a minute is debris from a command killed mid-git; a fresh one may belong to a live watcher's peek or
 # an orphaned git child whose shell was killed, so it's left alone. Runs inside .git with relative paths so
 # metacharacters in $STATE never confuse -path './objects'.
-# ceiling: GNU and BusyBox `find -mmin +1` round down to whole minutes, so a stale lock waits up to 120 s there; a lock
-# with a future mtime (clock stepped back) is never cleared; and objects/maintenance.lock (inside objects/, left if a
-# group kill cuts off foreground maintenance) isn't cleared, so auto-maintenance skips until that file is deleted by hand
+# ceiling: BusyBox `find -mmin +1` rounds down to whole minutes, so a stale lock waits up to 120 s there (GNU and BSD
+# find clear it after 60 s); a lock with a future mtime (clock stepped back) is never cleared; and
+# objects/maintenance.lock (inside objects/, left if a group kill cuts off foreground maintenance) isn't cleared, so
+# auto-maintenance skips until that file is deleted by hand
 ad_clear_locks() { [ -d "$AD_DIR/.git" ] || return 0
   ( CDPATH= cd -P -- "$AD_DIR/.git" || exit 0
     if [ -f index.lock ] && [ ! -L index.lock ]; then rm -f -- index.lock; fi

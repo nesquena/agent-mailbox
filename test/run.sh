@@ -5096,18 +5096,19 @@ out=$(as ub doctor 2>&1); rc=$?
   ok "doctor says when your own record path isn't a file" ||
   no "doctor didn't say your own record path isn't a file (exit $rc)" "$out"
 rmdir "$A/ub.md"; mv "$A/ub.kept" "$A/ub.md"
-# consume and send --consume fail loud if the file survives rm (here a stand-in rm that leaves m1 behind on a writable inbox)
-mkdir -p "$T/norm"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) exit 1 ;; esac; done' \
-  'exec /bin/rm "$@"' > "$T/norm/rm"; chmod +x "$T/norm/rm"
+# consume and send --consume fail loud if the file survives rm (here a stand-in rm that skips m1 while still removing
+# any other argument passed to the same rm call, so removing .md before .sig keeps m1's .sig intact)
+mkdir -p "$T/norm"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*/inbox/ub/*-ua-m1.md) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/norm/rm"; chmod +x "$T/norm/rm"
 out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$f" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/ub/$f\$" &&
-  ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$f" ] &&
-  ok "consume fails loud when rm leaves the file behind" ||
-  no "consume reported success when rm left the file behind (exit $rc)" "$out"
+  ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$f" ] && [ -f "$I/ub/$f.sig" ] &&
+  ok "consume fails loud when rm leaves the file behind and keeps its .sig" ||
+  no "consume reported success or dropped .sig when rm left the file behind (exit $rc)" "$out"
 out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfail "$T/rb" --consume "$f" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmfail\.md, but can't remove mailbox/inbox/ub/$f\$" &&
-  [ -f "$I/ub/$f" ] && ok "and send --consume says it sent, then fails loud when rm leaves the file behind" ||
-  no "send --consume didn't report sent + removal failure when rm left the file behind (exit $rc)" "$out"
+  [ -f "$I/ub/$f" ] && [ -f "$I/ub/$f.sig" ] &&
+  ok "and send --consume says it sent, then fails loud when rm leaves the file behind and keeps its .sig" ||
+  no "send --consume didn't report sent + removal failure or dropped .sig when rm left the file behind (exit $rc)" "$out"
 # multi-file consume on dir names earlier consumed files when a later one can't be removed
 echo hi7 | as ua send ub m7 - >/dev/null; m7=$(ls "$I/ub" | grep -- '-ua-m7\.md$')
 out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$m7" "$f" 2>&1); rc=$?
@@ -5134,6 +5135,21 @@ out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfaild "$T/rb" --consume
   [ ! -e "$I/ub/$m8d" ] && [ -f "$I/ub/$f" ] &&
   ok "send --consume dedupes repeated names in its consumed list" ||
   no "send --consume listed a repeated name twice (exit $rc)" "$out"
+# --consume validates names before any unquoted expansion, so a glob matching a file in cwd never expands to it
+mkdir -p "$T/globcwd"; : > "$T/globcwd/$f"
+out=$(cd "$T/globcwd" && as ub send ua globtest "$T/rb" --consume '*.md' 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "isn't a message file name" &&
+  [ -f "$I/ub/$f" ] && [ -z "$(ls "$I/ua" | grep -- '-ub-globtest\.md$')" ] &&
+  ok "send --consume refuses a glob even when cwd holds a matching inbox file name" ||
+  no "send --consume expanded a glob against cwd (exit $rc)" "$out"
+# an empty name, and several names in one value, are refused too, before anything is sent
+echo hi8e | as ua send ub m8e - >/dev/null; m8e=$(ls "$I/ub" | grep -- '-ua-m8e\.md$')
+for v in '' "$m8e $f"; do
+  out=$(as ub send ua oneper "$T/rb" --consume "$v" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "isn't a message file name" && [ -f "$I/ub/$m8e" ] && [ -f "$I/ub/$f" ] &&
+    [ -z "$(ls "$I/ua" | grep -- '-ub-oneper\.md$')" ] && ok "send --consume refuses the value '$v'" ||
+    no "send --consume took the value '$v' (exit $rc)" "$out"
+done
 # when .sig is a file/link that survives rm (even after .md is removed), consume and send --consume both fail loud
 # and on dir, a message whose .md was already removed is named in "consumed" even if its .sig then survives
 mkdir -p "$T/normsig"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*.md.sig) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/normsig/rm"; chmod +x "$T/normsig/rm"
@@ -5212,6 +5228,14 @@ out=$(PATH="$T/normsig:$PATH" AD_IN_PLACE=1; export PATH AD_IN_PLACE; as gb send
   ! as ga list 2>/dev/null | grep -q -- "-gb-rmsigg" && as gb list 2>/dev/null | grep -q -- "$m5g" &&
   ok "on the git adapter, send --consume failing rm on .sig says nothing was sent, and sends nothing" ||
   no "git send --consume failing rm on .sig misreported or sent (exit $rc)" "$out"
+# repeated consume args on git are deduped in the commit message too
+echo hi6 | as ga send gb m6 - >/dev/null 2>&1
+m6g=$(basename "$(as gb list | grep -- '-ga-m6\.md$')")
+as gb consume "$m6g" "$m6g" >/dev/null 2>&1
+subj=$(git --git-dir="$T/gs.git" log -1 --format=%s main)
+[ "$subj" = "mail(to-gb): consumed ${m6g%.md}" ] &&
+  ok "git consume with a repeated name names it once in the commit message" ||
+  no "git consume repeated the name in the commit message" "$subj"
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
 # row: sent lists the rest, as it did before it stopped on one it can't read
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \
