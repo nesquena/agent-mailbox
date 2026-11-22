@@ -54,7 +54,8 @@
 #
 # Exit codes: 0 ok; 1 usage or store error; 2 watch timed out; 3 no mail; 4 a change saved locally isn't published
 # (re-run a command with the same name to publish; don't resend, unless it says this command wrote nothing: then run it
-# again once that's published); 5 not released; 6 signature not verified.
+# again once that's published); 5 not released; 6 signature not verified; 130 stopped by a signal (watch, or a
+# git-adapter command holding or waiting on its lock).
 set -u
 VERSION=0.1.3
 # (set only by init, around its own commit: never taken from the environment)

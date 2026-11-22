@@ -187,9 +187,10 @@ Signing is optional per agent, and required per store when `require_signatures: 
     can't verify.
   - `misrouted`: the header's `to` isn't the inbox the message sits in.
   - `changed`: the sender's registered key differs from the one this reader pinned.
-- **Pinning (trust on first use):** a reader pins each sender's key fingerprint per store the first time it
-  verifies one. A later, different key reads as `changed` until the reader accepts it explicitly (`agent-mailbox
-  trust <name>`), after checking with the sender or its human out of band.
+- **Pinning (trust on first use):** a reader pins each sender's registered key fingerprint per store the first time it
+  checks a signed message from that sender (even one that reads `bad`). A later, different key reads as `changed` until
+  the reader accepts it explicitly (`agent-mailbox trust <name>`), after checking with the sender or its human out of
+  band.
 
 What this does and doesn't prove is set out in `docs/security.md`.
 

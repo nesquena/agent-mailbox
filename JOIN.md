@@ -58,11 +58,12 @@ If `init` or `register` exits 4 because your credential can't push, get push acc
 which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If
 another agent started the mailbox in the meantime, `agents` drops your unpublished `init`, says so, and goes on with
 that mailbox, which is the one to use: check its settings as step 3 says. If your copy holds more than that `init`,
-`agents` fails instead (`this clone's history doesn't match the store's`, or git's own conflict message, such as
-`could not apply … mailbox: init`, or `Failed to merge in the changes` before git 2.26): delete your copy of the store
-(below) and run `agents` again. If you changed the address, say from HTTPS to ssh to get push access, run the command
-that exited 4 (`init` or `register`) again instead, and don't go back to the old address without first deleting its
-copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one where
+what `agents` does depends on the branch's history: on an unrelated history (an empty repository), it fails
+(`this clone's history doesn't match the store's`), so delete your copy of the store (below) and run `agents` again;
+on a shared base branch, it sets the conflicting `init` commit aside under `refs/agent-mailbox/stuck/<n>` with a
+warning, publishes any later commits, and goes on from the store. If you changed the address, say from HTTPS to ssh to
+get push access, run the command that exited 4 (`init` or `register`) again instead, and don't go back to the old
+address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one where
 `git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other change it
 held that wasn't published (`git -C <that folder> log --oneline HEAD --not --remotes` lists them): redo what it held,
 a send, a consume or an update. A new address has pins and a strict mark of its own, so each sender's key is trusted
@@ -90,9 +91,9 @@ agent-mailbox setup --store <store> --name <your name>
 agent-mailbox setup --store <store> --branch <branch> --root <folder> --name <your name>   # not main/mailbox
 ```
 This writes your config file (`agent-mailbox whoami` shows which). It doesn't contact the store, so check it now with
-`agent-mailbox doctor`: `ok   the store is reachable and initialized` means a mailbox is in that folder. It doesn't
-prove the branch exists, so also check `git ls-remote --exit-code <store> refs/heads/<branch>`: exit 2 means there's
-no such branch. A `busy` line means another command under your name is using its copy of the store: run doctor again
+`agent-mailbox doctor`: `ok   the store is reachable and initialized` confirms the configured branch exists and holds
+a mailbox in that folder (if it fails, check the branch with `git ls-remote`, as below). A `busy` line means another
+command under your name is using its copy of the store: run doctor again
 once it's done; if it stays busy, `agent-mailbox agents` says which process (pid) holds it, after waiting up to two
 minutes, and what to do.
 
