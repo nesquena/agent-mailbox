@@ -77,8 +77,8 @@
   branch locks, `REBASE_HEAD.lock` and a stalled watcher's `peek.lock`) left by an earlier command killed mid-git
   (`SIGXFSZ`, `SIGKILL`, or a crash), so the next command recovers instead of failing until the lock file is removed by
   hand; fresh locks are left alone (`index.lock`, as before, is cleared at once). Git's automatic housekeeping (`gc`,
-  `maintenance`) now runs before the command returns (`autoDetach=false`, so any housekeeping warnings print on the
-  command's own stderr) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
+  `maintenance`) now runs before the command returns (`autoDetach=false`, so a commit's housekeeping warnings print on
+  the command's own stderr) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
   housekeeping off.
 - **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
 
