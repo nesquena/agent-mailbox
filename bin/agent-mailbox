@@ -882,18 +882,17 @@ agents)
     case "$1" in --human) once "$1"; fh=$2 ;; --env) once "$1"; fe=$2 ;; --group) fg="$fg $2" ;; esac; shift 2
   done
   load_adapter; ad_sync; need_store
-  # (the records folder, and every record, are checked before anything is printed: a list cut short by one that can't
-  # be read would read as the whole of it, to a loop over agents --names)
+  # (the records folder, and every record file, are checked before anything is printed: a list cut short by an
+  # unreadable file or dangling link would read as the whole of it, to a loop over agents --names. A non-file entry at
+  # <name>.md — a folder, a FIFO, or a link to either — is skipped with a warning in the listing loop)
   listable "$M/agents"
   for r in "$M"/agents/*.md; do { [ -e "$r" ] || [ -L "$r" ]; } || continue
-    n=$(basename "$r" .md); ! matches "$NAME_RE" "$n" || record_ok "$n" || :; done
+    n=$(basename "$r" .md); ! matches "$NAME_RE" "$n" || { [ -e "$r" ] && [ ! -f "$r" ]; } || record_ok "$n" || :; done
   [ -n "$names" ] || printf '%-24s %-8s %-10s %-4s %-16s %-8s %-24s %s\n' NAME STATUS KIND KEY HUMAN ENV GROUPS ABOUT; fps=
-  # (a records folder that can't be listed, or a record that can't be read, stops it: one left out, or shown as a record
-  # with no name, would read as an agent that isn't there)
-  listable "$M/agents"
   for r in "$M"/agents/*.md; do
     { [ -e "$r" ] || [ -L "$r" ]; } || continue
     n=$(basename "$r" .md); matches "$NAME_RE" "$n" || continue
+    if [ -e "$r" ] && [ ! -f "$r" ]; then warn "skipping $(rel "$r") (isn't a file)"; continue; fi
     record_ok "$n" || continue
     h=$(claim human "$r"); e=$(claim env "$r"); g=$(claim groups "$r")
     [ -z "$fh" ] || [ "$h" = "$fh" ] || continue
@@ -984,9 +983,10 @@ send)
     matches "$KEY_RE" "$mine" || die "can't read the public half of $KEY: restore it with 'ssh-keygen -y -f $KEY > $KEY.pub', then send again"
     die "this store requires signatures, and your registry record's key isn't the one at $KEY"; fi
   # removals go through your own inbox folder, never a link to elsewhere (a link inside it is removed as a link)
-  # (an inbox that can't be read stops it before anything is sent, as for consume: one it could search but not list or
-  # write would send and then not consume)
-  [ -z "$consume" ] || { no_link "$M/inbox/$ME"; inbox_ok "$ME"; }
+  # (an inbox that can't be read or written stops it before anything is sent, as for consume: one it could search or
+  # list but not write would send and then fail to consume)
+  [ -z "$consume" ] || { no_link "$M/inbox/$ME"; inbox_ok "$ME"
+    [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"; }
   for c in $consume; do valid_msg "$c"
     [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
@@ -1037,7 +1037,11 @@ send)
   if [ -n "$signer" ]; then put_signed "$f" "$msg" "$rk"; paths="$paths $(rel "$f") $(rel "$f").sig"
   else warn "sending unsigned (no key at $KEY, no ssh-keygen -Y (OpenSSH 8.1+), its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   PUT_NEW=""
-  for c in $consume; do rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig"; paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"; done
+  for c in $consume; do
+    rm -f "$M/inbox/$ME/$c" "$M/inbox/$ME/$c.sig" 2>/dev/null || :
+    { ! there "$M/inbox/$ME/$c" && ! there "$M/inbox/$ME/$c.sig"; } || die "can't remove $(rel "$M/inbox/$ME/$c")"
+    paths="$paths $ROOT/inbox/$ME/$c $ROOT/inbox/$ME/$c.sig"
+  done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
   echo "sent $(rel "$f")" ;;
@@ -1178,14 +1182,19 @@ consume)
   [ $# -ge 1 ] || die "usage: consume [--] <file>..."
   need_me; load_adapter; ad_sync; need_store
   paths=""; no_link "$M/inbox/$ME"
-  # (an inbox that can't be read stops it, saying so, rather than "not in your inbox")
+  # (an inbox that can't be read or written stops it, saying so, rather than "not in your inbox" or reporting consumed)
   inbox_ok "$ME"
+  [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"
   for a in "$@"; do
     b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
     valid_msg "$b"
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"; paths="$paths $ROOT/inbox/$ME/$b $ROOT/inbox/$ME/$b.sig"
   done
-  for a in "$@"; do b=$(basename -- "$a"); rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig"; done
+  for a in "$@"; do
+    b=$(basename -- "$a")
+    rm -f "$M/inbox/$ME/$b" "$M/inbox/$ME/$b.sig" 2>/dev/null || :
+    { ! there "$M/inbox/$ME/$b" && ! there "$M/inbox/$ME/$b.sig"; } || die "can't remove $(rel "$M/inbox/$ME/$b")"
+  done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename -- "$a" .md; done | tr '\n' ' ')" $paths
   echo "consumed" ;;
@@ -1417,8 +1426,9 @@ doctor)
   # the name's line needs the store: after that line fails, a stale copy (or none) would give a wrong hint. A name whose
   # record isn't active (retired) comes back with update, not register, which would refuse it; but only its own agent
   # should, so the hint says so: by key when the record's key and this agent's can be compared, otherwise in words
-  # (a record that can't be read is said so, once, rather than leaking record_ok's message from inside this $(...))
+  # (a record that isn't a file or can't be read is said so, once, rather than leaking record_ok's message from inside this $(...))
   [ -z "$ME" ] || [ -z "$sok" ] || case $( load_adapter >/dev/null 2>&1 || exit
+      if [ -e "$(record "$ME")" ] && [ ! -f "$(record "$ME")" ]; then echo notfile; exit; fi
       [ -z "$(record_ok "$ME" 2>&1 >/dev/null)" ] || { echo unread; exit; }
       if active "$ME"; then echo ok
       elif [ -f "$(record "$ME")" ]; then
@@ -1427,6 +1437,7 @@ doctor)
         elif [ -n "$rk" ] && [ -f "$KEY" ]; then echo nopub; else echo retired; fi
       fi ) in
     (ok) echo "ok   $ME is registered and active" ;;
+    (notfile) echo "FAIL $ME is registered and active: $ROOT/agents/$ME.md isn't a file"; ok=1 ;;
     (unread) echo "FAIL $ME is registered and active: its record ($ROOT/agents/$ME.md) can't be read here: check its permissions and its folder's"; ok=1 ;;
     (mine) echo "FAIL $ME is registered and active: it's retired here; run update --status active to come back"; ok=1 ;;
     (other) echo "FAIL $ME is registered and active: it's another agent's retired name here (its key isn't yours); pick another name"; ok=1 ;;

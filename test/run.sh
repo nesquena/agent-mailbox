@@ -4819,7 +4819,10 @@ else
   for m in 000 600; do chmod "$m" "$A"
     out=$(as uc agents --names 2>&1); rc=$?
     [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't list mailbox/agents" ] && ok "agents --names with the records folder at $m stops before printing anything" ||
-      no "agents --names with the records folder at $m printed, or didn't stop (exit $rc)" "$out"; done
+      no "agents --names with the records folder at $m printed, or didn't stop (exit $rc)" "$out"
+    out=$(as uc agents 2>&1); rc=$?
+    [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't list mailbox/agents" ] && ok "and agents at $m prints no header" ||
+      no "agents with the records folder at $m printed a header, or didn't stop (exit $rc)" "$out"; done
   chmod 755 "$A"; chmod 000 "$A/ub.md"
   out=$(as uc agents --names 2>&1); rc=$?
   [ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/ub.md, ub's record" ] &&
@@ -4841,8 +4844,73 @@ else
     as ub send ua t3 "$T/rb" --consume "$f"
   chmod 755 "$I/ub"
   [ "$(ls "$I/ua" 2>/dev/null | wc -l)" = "$n0" ] && ok "and sends nothing" || no "send --consume that couldn't consume sent" "$(ls "$I/ua")"
+  # a read-only own inbox (555: searchable and listable, not writable) stops consume and send --consume before acting
+  chmod 555 "$I/ub"
+  expect "consume with a read-only own inbox (555) stops, saying so" 1 "^agent-mailbox: can't write mailbox/inbox/ub\$" \
+    as ub consume "$f"
+  expect "and so does send --consume" 1 "^agent-mailbox: can't write mailbox/inbox/ub\$" \
+    as ub send ua t3 "$T/rb" --consume "$f"
+  chmod 755 "$I/ub"
+  [ -f "$I/ub/$f" ] && [ "$(ls "$I/ua" 2>/dev/null | wc -l)" = "$n0" ] &&
+    ok "and neither sends nor drops the message" || no "555 inbox sent or dropped the message" "$(ls "$I/ua"; ls "$I/ub")"
 fi
 chmod -R u+rwX "$T/store" 2>/dev/null
+# in agents / agents --names only, a non-file entry at <name>.md (folder, FIFO, or link to either) is skipped with a
+# warning on stderr so the rest still list, while a dangling link still stops the listing and single-agent commands stop
+mkdir "$A/zz.md"
+out=$(as uc agents --names 2>"$T/az.err"); rc=$?; err=$(cat "$T/az.err")
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx ua && printf '%s\n' "$out" | grep -qx ub &&
+  ! printf '%s\n' "$out" | grep -q "zz\|skipping" &&
+  printf '%s\n' "$err" | grep -qx "agent-mailbox: skipping mailbox/agents/zz.md (isn't a file)" &&
+  ok "agents --names skips a folder at agents/zz.md with a warning, listing the rest" ||
+  no "agents --names didn't skip folder at agents/zz.md cleanly (exit $rc)" "out:$NL$out${NL}err:$NL$err"
+out=$(as uc agents 2>"$T/az.err"); rc=$?; err=$(cat "$T/az.err")
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "^NAME " && printf '%s\n' "$out" | grep -q "^ua " &&
+  ! printf '%s\n' "$out" | grep -q "^zz \|skipping" &&
+  printf '%s\n' "$err" | grep -qx "agent-mailbox: skipping mailbox/agents/zz.md (isn't a file)" &&
+  ok "and agents does the same for the table" ||
+  no "agents didn't skip folder at agents/zz.md cleanly (exit $rc)" "out:$NL$out${NL}err:$NL$err"
+expect "send to zz still stops on the folder at agents/zz.md" 1 "^agent-mailbox: mailbox/agents/zz\.md isn't a file\$" \
+  as ua send zz t4 "$T/rb"
+sed 's/^from: ua$/from: zz/' "$I/ub/$f" > "$T/zz-msg.md"; cp "$I/ub/$f.sig" "$T/zz-msg.md.sig"
+expect "and verify of zz's mail still stops on it" 1 "^agent-mailbox: mailbox/agents/zz\.md isn't a file\$" \
+  as ub verify "$T/zz-msg.md"
+rmdir "$A/zz.md"
+mkdir -p "$T/zdir"; ln -s "$T/zdir" "$A/zz.md"
+out=$(as uc agents --names 2>"$T/az.err"); rc=$?; err=$(cat "$T/az.err")
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx ua &&
+  printf '%s\n' "$err" | grep -qx "agent-mailbox: skipping mailbox/agents/zz.md (isn't a file)" &&
+  ok "agents --names skips a link to a folder at agents/zz.md with a warning" ||
+  no "agents --names didn't skip link to folder (exit $rc)" "out:$NL$out${NL}err:$NL$err"
+rm -f "$A/zz.md"
+if mkfifo "$A/zz.md" 2>/dev/null; then
+  out=$(as uc agents --names 2>"$T/az.err"); rc=$?; err=$(cat "$T/az.err")
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx ua &&
+    printf '%s\n' "$err" | grep -qx "agent-mailbox: skipping mailbox/agents/zz.md (isn't a file)" &&
+    ok "agents --names skips a FIFO at agents/zz.md with a warning" ||
+    no "agents --names didn't skip FIFO (exit $rc)" "out:$NL$out${NL}err:$NL$err"
+  rm -f "$A/zz.md"
+else sk "agents --names skips a FIFO at agents/zz.md (no mkfifo here)"; fi
+ln -s "$T/nowhere" "$A/zz.md"
+out=$(as uc agents --names 2>&1); rc=$?
+[ "$rc" = 1 ] && [ "$out" = "agent-mailbox: can't read mailbox/agents/zz.md, zz's record" ] &&
+  ok "agents --names still stops on a dangling link at agents/zz.md" ||
+  no "agents --names didn't stop on a dangling link (exit $rc)" "$out"
+rm -f "$A/zz.md"
+mv "$A/ub.md" "$A/ub.kept"; mkdir "$A/ub.md"
+out=$(as ub doctor 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^FAIL ub is registered and active: mailbox/agents/ub\.md isn't a file\$" &&
+  ! printf '%s\n' "$out" | grep -q "^agent-mailbox: \|run register" &&
+  ok "doctor says when your own record path isn't a file" ||
+  no "doctor didn't say your own record path isn't a file (exit $rc)" "$out"
+rmdir "$A/ub.md"; mv "$A/ub.kept" "$A/ub.md"
+# consume fails loud if the file survives rm (here a stand-in rm that leaves it behind on a writable inbox)
+mkdir -p "$T/norm"; printf '%s\n' '#!/bin/sh' 'exit 1' > "$T/norm/rm"; chmod +x "$T/norm/rm"
+out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$f" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/ub/$f\$" &&
+  ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$f" ] &&
+  ok "consume fails loud when rm leaves the file behind" ||
+  no "consume reported success when rm left the file behind (exit $rc)" "$out"
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
 # row: sent lists the rest, as it did before it stopped on one it can't read
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \
