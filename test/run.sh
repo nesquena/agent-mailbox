@@ -4928,6 +4928,28 @@ out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfail "$T/rb" --consume 
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmfail\.md, but can't remove mailbox/inbox/ub/$f\$" &&
   [ -f "$I/ub/$f" ] && ok "and send --consume says it sent, then fails loud when rm leaves the file behind" ||
   no "send --consume didn't report sent + removal failure when rm left the file behind (exit $rc)" "$out"
+# multi-file consume on dir names earlier consumed files when a later one can't be removed
+echo hi7 | as ua send ub m7 - >/dev/null; m7=$(ls "$I/ub" | grep -- '-ua-m7\.md$')
+out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$m7" "$f" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: consumed $m7; can't remove mailbox/inbox/ub/$f\$" &&
+  [ ! -e "$I/ub/$m7" ] && [ -f "$I/ub/$f" ] &&
+  ok "multi-file consume on dir names the earlier consumed file when a later one fails" ||
+  no "multi-file consume on dir didn't report earlier consumed file (exit $rc)" "$out"
+# when .sig is a file/link that survives rm (even after .md is removed), consume and send --consume both fail loud
+mkdir -p "$T/normsig"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*.md.sig) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/normsig/rm"; chmod +x "$T/normsig/rm"
+echo hi5 | as ua send ub m5 - >/dev/null; m5=$(ls "$I/ub" | grep -- '-ua-m5\.md$')
+out=$(PATH="$T/normsig:$PATH"; export PATH; as ub consume "$m5" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/ub/$m5\.sig\$" &&
+  ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$m5.sig" ] &&
+  ok "consume fails loud when rm leaves a .sig file behind" ||
+  no "consume didn't fail loud when rm left .sig behind (exit $rc)" "$out"
+rm -f "$I/ub/$m5.sig"
+echo hi6 | as ua send ub m6 - >/dev/null; m6=$(ls "$I/ub" | grep -- '-ua-m6\.md$')
+out=$(PATH="$T/normsig:$PATH"; export PATH; as ub send ua rmsig "$T/rb" --consume "$m6" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmsig\.md, but can't remove mailbox/inbox/ub/$m6\.sig\$" &&
+  [ -f "$I/ub/$m6.sig" ] && ok "and send --consume fails loud when rm leaves a .sig file behind (dir)" ||
+  no "send --consume didn't fail loud when rm left .sig behind (exit $rc)" "$out"
+rm -f "$I/ub/$m6.sig"
 # a folder planted at <msg>.md.sig doesn't block consuming the message: the .md is removed, the folder is left with a warning
 echo hi3 | as ua send ub m3 - >/dev/null; m3=$(ls "$I/ub" | grep -- '-ua-m3\.md$')
 rm -f "$I/ub/$m3.sig"; mkdir "$I/ub/$m3.sig"
@@ -4950,6 +4972,16 @@ out=$(as gb consume "$m3g" 2>"$T/csg.err"); rc=$?; err=$(cat "$T/csg.err")
   printf '%s\n' "$err" | grep -qx "agent-mailbox: left mailbox/inbox/gb/$m3g.sig (isn't a file)" &&
   ok "and on the git adapter too" ||
   no "consume failed on a folder at .sig (git, exit $rc)" "out:$NL$out${NL}err:$NL$err"
+# on the git adapter, send --consume failing to remove says nothing was sent (ad_commit never ran; AD_IN_PLACE in env is ignored)
+echo hi4 | as ga send gb m4 - >/dev/null 2>&1
+m4g=$(basename "$(as gb list | grep -- '-ga-m4\.md$')")
+mkdir -p "$T/normgit"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/gb/*-ga-m4.md) exit 1 ;; esac; done' \
+  'exec /bin/rm "$@"' > "$T/normgit/rm"; chmod +x "$T/normgit/rm"
+out=$(PATH="$T/normgit:$PATH" AD_IN_PLACE=1; export PATH AD_IN_PLACE; as gb send ga rmfailg "$T/rb" --consume "$m4g" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/gb/$m4g; nothing was sent\$" &&
+  ! as ga list 2>/dev/null | grep -q -- "-gb-rmfailg" && as gb list 2>/dev/null | grep -q -- "$m4g" &&
+  ok "on the git adapter, send --consume failing rm says nothing was sent, and sends nothing" ||
+  no "git send --consume failing rm misreported or sent (exit $rc)" "$out"
 # a message of yours consumed between sent's listing and its look (here a stand-in cat that removes it first) isn't a
 # row: sent lists the rest, as it did before it stopped on one it can't read
 mkdir -p "$T/shim"; printf '%s\n' '#!/bin/sh' 'for a; do case $a in (*/inbox/ub/*-ua-m1.md) rm -f "$a" "$a.sig" ;; esac; done' \

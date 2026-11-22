@@ -5,6 +5,8 @@
 
 # only the current files, so holds warns that it can't see consumed mail
 AD_HISTORY=current
+# writes into AD_DIR land directly in the store, without waiting for ad_commit
+AD_IN_PLACE=1
 
 ad_open() {
   # a relative store path starting with '-' would be read as an option by mkdir and find
