@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A watcher stopped right as it starts no longer leaves its pid files behind.** `watch` wrote its pid files before it
+  set the traps that remove them, so a TERM or INT in between (a harness ending it at once) left stale files. The traps
+  now come first.
 - **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
   session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
   sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update agent-mailbox`

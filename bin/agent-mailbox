@@ -1379,13 +1379,14 @@ watch)
     wp=$(other_watcher "$pf") || continue
     warn "watch: another watcher for $ME is running (pid $wp); both wake on the same mail: stop this one, or pid $wp unless the Claude Code plugin's hook started it (its parent is claude-rewake.sh; the hook would start it again)"; break
   done
-  # (one for the name, and one for the name on this store, since one name can be in use on several stores)
-  for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
-  # (removed only while it still names this watcher: another watcher for the name may have started since)
+  # (removed only while it still names this watcher: another watcher for the name may have started since. The traps
+  # are set before the files are written, so a TERM or INT the moment they appear still removes them)
   unmark() { for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do
     [ "$(cut -d' ' -f1 "$pf" 2>/dev/null)" != $$ ] || rm -f "$pf"; done; }
   trap unmark EXIT
   trap 'exit 130' INT TERM
+  # (one for the name, and one for the name on this store, since one name can be in use on several stores)
+  for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"
   # (an inbox that can't be read, here and at every tick, stops watch at once, saying so: it isn't a store that can't
   # be reached for a moment, a dir store's peek can't tell it from an empty inbox, and the poll's token needn't change
