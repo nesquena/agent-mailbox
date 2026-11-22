@@ -23,12 +23,19 @@
   retired", `agents` showed it as `(!name)` and `agents --names` left it out, and `trust` said it "has no registered
   key". `read` stopping on such a record says how to read the rest (consume the message, or `--except`).
   `update` and `register` follow it too: with your own record unreadable, `update` rewrote it with its fields blank,
-  dropping its key and body, and now stops before writing anything. `agents` checks every record before printing, so
-  `agents --names` never prints a list cut short. `doctor` says once that your record can't be read.
-- **More commands stop, saying so, when the mailbox's inbox folder can't be searched:** `consume`, `send --consume`
-  and `verify` by name, which said "not in your inbox" or "no such message". `watch` looks at the inbox at every tick,
-  so one that becomes unsearchable mid-watch stops it at once, even when no inbox holds a message (it ran to its limit
-  and said "no mail").
+  dropping its key and body, and now stops before writing anything. `agents` stops when the records folder can't be
+  listed (where it printed an empty list) and checks every record file before printing, so `agents --names` never
+  prints a list cut short by an unreadable record file or dangling link; in `agents` and `agents --names` only, a
+  non-file entry at `<name>.md` (a folder, a FIFO, or a link to either) is skipped with a warning on stderr so the rest
+  still list, while every single-agent command (`send`, `verify`, `trust`, `watch`, `update`, `register`, `doctor`)
+  stops on it. `doctor` says once when your record isn't a file or can't be read.
+- **More commands stop, saying so, when the mailbox's inbox folder can't be searched, written, or isn't a folder:**
+  `consume`, `send --consume` and `verify` by name stop when `mailbox/inbox` can't be searched (they said "not in your
+  inbox" or "no such message"). A file or dangling link at `mailbox/inbox/<you>` stops `list`, `read` and `watch` with
+  "isn't a folder", where they said no mail. `consume` and `send --consume` stop before acting when your inbox folder
+  can't be written (e.g. read-only), and fail if removing a message leaves the file behind, where `consume` reported
+  "consumed" and `send --consume` sent without consuming. `watch` looks at the inbox at every tick, so one that becomes
+  unsearchable mid-watch stops it at once, even when no inbox holds a message (it ran to its limit and said "no mail").
 - **`holds` with an adapter that keeps no history (dir) passes over a message consumed while it reads**, as `read`
   does; it stopped, saying it couldn't read the store's history.
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
