@@ -2901,15 +2901,38 @@ if up "$R1/pid"; then
   # and with a deadline file an earlier run left (its watchdog writing it as that hook was already leaving), such a stop
   # ends the hook silently, exit 0: it isn't this run's day's end (10 tries, the file planted before each)
   bad=0 tried=0 t=0
-  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"; : > "$R1/deadline.1"
     rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg3.out" & bg=$!
     if seen "$R1/pid" 10; then tried=$((tried+1)); kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; fi
     i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
     kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
     { [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg3.out" 2>/dev/null; } || bad=$((bad+1)); done
-  rm -f "$R1/pid" "$R1/deadline"
+  rm -f "$R1/pid" "$R1/deadline" "$R1/deadline.1"
   [ "$tried" -ge 5 ] && [ "$bad" = 0 ] && ok "and with an earlier run's deadline file there, it ends silently, not at the day's limit" ||
     no "a hook stopped as it started, with an earlier run's deadline file there, said it reached its limit ($bad of $tried tries)"
+  # a stop at each point from the claim to the pid write (a copy of the hook that stops itself there, in a plugin folder
+  # of its own whose bin and adapters are this one's) leaves no mutex, pid file or deadline of its own, and ends
+  # silently, exit 0, with another run's deadline file there too. Before, a stop ahead of the traps left the mutex
+  # (every hook in the next minute or so then stepped aside) and ended with TERM's own status
+  mkdir -p "$T/plug/hooks"; ln -sf "$P/bin" "$T/plug/bin"; ln -sf "$P/adapters" "$T/plug/adapters"; PH="$T/plug/hooks/claude-rewake.sh"
+  for pt in claim mine deadline before-pid after-pid; do
+    awk -v pt="$pt" -v k='kill -TERM $$' '
+      pt == "before-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }
+      { print }
+      pt == "claim" && !c && /^if (! )?claim/ { c = 1 }
+      pt == "claim" && c == 1 && /^fi$/ { print k; c = 2 }
+      pt == "mine" && /^if mine; then/ { print k }
+      pt == "deadline" && /^rm -f "\$run\/deadline/ { print k }
+      pt == "after-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }' "$P/hooks/claude-rewake.sh" > "$PH"
+    if [ "$(grep -cx 'kill -TERM \$\$' "$PH")" != 1 ]; then no "the hook copy for a stop at '$pt' has its stop in place" "$(grep -n 'kill -TERM' "$PH")"; continue; fi
+    rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1/claiming" "$R1"/deadline*; : > "$R1/deadline.1"
+    out=$(rewake r1 RHOOK="$PH" AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
+    lf=$(ls "$R1" | grep -Ex 'claiming|pid|deadline|deadline\.[0-9]+' | grep -vx 'deadline\.1' | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ -z "$lf" ] && ! printf '%s\n' "$out" | grep -q 'daily limit' &&
+      ok "a hook stopped at '$pt' (from the claim to the pid write) leaves nothing behind, and ends silently" ||
+      no "a hook stopped at '$pt' left something behind, or didn't end silently (exit $rc, left: $lf)" "$out"
+  done
+  rm -f "$R1/deadline.1" "$R1/claiming"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
 # a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
 # check, then create): a mkdir on PATH that never fails on a folder that's there, and a fresh claim (as an older
