@@ -5090,6 +5090,14 @@ out=$(cd "$T/globcwd" && as ub send ua globtest "$T/rb" --consume '*.md' 2>&1); 
   [ -f "$I/ub/$f" ] && [ -z "$(ls "$I/ua" | grep -- '-ub-globtest\.md$')" ] &&
   ok "send --consume refuses a glob even when cwd holds a matching inbox file name" ||
   no "send --consume expanded a glob against cwd (exit $rc)" "$out"
+# an empty name, and several names in one value, are refused too, before anything is sent
+echo hi8e | as ua send ub m8e - >/dev/null; m8e=$(ls "$I/ub" | grep -- '-ua-m8e\.md$')
+for v in '' "$m8e $f"; do
+  out=$(as ub send ua oneper "$T/rb" --consume "$v" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "isn't a message file name" && [ -f "$I/ub/$m8e" ] && [ -f "$I/ub/$f" ] &&
+    [ -z "$(ls "$I/ua" | grep -- '-ub-oneper\.md$')" ] && ok "send --consume refuses the value '$v'" ||
+    no "send --consume took the value '$v' (exit $rc)" "$out"
+done
 # when .sig is a file/link that survives rm (even after .md is removed), consume and send --consume both fail loud
 # and on dir, a message whose .md was already removed is named in "consumed" even if its .sig then survives
 mkdir -p "$T/normsig"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*.md.sig) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/normsig/rm"; chmod +x "$T/normsig/rm"
