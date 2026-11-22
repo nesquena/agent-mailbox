@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`send --consume` checks each name as given.** A pattern such as `'*.md'` or an empty name is refused before
+  anything is sent; before, a pattern could match a file in the current folder and consume the inbox message of that
+  name, and an empty name was ignored.
 - **A watcher stopped right as it starts no longer leaves its pid files behind.** `watch` wrote its pid files before it
   set the traps that remove them, so a TERM or INT in between (a harness ending it at once) left stale files. The traps
   now come first.
