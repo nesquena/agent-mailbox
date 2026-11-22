@@ -58,9 +58,11 @@ ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
 # merge and diff come first, so a store macro of either name ([attr]merge ...) can't undo the neutral settings after them
 AD_ATTRS='* merge !diff -text -eol -filter -ident -working-tree-encoding'
-# (written as put does: a size limit fails the write rather than ending the shell, and nothing it couldn't write is printed)
+# (written as put does: a size limit fails the write rather than ending the shell, nothing it couldn't write is printed,
+# and a failed write removes its temp)
 ad_attrs_put() { mkdir -p "$AD_DIR/.git/info" &&
-  ( trap '' XFSZ; printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" ) >/dev/null 2>&1 && mv -f "$af.$$" "$af"; }
+  ( trap '' XFSZ; printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" ) >/dev/null 2>&1 && mv -f "$af.$$" "$af" ||
+  { rm -f "$af.$$"; false; }; }
 ad_attrs() {
   af="$AD_DIR/.git/info/attributes" al=
   [ ! -f "$af" ] || IFS= read -r al < "$af"

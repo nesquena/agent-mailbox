@@ -1244,6 +1244,16 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
     case "$out" in (*took*) false ;; (*) true ;; esac && [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] &&
     ok "a lock that can't be written is removed, and the command says so" ||
     no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
+  # an attributes file that can't be written under the same limit stops, saying only its message, and leaves no temp
+  mkdir -p "$RF/repo/.git/info"
+  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
+    '{ ( ulimit -f 0; AD_DIR=$2/repo; ad_attrs; echo wrote ) 2>&1; echo "exit $?"; } | cat' > "$RF/attrs"
+  out=$(time_cap 30 "$SH" "$RF/attrs" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=${out##*exit }
+  [ -z "$(ls -A "$RF/repo/.git/info" 2>/dev/null)" ] && [ "$rc" = 1 ] &&
+    case "$out" in (*"can't write "*/.git/info/attributes*) true ;; (*) false ;; esac &&
+    case "$out" in (*wrote*) false ;; (*) true ;; esac && [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] &&
+    ok "an attributes file that can't be written leaves no temp, and the command says only so" ||
+    no "an attributes file that can't be written left a temp, or said more" "exit $rc: $out; files: $(ls -A "$RF/repo/.git/info" 2>&1)"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
   # PATH notes a fetch that starts while another is running)
   mkdir -p "$T/lsh"; printf '%s\n' '#!/bin/sh' 'case " $* " in (*" fetch "*)' \
@@ -2271,15 +2281,17 @@ if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.now"; echo 0123456789abcdef > "$P
     cmp -s "$cf" "$T/config.was" && ok "setup that can't write its config stops, saying only so, and leaves it as it was" ||
     no "setup under a size limit didn't stop with only its own message, or changed the config (exit $rc)" "$out"
 else no "trust that can't write its pin stops" "verify recorded no pin for pm1: $(ls -A "$PP" 2>&1)"; fi
-# a signature too big for a size limit (an RSA-4096 one under 1 block; the message fits) stops send with "signing
-# failed", and nothing is published: ssh-keygen, ignoring XFSZ, wrote a cut signature and exited 0
+# a signature too big for a size limit (an RSA-4096 one under 1 block; the message fits) stops send with only "signing
+# failed", and nothing is published: ssh-keygen, ignoring XFSZ, wrote a cut signature and exited 0, and without
+# `; exit $?` dash exec'd it and printed the signal's note first
 as pm6 setup --store "$T/store" --adapter dir --name pm6 >/dev/null; K6="$W/home-pm6/.config/agent-mailbox/keys"
 mkdir -p "$K6" && chmod 700 "$K6" && ssh-keygen -q -t rsa -b 4096 -N '' -C t -f "$K6/pm6" && as pm6 register --kind t --about t >/dev/null 2>&1
 out=$( (ulimit -f 1; echo x | as pm6 send pm2 bigsig -) 2>&1 ); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: signing failed with " &&
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
   [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
-  ok "send whose signature is too big for a size limit stops with signing failed, publishing nothing" ||
-  no "send under a size limit too small for its signature didn't stop with signing failed, or left a file (exit $rc)" "$out$NL$(ls -A "$T/store/mailbox/inbox/pm2")"
+  ok "send whose signature is too big for a size limit stops with only signing failed, publishing nothing" ||
+  no "send under a size limit too small for its signature didn't stop with only signing failed, or left a file (exit $rc)" "$out$NL$(ls -A "$T/store/mailbox/inbox/pm2")"
 # and a message too big for that limit stops send with the CLI's one line: put_signed's write ignores XFSZ, so no shell
 # prints the signal's note first
 out=$( (ulimit -f 1; head -c 3000 /dev/zero | tr '\0' a | as pm1 send pm2 bigbody -) 2>&1 ); rc=$?

@@ -583,8 +583,10 @@ verify_sig() {
   rm -f "$allowed"; echo "$r"
 }
 # sign_file <file>: write <file>.sig, created with noclobber so a link at that name is never followed
-sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null
-  else (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig") 2>/dev/null; fi || die "signing failed with $KEY"; }
+# (`; exit $?` stops dash from exec'ing ssh-keygen, so a SIGXFSZ from a size limit doesn't make the outer shell print
+# its signal note before "signing failed")
+sign_file() { if askpass_never; then (set -C; SSH_ASKPASS_REQUIRE=never ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig"; exit $?) 2>/dev/null
+  else (set -C; ssh-keygen -Y sign -q -n "$NS" -f "$KEY" < "$1" > "$1.sig"; exit $?) 2>/dev/null; fi || die "signing failed with $KEY"; }
 # askpass_never: signing reads the message on stdin, so ssh-keygen asks for a key's passphrase through an askpass
 # program whenever DISPLAY is set, even in a terminal. When this command's own stdin is a terminal and
 # SSH_ASKPASS_REQUIRE isn't set, sign with SSH_ASKPASS_REQUIRE=never, so the passphrase is asked in the terminal.
