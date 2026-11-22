@@ -249,6 +249,9 @@ fi
 if mine; then unclaim; exit 0; fi
 # (held: this hook holds the mutex now, until the pid file is written, so a stop in between can still clear the file)
 held=1
+# (a deadline file left by an earlier run is cleared before the traps are set: they read one as this run's day's end,
+# and this run's watchdog, which writes it, hasn't started)
+rm -f "$run/deadline"
 # note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
 note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
 child="" dog=""
@@ -268,6 +271,8 @@ trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
   printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
   cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
+# (a stop between clearing held and the unclaim, one builtin's time, leaves the mutex, which the next hook clears after
+# a minute; clearing held after the unclaim instead would let cleanup remove a mutex another hook had just taken)
 printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; held=""; unclaim
 # (mail an earlier run left pending, never passed on, wakes the session again)
 rm -f "$run/pending"
@@ -294,7 +299,7 @@ top=$PPID
 here() { live "$top" && { [ -z "$ccpid" ] || live "$ccpid"; }; }
 hook=$$
 ck=${AGENT_MAILBOX_REWAKE_CHECK:-15}; case "$ck" in ([1-9]|1[0-5]) ;; (*) ck=15 ;; esac
-dl=$((start + max + iv + ck)); rm -f "$run/deadline"
+dl=$((start + max + iv + ck))
 # (it checks every ck seconds, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
     # (the note written in a subshell: under dash a failed write would end this one before it stops the hook)

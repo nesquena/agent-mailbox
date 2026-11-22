@@ -2471,7 +2471,8 @@ rm -f "$RD"/w1*.pid
 # HUP's own status and left them. (Skipped where HUP is ignored on entry: no shell started then can trap it)
 if "$SH" -c 'trap "exit 0" HUP; kill -HUP $$; sleep 1; exit 1' 2>/dev/null; then
   HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!
-  if seen "$WPF" 30 && kill -0 "$wp" 2>/dev/null; then sleep 0.5
+  i=0; while [ ! -s "$WPF" ] && kill -0 "$wp" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+  if [ -s "$WPF" ] && kill -0 "$wp" 2>/dev/null; then sleep 0.5
     kill -HUP "$wp" 2>/dev/null; i=0; while kill -0 "$wp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
     kill -9 "$wp" 2>/dev/null; wait "$wp"; rc=$?
     [ "$rc" = 130 ] && [ -z "$(ls "$RD" 2>/dev/null | grep '^w1.*\.pid$')" ] && ok "HUP ends the watcher, removing its pid files (exit 130)" ||
@@ -2883,6 +2884,18 @@ if up "$R1/pid"; then
   rm -f "$R1/pid"
   [ "$tried" -ge 5 ] && [ "$left" = 0 ] && ok "a hook stopped the moment its pid file appears removes it" ||
     no "a hook stopped the moment its pid file appeared left it ($left of $tried tries; under 5 saw the file)"
+  # and with a deadline file an earlier run left (its watchdog writing it as that hook was already leaving), such a stop
+  # ends the hook silently, exit 0: it isn't this run's day's end (10 tries, the file planted before each)
+  bad=0 tried=0 t=0
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"
+    rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg3.out" & bg=$!
+    if seen "$R1/pid" 10; then tried=$((tried+1)); kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; fi
+    i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+    kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
+    { [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg3.out" 2>/dev/null; } || bad=$((bad+1)); done
+  rm -f "$R1/pid" "$R1/deadline"
+  [ "$tried" -ge 5 ] && [ "$bad" = 0 ] && ok "and with an earlier run's deadline file there, it ends silently, not at the day's limit" ||
+    no "a hook stopped as it started, with an earlier run's deadline file there, said it reached its limit ($bad of $tried tries)"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
 # a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
 # check, then create): a mkdir on PATH that never fails on a folder that's there, and a fresh claim (as an older

@@ -7,7 +7,8 @@
   now come first.
 - **A watcher ended by HUP (its terminal closing) removes its pid files too**, as for TERM and INT; it ended with HUP's
   own status and left them. And a command stopped the moment it takes the git adapter's lock, or the plugin's rewake
-  hook stopped the moment it starts, no longer leaves that lock or its pid file for the next one to clear.
+  hook stopped the moment it starts, no longer leaves that lock or its pid file for the next one to clear. A command
+  stopped while it waits for that lock ends with status 130, as it does once it holds it.
 - **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
   session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
   sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update agent-mailbox`
