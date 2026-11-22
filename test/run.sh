@@ -782,12 +782,14 @@ mailbox/inbox/bob/20200101T000017Z-alice-y2000.md to bob age old stale"
   mkdir -p "$T/proj"; echo "PROJECT ONLY" > "$T/proj/notes.md"
   tamper 'echo x > "mailbox/inbox/alice/x
 notes.md"'
-  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1)
+  # (each gives its normal answer too, naming alice's other mail: one that failed at once would list nothing either)
+  for c in read list; do out=$(in_dir "$T/proj" as alice $c 2>&1); rc=$?
     case $out in (*"PROJECT ONLY"*|*notes.md*) no "$c lists a file outside the inbox" "$out" ;;
-      (*) ok "$c skips a file name with a line break in it" ;; esac; done
-  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1)
-  printf '%s\n' "$out" | grep -qx 'notes.md' && no "watch lists part of a file name" "$out" ||
-    ok "and so does watch"
+      (*) [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q 'mailbox/inbox/alice/[0-9]' && ok "$c skips a file name with a line break in it" ||
+            no "$c with a file name with a line break in its inbox didn't list the rest (exit $rc)" "$out" ;; esac; done
+  out=$(in_dir "$T/proj" as alice watch 1 1 2>&1); rc=$?
+  ! printf '%s\n' "$out" | grep -qx 'notes.md' && [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^mail for alice:' &&
+    ok "and so does watch" || no "watch lists part of a file name, or didn't report alice's other mail (exit $rc)" "$out"
   tamper 'rm -f mailbox/inbox/alice/x*'
   expect "the reply threads to it" 0 "in_reply_to: $fb" as alice read
   expect "the reply keeps the thread's context" 0 "context: proj-x" as alice read
@@ -2344,10 +2346,17 @@ sec_watcher_lifecycle() {
 echo "== watcher lifecycle and keys (dir)"
 T="$W/life"; mkdir -p "$T"
 as w1 setup --store "$T/store" --adapter dir --name w1 >/dev/null; as w1 init >/dev/null; as w1 register --kind t --about t --no-key >/dev/null
+# (the watcher is up, its pid file written, before the TERM, up to 30 s: one that died on its own, or never wrote it,
+# would pass both checks below)
 HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!
-sleep 1.5; kill -TERM "$wp" 2>/dev/null; sleep 2.5
-if kill -0 "$wp" 2>/dev/null; then no "SIGTERM ends the watcher"; kill -9 "$wp"; else ok "SIGTERM ends the watcher"; fi
-[ ! -f "$W/home-w1/.local/state/agent-mailbox/run/w1.pid" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
+WPF="$W/home-w1/.local/state/agent-mailbox/run/w1.pid"; i=0
+while [ ! -s "$WPF" ] && kill -0 "$wp" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+if [ -s "$WPF" ] && kill -0 "$wp" 2>/dev/null; then
+  kill -TERM "$wp" 2>/dev/null; i=0; while kill -0 "$wp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+  if kill -0 "$wp" 2>/dev/null; then no "SIGTERM ends the watcher"; kill -9 "$wp"; else ok "SIGTERM ends the watcher"; fi
+  [ ! -f "$WPF" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
+else no "the watcher never started (no pid file, or it ended on its own), so SIGTERM wasn't tested"; kill -9 "$wp" 2>/dev/null; fi
+wait "$wp" 2>/dev/null
 expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
 # branch names git refuses are refused by every adapter, from the environment, the config file or setup
 for b in a/../b a..b a//b a/ /a a.lock a.lock/b a/b.lock -a .a a/.b a. HEAD 'a@{b'; do
@@ -3009,6 +3018,8 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
 [ "$(printf '%s\n' "$r" | grep -c 'new mail')" = 1 ] && ok "mail it woke for on one store before adding another doesn't wake it again" ||
   no "mail it woke for on one store before adding another doesn't wake it again" "$r"
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
+# (a mark from just before this wake: the second store's run, started in it, claims its folder, so the folder is newer)
+sleep 1; : > "$T/mark-rx1"; oc2=$(cat "$RS/rewake/rw/r9@$S2/child" 2>/dev/null)
 r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
@@ -3016,9 +3027,12 @@ case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it wo
     no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$(cat "$RS/rewake/rw/r9@$S1/woke")" ;;
   (*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;; esac
 # (the first store's run waking first, the second's, listed after it, is stopped too: none is left watching)
-op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null)
-[ -z "$op" ] || ! kill -0 "$op" 2>/dev/null && ok "and the other store's run is stopped with it" ||
-  no "and the other store's run is stopped with it" "$(ps -o pid=,args= -p "$op")"
+# (it started in this wake, its folder newer than the mark, and neither it nor a watcher it started is left: a run
+# that never started would leave no pid file either)
+op=$(cut -d' ' -f1 "$RS/rewake/rw/r9@$S2/pid" 2>/dev/null); c2=$(cat "$RS/rewake/rw/r9@$S2/child" 2>/dev/null)
+[ "$RS/rewake/rw/r9@$S2" -nt "$T/mark-rx1" ] && { [ -z "$op" ] || ! kill -0 "$op" 2>/dev/null; } &&
+  { [ -z "$c2" ] || [ "$c2" = "$oc2" ] || ! kill -0 "$c2" 2>/dev/null; } && ok "and the other store's run is stopped with it" ||
+  no "and the other store's run is stopped with it, having started in this wake" "$(ls -la "$RS/rewake/rw/r9@$S2"; ps -o pid=,args= -p "${op:-1}")"
 # mail on both at once: all of it is passed on, in this wake or, if one store's run was stopped first, the next
 echo hi | as rx send rw rx-2 - >/dev/null 2>&1; echo hi | as rz send rw rz-2 - >/dev/null 2>&1
 r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?; woken rx-2.md && woken rz-2.md || r="$r $(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60)"
@@ -4606,32 +4620,36 @@ stopw "$p1"; gone "$j1"
 [ -n "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1.pid")" = "$p2" ] && [ "$(cut -d' ' -f1 "$R/wa1@$sid.pid")" = "$p2" ] &&
   ok "the first watcher's exit leaves the second's pid files" || no "the first watcher's exit removed the second's pid files" "$(cat "$R"/*.pid 2>&1)"
 stopw "$p2"; gone "$j2"
-# a stale file whose pid is gone, and one whose pid now belongs to another process, aren't watchers: no warning
+# a stale file whose pid is gone, and one whose pid now belongs to another process, aren't watchers: no warning, and
+# watch runs to its limit (a watch that failed at once wouldn't warn either)
 sh -c 'exit 0' & dead=$!; wait "$dead"
 for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$dead wa1 $sid" > "$f"; done
-out=$(as wa1 watch 1 1 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a pid file whose pid is gone doesn't count" || no "a dead pid counted as a watcher" "$out"
+out=$(as wa1 watch 1 1 2>&1); rc=$?
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^no mail for wa1 after 1s' &&
+  ok "a pid file whose pid is gone doesn't count" || no "a dead pid counted as a watcher, or watch didn't run to its limit (exit $rc)" "$out"
 sleep 30 & other=$!
 for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$other wa1 $sid" > "$f"; done
-out=$(as wa1 watch 1 1 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor one whose pid now belongs to another process" || no "a reused pid counted as a watcher" "$out"
+out=$(as wa1 watch 1 1 2>&1); rc=$?
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^no mail for wa1 after 1s' &&
+  ok "nor one whose pid now belongs to another process" || no "a reused pid counted as a watcher, or watch didn't run to its limit (exit $rc)" "$out"
 kill "$other" 2>/dev/null; wait "$other" 2>/dev/null
 # a process whose command line names agent-mailbox and watch only in a script's name (the plugin's guard hook) isn't a
 # watcher: no warning
 mkdir -p "$T/agent-mailbox/hooks"; printf '%s\n' 'sleep 30' > "$T/agent-mailbox/hooks/claude-watch-guard.sh"
 sh "$T/agent-mailbox/hooks/claude-watch-guard.sh" & gh=$!
 for f in "$R/wa1.pid" "$R/wa1@$sid.pid"; do echo "$gh wa1 $sid" > "$f"; done
-out=$(as wa1 watch 1 1 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "nor a hook script whose name holds agent-mailbox and watch" ||
-  no "a hook script counted as a watcher" "$out"
+out=$(as wa1 watch 1 1 2>&1); rc=$?
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^no mail for wa1 after 1s' &&
+  ok "nor a hook script whose name holds agent-mailbox and watch" || no "a hook script counted as a watcher, or watch didn't run to its limit (exit $rc)" "$out"
 kill $(pgrep -P "$gh") "$gh" 2>/dev/null; wait "$gh" 2>/dev/null
 # a watcher for the name on another store isn't one for this store: no warning
 as wa1 --config "$T/c2" setup --store "$T/store2" --adapter dir --name wa1 >/dev/null 2>&1
 as wa1 --config "$T/c2" init >/dev/null 2>&1; as wa1 --config "$T/c2" register --kind t --about t --no-key >/dev/null 2>&1
 rm -f "$R"/wa1*.pid; as wa1 watch 1 30 >/dev/null 2>&1 & j3=$!; wpid "$j3"; p3=$wp
 [ -n "$p3" ] || { no "the watcher on the first store never started (no pid file), so the next check isn't what it says" "job $j3"; kill_tree "$j3"; gone "$j3"; }
-out=$(as wa1 --config "$T/c2" watch 1 1 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted" "$out"
+out=$(as wa1 --config "$T/c2" watch 1 1 2>&1); rc=$?
+[ -z "$(printf '%s\n' "$out" | grep 'another watcher')" ] && [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q '^no mail for wa1 after 1s' &&
+  ok "a watcher for the name on another store doesn't count" || no "another store's watcher counted, or watch didn't run to its limit (exit $rc)" "$out"
 stopw "$p3"; gone "$j3"
 # (each watcher's job not seen to end, and what it started, gets a TERM, and all are waited for, whatever happened
 # above: one still running would hold up a later section's bare wait. Not kill_tree, whose wait for each to end counts
