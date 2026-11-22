@@ -137,8 +137,8 @@ prev=$(cat "$run/last" 2>/dev/null); printf '%s\n' "$key" > "$run/start"; rm -f 
 
 # Claude Code runs asyncRewake hooks in the background from 2.1.69, and (in newer versions) only in a session that is
 # interactive or has streaming input. Anywhere else (an older version that drops the key, `claude -p`, output to a file
-# or pipe) it runs the hook as an ordinary Stop hook, and the run would wait at every turn end until mail came. So the
-# hook acts only on positive evidence of both, and declines when it can't tell.
+# or pipe) it runs the hook synchronously, and the run would wait at every turn end and session start until mail came.
+# So the hook acts only on positive evidence of both, and declines when it can't tell.
 # The version: from AI_AGENT when Claude Code set it for its hooks (claude-code_2-1-318_harness; another suffix is a
 # value passed down from an outer Claude Code), with Claude Code's pid from CLAUDE_PID; else from a native install,
 # whose `claude` links to .../claude/versions/<version> (the path /proc shows), asked for --version by that absolute
