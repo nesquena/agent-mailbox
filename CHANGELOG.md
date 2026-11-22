@@ -36,10 +36,11 @@
   `consume`, `send --consume` and `verify` by name stop when `mailbox/inbox` can't be searched (they said "not in your
   inbox" or "no such message"). A file or dangling link at `mailbox/inbox/<you>` stops `list`, `read` and `watch` with
   "isn't a folder", where they said no mail. `consume` and `send --consume` stop before acting when your inbox folder
-  can't be written (e.g. read-only), and fail if removing a message (or its `.sig`) leaves the file behind — reporting
-  what was already sent or consumed on in-place adapters (`dir`), or that nothing was sent on staged ones (`git`) —
-  where before `consume` reported "consumed" and `send --consume` sent without consuming. `watch` looks at the inbox at every tick, so one that becomes
-  unsearchable mid-watch stops it at once, even when no inbox holds a message (it ran to its limit and said "no mail").
+  can't be written (e.g. read-only), and fail if removing a message (or its `.sig`) leaves the file behind (reporting
+  what was already sent or consumed on in-place adapters such as `dir`, or that nothing was sent on staged ones such
+  as `git`), where before `consume` reported "consumed" and `send --consume` sent without consuming. `watch` looks at
+  the inbox at every tick, so one that becomes unsearchable mid-watch stops it at once, even when no inbox holds a
+  message (it ran to its limit and said "no mail").
 - **`holds` with an adapter that keeps no history (dir) passes over a message consumed while it reads**, as `read`
   does; it stopped, saying it couldn't read the store's history.
 - **An agent with no inbox folder has no mail again where the mailbox's inbox folder can be searched but not listed.**
@@ -75,8 +76,9 @@
 - **The git adapter now clears stale git lock files older than a minute** (outside `.git/objects/`, such as `HEAD.lock`,
   branch locks, `REBASE_HEAD.lock` and a stalled watcher's `peek.lock`) left by an earlier command killed mid-git
   (`SIGXFSZ`, `SIGKILL`, or a crash), so the next command recovers instead of failing until the lock file is removed by
-  hand; fresh locks are left alone. Git's automatic housekeeping (`gc`, `maintenance`) now runs before the command
-  returns (`autoDetach=false`) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
+  hand; fresh locks are left alone (`index.lock`, as before, is cleared at once). Git's automatic housekeeping (`gc`,
+  `maintenance`) now runs before the command returns (`autoDetach=false`, so any housekeeping warnings print on the
+  command's own stderr) rather than detaching past the adapter's lock, and `watch`'s peeks run with automatic
   housekeeping off.
 - **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
 

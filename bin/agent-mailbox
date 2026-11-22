@@ -990,8 +990,12 @@ send)
   # list but not write would send and then fail to consume)
   [ -z "$consume" ] || { no_link "$M/inbox/$ME"; inbox_ok "$ME"
     [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"; }
+  uc=""
   for c in $consume; do valid_msg "$c"
-    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"; done
+    [ -f "$M/inbox/$ME/$c" ] || die "not in your inbox: $c"
+    case " $uc " in (*" $c "*) ;; (*) uc="${uc:+$uc }$c" ;; esac
+  done
+  consume=$uc
   # a reply keeps the thread's context (PROTOCOL.md section 5), read from the message it answers while that's still
   # in your inbox; otherwise, and for a value that isn't a valid context, it's "general"
   if [ -z "$ctx_set" ] && matches "$MSG_RE" "$reply" && [ -f "$M/inbox/$ME/$reply" ] && [ ! -L "$M/inbox/$ME/$reply" ]; then
@@ -1048,7 +1052,8 @@ send)
       if [ -n "$done_c" ]; then pf="sent $(rel "$f"); consumed $done_c; "
       else pf="sent $(rel "$f"), but "; fi
       ! there "$p" || die "${pf}can't remove $(rel "$p")"
-      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "${pf}can't remove $(rel "$p").sig"
+      done_c="${done_c:+$done_c, }$c"
+      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"); consumed $done_c; can't remove $(rel "$p").sig"
     else
       ! there "$p" || die "can't remove $(rel "$p"); nothing was sent"
       { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig; nothing was sent"
@@ -1056,7 +1061,6 @@ send)
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
     else paths="$paths $ROOT/inbox/$ME/$c.sig"; fi
     paths="$paths $ROOT/inbox/$ME/$c"
-    done_c="${done_c:+$done_c, }$c"
   done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
@@ -1201,26 +1205,29 @@ consume)
   # (an inbox that can't be read or written stops it, saying so, rather than "not in your inbox" or reporting consumed)
   inbox_ok "$ME"
   [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"
+  uc=""
   for a in "$@"; do
     b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
     valid_msg "$b"
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"
+    case " $uc " in (*" $b "*) ;; (*) uc="${uc:+$uc }$b" ;; esac
   done
   done_c=""
-  for a in "$@"; do
-    b=$(basename -- "$a"); p="$M/inbox/$ME/$b"
+  for b in $uc; do
+    p="$M/inbox/$ME/$b"
     rm -f "$p" "$p.sig" 2>/dev/null || :
-    # (on an in-place adapter, earlier messages in this call are already gone; name them if a later one fails)
+    # (on an in-place adapter, removed messages are already gone; name them if a removal or .sig removal fails)
     pf=""; [ -z "${AD_IN_PLACE:-}" ] || [ -z "$done_c" ] || pf="consumed $done_c; "
     ! there "$p" || die "${pf}can't remove $(rel "$p")"
+    done_c="${done_c:+$done_c, }$b"
+    pf=""; [ -z "${AD_IN_PLACE:-}" ] || pf="consumed $done_c; "
     { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "${pf}can't remove $(rel "$p").sig"
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
     else paths="$paths $ROOT/inbox/$ME/$b.sig"; fi
     paths="$paths $ROOT/inbox/$ME/$b"
-    done_c="${done_c:+$done_c, }$b"
   done
   # shellcheck disable=SC2086
-  ad_commit "mail(to-$ME): consumed $(for a in "$@"; do basename -- "$a" .md; done | tr '\n' ' ')" $paths
+  ad_commit "mail(to-$ME): consumed $(for b in $uc; do printf '%s ' "${b%.md}"; done)" $paths
   echo "consumed" ;;
 verify)
   for a in "$@"; do misplaced "$a"; done; [ $# -eq 1 ] || die "usage: verify <file>"; load_adapter; ad_sync

@@ -1326,7 +1326,7 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   [ ! -e "$ck/.git/REBASE_HEAD.lock" ] && ok "and the stale REBASE_HEAD.lock was removed" || no "stale REBASE_HEAD.lock remained"
   as lr send lp for-peek "$T/m" >/dev/null 2>&1
   mkdir -p "$ck/.git/refs/agent-mailbox"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
-  expect "a fresh peek.lock is left alone and watch fails" 1 "watch: can't read the store" as lp watch 1 15
+  expect "a fresh peek.lock is left alone and watch fails" 1 "watch: can't read the store" as lp watch 1 60
   [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] && ok "and the fresh peek.lock stays in place" || no "fresh peek.lock was removed"
   touch -t 202001010000 "$ck/.git/refs/agent-mailbox/peek.lock"
   expect "a stale peek.lock is cleared and watch wakes on waiting mail" 0 "^mail for lp:" as lp watch 1 5
@@ -1357,6 +1357,20 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   grep -q "fetch" "$T/peek.trace" && ! grep -Eq "pack-refs|maintenance run|repack" "$T/peek.trace" &&
     ok "ad_peek turns off auto-gc and maintenance (no pack-refs/repack outside ad_lock)" ||
     no "ad_peek ran housekeeping outside ad_lock" "$(grep -E 'fetch|pack-refs|gc|maintenance|repack' "$T/peek.trace" 2>&1 | head -n 10)"
+  # ad_g turns off autoDetach so git's automatic housekeeping finishes before the command returns (inside ad_lock)
+  as lp send lr ad1 "$T/m" >/dev/null 2>&1; git -C "$ck" repack -q
+  as lp send lr ad2 "$T/m" >/dev/null 2>&1; git -C "$ck" repack -q
+  as lp send lr ad3 "$T/m" >/dev/null 2>&1; git -C "$ck" repack -q
+  p0=$(ls "$ck/.git/objects/pack"/*.pack 2>/dev/null | wc -l | tr -d ' ')
+  : > "$T/ad.trace"
+  out=$(GIT_TRACE="$T/ad.trace" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=gc.autoPackLimit GIT_CONFIG_VALUE_0=1;
+    export GIT_TRACE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; as lp list 2>&1); rc=$?
+  p1=$(ls "$ck/.git/objects/pack"/*.pack 2>/dev/null | wc -l | tr -d ' ')
+  [ "$rc" = 0 ] && [ "$p0" -ge 3 ] && [ "$p1" -lt "$p0" ] &&
+    grep -Eq "repack|pack-refs" "$T/ad.trace" && ! grep -q -- " --detach" "$T/ad.trace" &&
+    [ ! -e "$ck/.git/objects/maintenance.lock" ] && [ ! -e "$ck/.git/gc.pid" ] &&
+    ok "ad_g runs automatic housekeeping in the foreground (autoDetach=false)" ||
+    no "ad_g didn't finish automatic housekeeping before returning (rc=$rc p0=$p0 p1=$p1)" "$(grep -E 'maintenance|gc|repack' "$T/ad.trace" 2>&1 | head -n 10)"
   for m in $(as lp list 2>/dev/null | sed 's#.*/##'); do as lp consume "$m" >/dev/null 2>&1; done
   # nor one the store's own .gitignore names
   git clone -q "$T/store.git" "$T/gi" && printf '*-junk.md\n' > "$T/gi/mailbox/inbox/lp/.gitignore" &&
@@ -5055,21 +5069,54 @@ out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfail2 "$T/rb" --consume
   [ ! -e "$I/ub/$m8" ] && [ -f "$I/ub/$f" ] &&
   ok "multi-consume send on dir names the earlier consumed file when a later one fails" ||
   no "multi-consume send on dir didn't report earlier consumed file (exit $rc)" "$out"
+# repeated names in consume and send --consume are deduped so none is listed twice in "consumed"
+echo hi7d | as ua send ub m7d - >/dev/null; m7d=$(ls "$I/ub" | grep -- '-ua-m7d\.md$')
+out=$(PATH="$T/norm:$PATH"; export PATH; as ub consume "$m7d" "$m7d" "$f" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: consumed $m7d; can't remove mailbox/inbox/ub/$f\$" &&
+  [ ! -e "$I/ub/$m7d" ] && [ -f "$I/ub/$f" ] &&
+  ok "consume dedupes repeated names in its consumed list" ||
+  no "consume listed a repeated name twice (exit $rc)" "$out"
+echo hi8d | as ua send ub m8d - >/dev/null; m8d=$(ls "$I/ub" | grep -- '-ua-m8d\.md$')
+out=$(PATH="$T/norm:$PATH"; export PATH; as ub send ua rmfaild "$T/rb" --consume "$m8d" --consume "$m8d" --consume "$f" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmfaild\.md; consumed $m8d; can't remove mailbox/inbox/ub/$f\$" &&
+  [ ! -e "$I/ub/$m8d" ] && [ -f "$I/ub/$f" ] &&
+  ok "send --consume dedupes repeated names in its consumed list" ||
+  no "send --consume listed a repeated name twice (exit $rc)" "$out"
 # when .sig is a file/link that survives rm (even after .md is removed), consume and send --consume both fail loud
+# and on dir, a message whose .md was already removed is named in "consumed" even if its .sig then survives
 mkdir -p "$T/normsig"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*.md.sig) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/normsig/rm"; chmod +x "$T/normsig/rm"
 echo hi5 | as ua send ub m5 - >/dev/null; m5=$(ls "$I/ub" | grep -- '-ua-m5\.md$')
 out=$(PATH="$T/normsig:$PATH"; export PATH; as ub consume "$m5" 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't remove mailbox/inbox/ub/$m5\.sig\$" &&
-  ! printf '%s\n' "$out" | grep -qx "consumed" && [ -f "$I/ub/$m5.sig" ] &&
-  ok "consume fails loud when rm leaves a .sig file behind" ||
-  no "consume didn't fail loud when rm left .sig behind (exit $rc)" "$out"
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: consumed $m5; can't remove mailbox/inbox/ub/$m5\.sig\$" &&
+  ! printf '%s\n' "$out" | grep -qx "consumed" && [ ! -e "$I/ub/$m5" ] && [ -f "$I/ub/$m5.sig" ] &&
+  ok "consume fails loud when rm leaves a .sig file behind and notes the .md was consumed" ||
+  no "consume didn't report consumed + .sig failure (exit $rc)" "$out"
 rm -f "$I/ub/$m5.sig"
 echo hi6 | as ua send ub m6 - >/dev/null; m6=$(ls "$I/ub" | grep -- '-ua-m6\.md$')
 out=$(PATH="$T/normsig:$PATH"; export PATH; as ub send ua rmsig "$T/rb" --consume "$m6" 2>&1); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmsig\.md, but can't remove mailbox/inbox/ub/$m6\.sig\$" &&
-  [ -f "$I/ub/$m6.sig" ] && ok "and send --consume fails loud when rm leaves a .sig file behind (dir)" ||
-  no "send --consume didn't fail loud when rm left .sig behind (exit $rc)" "$out"
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmsig\.md; consumed $m6; can't remove mailbox/inbox/ub/$m6\.sig\$" &&
+  [ ! -e "$I/ub/$m6" ] && [ -f "$I/ub/$m6.sig" ] &&
+  ok "and send --consume fails loud when rm leaves a .sig file behind and notes the .md was consumed (dir)" ||
+  no "send --consume didn't report sent + consumed + .sig failure (exit $rc)" "$out"
 rm -f "$I/ub/$m6.sig"
+# multi-file .sig survival on dir: both earlier consumed messages and the one whose .md is gone are named
+mkdir -p "$T/normsig2"; printf '%s\n' '#!/bin/sh' 'skip=""; for a; do case $a in (-*) ;; (*-ua-m10.md.sig|*-ua-m12.md.sig) skip=1 ;; (*) /bin/rm -f -- "$a" ;; esac; done; [ -z "$skip" ]' > "$T/normsig2/rm"; chmod +x "$T/normsig2/rm"
+echo hi9 | as ua send ub m9 - >/dev/null; m9=$(ls "$I/ub" | grep -- '-ua-m9\.md$')
+echo hi10 | as ua send ub m10 - >/dev/null; m10=$(ls "$I/ub" | grep -- '-ua-m10\.md$')
+out=$(PATH="$T/normsig2:$PATH"; export PATH; as ub consume "$m9" "$m10" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: consumed $m9, $m10; can't remove mailbox/inbox/ub/$m10\.sig\$" &&
+  [ ! -e "$I/ub/$m9" ] && [ ! -e "$I/ub/$m9.sig" ] && [ ! -e "$I/ub/$m10" ] && [ -f "$I/ub/$m10.sig" ] &&
+  ok "multi-file consume on dir names earlier and current messages when a later .sig survives" ||
+  no "multi-file consume on dir didn't report consumed list on .sig failure (exit $rc)" "$out"
+rm -f "$I/ub/$m10.sig"
+echo hi11 | as ua send ub m11 - >/dev/null; m11=$(ls "$I/ub" | grep -- '-ua-m11\.md$')
+echo hi12 | as ua send ub m12 - >/dev/null; m12=$(ls "$I/ub" | grep -- '-ua-m12\.md$')
+out=$(PATH="$T/normsig2:$PATH"; export PATH; as ub send ua rmsig2 "$T/rb" --consume "$m11" --consume "$m12" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: sent mailbox/inbox/ua/.*-ub-rmsig2\.md; consumed $m11, $m12; can't remove mailbox/inbox/ub/$m12\.sig\$" &&
+  [ ! -e "$I/ub/$m11" ] && [ ! -e "$I/ub/$m11.sig" ] && [ ! -e "$I/ub/$m12" ] && [ -f "$I/ub/$m12.sig" ] &&
+  ok "multi-consume send on dir names earlier and current messages when a later .sig survives" ||
+  no "multi-consume send on dir didn't report consumed list on .sig failure (exit $rc)" "$out"
+rm -f "$I/ub/$m12.sig"
 # a folder planted at <msg>.md.sig doesn't block consuming the message: the .md is removed, the folder is left with a warning
 echo hi3 | as ua send ub m3 - >/dev/null; m3=$(ls "$I/ub" | grep -- '-ua-m3\.md$')
 rm -f "$I/ub/$m3.sig"; mkdir "$I/ub/$m3.sig"
