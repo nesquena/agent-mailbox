@@ -49,4 +49,5 @@ version 2 question, tracked in [#94](https://github.com/nesquena/agent-mailbox/i
    without a lock).
 2. Add your adapter's name to `test/run.sh`'s default list, or run `sh test/run.sh <name>`. The same suite runs
    against every adapter.
-3. Document it in the table above, including whether it keeps history, and set `AD_HISTORY` to match.
+3. Document it in the table above, including whether it keeps history, and set `AD_HISTORY` to match. Keep `AD_IN_PLACE=1`
+   from `dir.sh` only when writes into `AD_DIR` are already published without `ad_commit`; remove it otherwise.

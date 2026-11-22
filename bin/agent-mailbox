@@ -1040,12 +1040,15 @@ send)
   if [ -n "$signer" ]; then put_signed "$f" "$msg" "$rk"; paths="$paths $(rel "$f") $(rel "$f").sig"
   else warn "sending unsigned (no key at $KEY, no ssh-keygen -Y (OpenSSH 8.1+), its public half unreadable, or your registry record names no key or another one)"; put "$f" "$msg"; paths="$paths $(rel "$f")"; fi
   PUT_NEW=""
+  done_c=""
   for c in $consume; do
     p="$M/inbox/$ME/$c"
     rm -f "$p" "$p.sig" 2>/dev/null || :
     if [ -n "${AD_IN_PLACE:-}" ]; then
-      ! there "$p" || die "sent $(rel "$f"), but can't remove $(rel "$p")"
-      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "sent $(rel "$f"), but can't remove $(rel "$p").sig"
+      if [ -n "$done_c" ]; then pf="sent $(rel "$f"); consumed $done_c; "
+      else pf="sent $(rel "$f"), but "; fi
+      ! there "$p" || die "${pf}can't remove $(rel "$p")"
+      { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "${pf}can't remove $(rel "$p").sig"
     else
       ! there "$p" || die "can't remove $(rel "$p"); nothing was sent"
       { [ ! -f "$p.sig" ] && [ ! -L "$p.sig" ]; } || die "can't remove $(rel "$p").sig; nothing was sent"
@@ -1053,6 +1056,7 @@ send)
     if there "$p.sig"; then warn "left $(rel "$p").sig (isn't a file)"
     else paths="$paths $ROOT/inbox/$ME/$c.sig"; fi
     paths="$paths $ROOT/inbox/$ME/$c"
+    done_c="${done_c:+$done_c, }$c"
   done
   # shellcheck disable=SC2086
   ad_commit "mail(to-$to): $topic" $paths
