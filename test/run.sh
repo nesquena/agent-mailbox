@@ -2319,22 +2319,24 @@ out=$( (ulimit -f 2; as pm2 read) 2>&1 ); rc=$?
   ! printf '%s\n' "$out" | grep -qi "size" && ok "read of a message bigger than a size limit stops, saying only so" ||
   no "read under a size limit didn't stop with its own message (exit $rc)" "$out"
 as pm2 consume "$fb" >/dev/null 2>&1
-out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
-  no "a re-run of setup with unchanged settings spoke of pins" "$out"
+# (each setup below writes its config, exit 0, as well as saying nothing of pins: one that failed at once would say
+# nothing either)
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^wrote ' && [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the settings that hold the pins says nothing of them" ||
+  no "a re-run of setup with unchanged settings spoke of pins, or didn't write its config (exit $rc)" "$out"
 P="$W/home-pm2/.local/state/agent-mailbox/pins"
 # the same folder, spelled with a trailing slash: other settings, which start with no pins
 expect "setup with the store written another way says the pins stay behind" 0 "pinned keys .*stay with the old store settings" \
   as pm2 setup --store "$T/store/" --adapter dir --name pm2
 n=0; for d in "$P"/*; do [ -f "$d/pm1" ] && n=$((n+1)); done
 [ "$n" = 1 ] && ok "setup copies no pins to other settings" || no "setup copied pins to other settings" "$(ls -RA "$P")"
-out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the same settings says nothing of pins" ||
-  no "a re-run of setup with the same settings spoke of pins" "$out"
+out=$(as pm2 setup --store "$T/store/" --adapter dir --name pm2 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^wrote ' && [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "a re-run of setup with the same settings says nothing of pins" ||
+  no "a re-run of setup with the same settings spoke of pins, or didn't write its config (exit $rc)" "$out"
 # back to the address as first written: its pins are still there, so a key swapped in the store reads changed
-out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1)
-[ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "moving from settings with no pins says nothing of pins" ||
-  no "setup spoke of pins when the old settings had none" "$out"
+out=$(as pm2 setup --store "$T/store" --adapter dir --name pm2 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^wrote ' && [ -z "$(printf '%s\n' "$out" | grep 'pinned keys')" ] && ok "moving from settings with no pins says nothing of pins" ||
+  no "setup spoke of pins when the old settings had none, or didn't write its config (exit $rc)" "$out"
 ssh-keygen -q -t ed25519 -N '' -f "$T/k2" && k=$(cut -d' ' -f1,2 "$T/k2.pub") &&
   sed -i.bak "s|^key: .*|key: $k|" "$T/store/mailbox/agents/pm1.md" && rm -f "$T/store/mailbox/agents/pm1.md.bak"
 expect "under the old address, a sender's key swapped in the store reads as changed" 6 "^changed$" as pm2 verify "$f"
@@ -2357,6 +2359,20 @@ if [ -s "$WPF" ] && kill -0 "$wp" 2>/dev/null; then
   [ ! -f "$WPF" ] && ok "the watcher removes its pid file on exit" || no "a pid file was left behind"
 else no "the watcher never started (no pid file, or it ended on its own), so SIGTERM wasn't tested"; kill -9 "$wp" 2>/dev/null; fi
 wait "$wp" 2>/dev/null
+# a TERM the moment the pid file appears still removes it: the traps are set before it's written (with the file
+# written first, a TERM in between ended the watcher by default, its pid files left behind). 20 tries, each polling hard
+# for the file and stopping the watcher as soon as it's there
+RD="$W/home-w1/.local/state/agent-mailbox/run"; left=0 tried=0 t=0
+while [ $t -lt 20 ]; do t=$((t+1)); rm -f "$RD"/w1*.pid
+  HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!; i=0
+  while [ ! -s "$WPF" ] && [ $i -lt 200000 ]; do i=$((i+1)); done
+  [ -s "$WPF" ] && tried=$((tried+1)); kill -TERM "$wp" 2>/dev/null
+  i=0; while kill -0 "$wp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+  kill -9 "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+  [ -z "$(ls "$RD" 2>/dev/null | grep '^w1.*\.pid$')" ] || left=$((left+1)); done
+rm -f "$RD"/w1*.pid
+[ "$tried" -ge 10 ] && [ "$left" = 0 ] && ok "a watcher stopped the moment its pid file appears removes it" ||
+  no "a watcher stopped the moment its pid file appeared left it behind ($left of $tried tries; under 10 tries saw the file)"
 expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
 # branch names git refuses are refused by every adapter, from the environment, the config file or setup
 for b in a/../b a..b a//b a/ /a a.lock a.lock/b a/b.lock -a .a a/.b a. HEAD 'a@{b'; do
@@ -3019,7 +3035,9 @@ expect "which reads that store" 0 "rz-1\.md" sh -c "cd / && HOME='$W/home-rw' $c
   no "mail it woke for on one store before adding another doesn't wake it again" "$r"
 echo hi | as rx send rw rx-1 - >/dev/null 2>&1
 # (a mark from just before this wake: the second store's run, started in it, claims its folder, so the folder is newer)
-sleep 1; : > "$T/mark-rx1"; oc2=$(cat "$RS/rewake/rw/r9@$S2/child" 2>/dev/null)
+# (the second after the mark: test -nt may compare whole seconds, so the run's claim must land in a later one than the
+# mark, or the cleanup's write at the end, not the claim, would be what made the folder newer)
+: > "$T/mark-rx1"; sleep 1; oc2=$(cat "$RS/rewake/rw/r9@$S2/child" 2>/dev/null)
 r=$(rewake r9 AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
 case "$rc $r" in (*second*) no "mail on the first store wakes it, and mail it woke for on the other doesn't" "$rc $r" ;;
   ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*) grep -q rx-1 "$RS/rewake/rw/r9@$S1/woke" &&
