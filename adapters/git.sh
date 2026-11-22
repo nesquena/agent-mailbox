@@ -327,6 +327,10 @@ ad_lock() {
   mine="$$ $(date +%s) $host $(ad_started $$)"
   lw=${AGENT_MAILBOX_LOCK_WAIT:-120}; case "$lw" in (''|*[!0-9]*) lw=120 ;; esac; [ "${#lw}" -le 5 ] || lw=120
   t0=$(date +%s)
+  # (the traps, and what they release, are set before the lock is taken, so a TERM the moment it's written still removes
+  # it; ad_unlock removes it only while it holds this command's own line, so one another command holds is left alone)
+  AD_LOCK=$lk AD_LOCKED=$mine
+  trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
   while :; do
     stale=""
     ad_take && break
@@ -365,8 +369,6 @@ ad_lock() {
       die "another agent-mailbox command (pid ${hp:-unknown}) has been working in this name's copy of the store$age: let it finish, or stop it, then run this again (its lock: $lk)"; }
     sleep 1
   done
-  AD_LOCK=$lk AD_LOCKED=$mine
-  trap ad_unlock EXIT; trap 'exit 130' INT TERM HUP
 }
 # ad_unlock: release the lock, if this command still holds it
 ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }

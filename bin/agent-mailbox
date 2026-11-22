@@ -1388,7 +1388,7 @@ watch)
   unmark() { for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do
     [ "$(cut -d' ' -f1 "$pf" 2>/dev/null)" != $$ ] || rm -f "$pf"; done; }
   trap unmark EXIT
-  trap 'exit 130' INT TERM
+  trap 'exit 130' INT TERM HUP
   # (one for the name, and one for the name on this store, since one name can be in use on several stores)
   for pf in "$STATE/run/$ME.pid" "$STATE/run/$ME@$STORE_ID.pid"; do echo "$$ $ME $STORE_ID" > "$pf"; done
   # a failed peek fails the check (a pipe would report only the loop's status), so it's retried, never read as "no mail"

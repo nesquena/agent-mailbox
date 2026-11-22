@@ -247,17 +247,35 @@ if ! claim; then
     { rm -f "$run/claiming" 2>/dev/null; rmdir "$run/claiming" 2>/dev/null; claim; } || exit 0
 fi
 if mine; then unclaim; exit 0; fi
-printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; unclaim
+# (held: this hook holds the mutex now, until the pid file is written, so a stop in between can still clear the file)
+held=1
+# note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
+note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
+child="" dog=""
+# (the traps are set before the pid file is written, so a stop the moment it appears still removes it: cleanup removes
+# it only while it names this hook)
+# cleanup: the watcher and the watchdog, and everything under them (a sleep, a git fetch and its ssh), deepest first,
+# so none outlives the lock
+stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>/dev/null; }
+# (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
+# the mutex is busy, the lock stays, and reads as stale once this hook is gone)
+cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
+  if [ -n "$held" ] || claim; then
+    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; unclaim; held=""
+  fi; }
+# (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
+trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
+  printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
+  cleanup; exit 0' TERM INT HUP
+trap cleanup EXIT
+printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; held=""; unclaim
 # (mail an earlier run left pending, never passed on, wakes the session again)
 rm -f "$run/pending"
 set -- --as "$name"; [ -z "$conf" ] || set -- --config "$conf" "$@"
-# note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
-note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
 # word <text>: <text> as one shell word, quoted unless it's only characters the shell reads literally
 word() { case "$1" in (*[!A-Za-z0-9_./@%+:,-]*|'') printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;; (*) printf '%s' "$1" ;; esac; }
 # cmd: the CLI, with this store's config when it has its own, and this name, quoted for a shell
 cmd() { c=$(word "$cli"); [ -z "$conf" ] || c="$c --config $(word "$conf")"; printf '%s --as %s' "$c" "$name"; }
-child="" dog=""
 # the interval (1 s to an hour) and the day's limit: whole seconds, the limit kept under the hook's timeout (86400 s) by
 # an interval and a minute, since Claude Code kills a hook at its timeout without a word, and the session would hear
 # nothing
@@ -267,20 +285,6 @@ case "$iv" in (''|*[!0-9]*) iv=120 ;; esac; { [ "${#iv}" -le 4 ] && [ "$iv" -ge 
 case "$max" in (''|*[!0-9]*) max=86100 ;; esac; { [ "${#max}" -le 6 ] && [ "$max" -ge 1 ]; } || max=86100
 [ "$max" -le $((86340 - iv)) ] || max=$((86340 - iv))
 start=$(date +%s)
-# cleanup: the watcher and the watchdog, and everything under them (a sleep, a git fetch and its ssh), deepest first,
-# so none outlives the lock
-stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>/dev/null; }
-# (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
-# the mutex is busy, the lock stays, and reads as stale once this hook is gone)
-cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
-  if claim; then
-    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; unclaim
-  fi; }
-# (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
-trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
-  printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
-  cleanup; exit 0' TERM INT HUP
-trap cleanup EXIT
 # Claude Code may stop this hook by killing only the shell it started it through, or end (or crash) without stopping
 # it: a hook left running would hold the lock, and its wake would reach no session. So it stops itself once that shell
 # or Claude Code (when its pid is known) is gone, and it doesn't record mail it would wake no one for. It also keeps a
