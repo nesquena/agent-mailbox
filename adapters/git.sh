@@ -52,7 +52,7 @@ ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRAN
 ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
-  LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
+  LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --no-tags --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
@@ -83,6 +83,15 @@ ad_open() {
   mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
   ad_lock
   ad_clear_locks
+  # mailbox clones don't use tags: keep tag auto-following off and drop any tags an earlier clone fetched
+  if [ -d "$AD_DIR/.git" ]; then
+    if [ "$(ad_git config remote.origin.tagOpt)" != --no-tags ]; then
+      ad_git config remote.origin.tagOpt --no-tags
+    fi
+    ad_git for-each-ref --format='%(refname)' refs/tags/ | while IFS= read -r t; do
+      [ -z "$t" ] || ad_git update-ref -d "$t" 2>/dev/null || :
+    done
+  fi
   if [ ! -d "$AD_DIR/.git" ]; then
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
@@ -96,13 +105,14 @@ ad_open() {
       case $err in (*"Remote branch $BRANCH not found in upstream"*) err=$(ad_clone) ;; (*) false ;; esac; } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
+    ad_git config remote.origin.tagOpt --no-tags
     ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
-    ad_git fetch -q origin "$AD_SPEC" 2>/dev/null
+    ad_git fetch -q --no-tags origin "$AD_SPEC" 2>/dev/null
     # (git's output is kept for the one die line, never passed through: it prints a path it can't create as it is)
     cerr=""
-    if ad_remote_has_branch; then cerr=$(ad_git checkout -q -B "$BRANCH" "origin/$BRANCH" 2>&1)
+    if ad_remote_has_branch; then cerr=$(ad_git checkout -q -B "$BRANCH" "refs/remotes/origin/$BRANCH" 2>&1)
     else cerr=$( { ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; } 2>&1 )
     fi || { rm -rf "$AD_DIR"; die "can't check out the store${cerr:+: $(printf '%s\n' "$cerr" | ad_gist)}"; }
     # another command may set up the same clone meanwhile: whichever moves first is kept, and is never removed. A loser
@@ -128,11 +138,11 @@ ad_open() {
   export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 }
 
-# fetch, then rebase local commits onto origin/<branch>; prints git's error on failure
+# fetch, then rebase local commits onto refs/remotes/origin/<branch>; prints git's error on failure
 ad_pull() {
   # whether this clone had seen the store's branch before this fetch, and where it was then
   seen="" pre=""; ! ad_remote_has_branch || { seen=1; pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH"); }
-  ferr=$(ad_git fetch -q origin "$AD_SPEC" 2>&1) || {
+  ferr=$(ad_git fetch -q --no-tags origin "$AD_SPEC" 2>&1) || {
     # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
     # a branch gone from the store since this clone fetched it
     ad_ls_branch >/dev/null 2>&1
@@ -144,20 +154,20 @@ ad_pull() {
   post=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH")
   # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
   rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
-  taken=""; ! ad_git cat-file -e "origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+  taken=""; ! ad_git cat-file -e "refs/remotes/origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
   # an init an earlier command made but never published (its push failed), when the branch now has a mailbox in its
   # folder: another agent's init won while this one waited. It's dropped, and the clone goes on with that mailbox. Only
   # a lone commit `init` writes (store.md and the two .keep files) that the store never had is dropped; a clone holding
   # anything more, or one whose init the store once had (a mailbox since reset), fails below as before
   if [ -n "$taken" ] && [ -z "${AD_INIT:-}" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
-    [ "$(ad_git rev-list --count HEAD --not "origin/$BRANCH")" = 1 ] &&
+    [ "$(ad_git rev-list --count HEAD --not "refs/remotes/origin/$BRANCH")" = 1 ] &&
     [ "$(ad_git log -1 --format=%s HEAD)" = "mailbox: init" ] &&
     { [ -z "$pre" ] || ! ad_git merge-base --is-ancestor HEAD "$pre"; } &&
     [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root HEAD |
       grep -vxF -e "${rr:+$rr/}store.md" -e "${rr:+$rr/}agents/.keep" -e "${rr:+$rr/}inbox/.keep")" ]; then
     # (git prints a path it can't create as it is, line breaks included, and a store writer chooses paths: its output
     # is returned for the one die line, never passed through)
-    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
+    rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
     warn "dropped an init this clone made earlier but never published: another agent has since started the mailbox at '$ROOT/' (require_signatures: $(field require_signatures "$AD_DIR/$ROOT/store.md" | clean "$CAP"); its settings are in $ROOT/store.md)"
     return 0
   fi
@@ -165,15 +175,15 @@ ad_pull() {
   # lost just now: init saw no mailbox there, and its own sync published anything left before, so that commit is all
   # this clone holds unpublished. It's dropped, and init reports the winner
   if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
-    [ "$(ad_git rev-list --count "origin/$BRANCH..HEAD")" = 1 ]; then
-    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }; return 0
+    [ "$(ad_git rev-list --count "refs/remotes/origin/$BRANCH..HEAD")" = 1 ]; then
+    rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }; return 0
   fi
   # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
   # it, so nothing it holds is published into that mailbox, when it had seen the store's branch before (one since
   # reset, deleted or re-created) or the branch now has a mailbox in its own folder (another agent's init took it). A
   # clone that never saw the branch, whose mailbox folder the branch doesn't have (a mailbox in another folder of the
   # same branch), is rebased and published as before. It returns 3, so a push retrying doesn't add "don't resend"
-  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "origin/$BRANCH" >/dev/null 2>&1; then
+  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
     if [ -n "$seen" ] || [ -n "$taken" ]; then
       # (what goes with the clone: its commits the store never had, past where it last saw the store's branch)
       if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..HEAD"); else un=$(ad_git rev-list --count HEAD); fi
@@ -188,10 +198,10 @@ ad_pull() {
     fi
   fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
-    rb=$(ad_git rebase -q --autostash "origin/$BRANCH" 2>&1 >/dev/null) ||
+    rb=$(ad_git rebase -q --autostash "refs/remotes/origin/$BRANCH" 2>&1 >/dev/null) ||
       { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
   else
-    rerr=$(ad_git reset -q --hard "origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
+    rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
   fi
 }
 
@@ -216,7 +226,7 @@ ad_unstick() { k=0 said="" rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/
       ad_git rebase --skip >/dev/null 2>&1 || :
     fi
   done
-  ad_git merge-base --is-ancestor "origin/$BRANCH" HEAD || return 1
+  ad_git merge-base --is-ancestor "refs/remotes/origin/$BRANCH" HEAD || return 1
   printf '%s\n' "$said" | while IFS= read -r w; do [ -z "$w" ] || warn "$w"; done; }
 # ad_restamp: (for ad_unstick) resolve the stopped commit's conflicts when each is a message that commit added, under a
 # name the store took meanwhile, by moving it (and its .sig) to the next free stamp; status 1 when any isn't
@@ -400,8 +410,8 @@ ad_sync() {
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)
   if ad_remote_has_branch; then
-    [ -z "$(ad_git log --format=%h "origin/$BRANCH..HEAD" 2>/dev/null)" ] && return
-    warn "publishing $(ad_git rev-list --count "origin/$BRANCH..HEAD") commit(s) left from an earlier command"
+    [ -z "$(ad_git log --format=%h "refs/remotes/origin/$BRANCH..HEAD" 2>/dev/null)" ] && return
+    warn "publishing $(ad_git rev-list --count "refs/remotes/origin/$BRANCH..HEAD") commit(s) left from an earlier command"
   else
     ad_git rev-parse -q --verify HEAD >/dev/null || return 0
     warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
@@ -442,7 +452,7 @@ ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 # (no auto-gc/maintenance outside ad_lock: a watcher shouldn't run pack-refs or repack concurrently with lock-holding commands)
 ad_peek() {
-  ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --no-tags --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
   pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
@@ -451,7 +461,8 @@ ad_peek() {
 # (consumed files included), however it got there. holds builds a security gate on this, so no git history filter
 # may hide a version: --full-history and -m visit every commit and both sides of every merge (history
 # simplification could skip a commit), with log.diffMerges pinned so a user's setting can't turn -m off;
-# --no-renames counts a renamed file as added; A, M and T count added, rewritten and retyped files. A pattern (git
+# --no-renames counts a renamed file as added; A, M and T count added, rewritten and retyped files, and a commit that
+# adds or updates only <msg>.md.sig also lists <msg>.md at that commit when it exists there. A pattern (git
 # log -G, an extended regex, searching every file as plain text) narrows only the added versions, whose whole content
 # is in the diff; a rewritten version is always listed, since its diff shows only the lines that changed. Rows are
 # unique per path, content and signature (the <path>.sig at that commit), so merges can't multiply the work and no
@@ -464,28 +475,46 @@ ad_history() {
   # fetches into a ref of its own, as ad_peek does, so the clone's tracking ref still says where the clone last synced:
   # ad_pull reads it to tell what this clone published, and a store re-created in between mustn't move it
   u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
-  ad_git fetch -q $u --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/history" 2>/dev/null || { echo '! !'; return 0; }
+  ad_git fetch -q $u --no-tags --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/history" 2>/dev/null || { echo '! !'; return 0; }
   tip=$(ad_git rev-parse -q --verify refs/agent-mailbox/history) || { echo '! !'; return 0; }
   AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
       --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'
     ad_git -c log.diffMerges=separate log --reverse --full-history -m --no-renames --diff-filter=AMT --raw --no-abbrev \
       --format='C %H' "$tip" -- "$1/" 2>/dev/null || echo '!'; } |
     awk -v g="${2:+1}" '
+      function flush(  j, b, k) {
+        for (j = 1; j <= ns; j++) { b = sigp[j]; if (!(b in ct) && !seen[c " " b]++) print c "\t" b "\t?" }
+        ns = 0; for (k in ct) delete ct[k]
+      }
       $1 == "!" || ($1 == "G" && $2 == "!") { print "!"; next }
       $1 == "G" { if ($2 == "C") c = $3; else if ($2 ~ /^:/) { i = index($0, "\t"); m[c " " substr($0, i + 1)] = 1 }; next }
-      $1 == "C" && NF == 2 { c = $2; next }
+      $1 == "C" && NF == 2 { flush(); c = $2; next }
       /^:/ { i = index($0, "\t"); p = substr($0, i + 1); split(substr($0, 1, i - 1), f, " ")
-             if (f[2] == "160000" || (g && f[5] == "A" && !((c " " p) in m))) next; if (!seen[c " " p]++) print c "\t" p "\t" f[4] }')
+             if (f[2] == "160000") next
+             ct[p] = 1
+             if (p ~ /\.md\.sig$/) { sigp[++ns] = substr(p, 1, length(p) - 4); next }
+             if (g && f[5] == "A" && !((c " " p) in m)) next
+             if (!seen[c " " p]++) print c "\t" p "\t" f[4] }
+      END { flush() }')
   [ -n "$AD_ROWS" ] || return 0
   # every row starts with a commit id, so a row starting with "!" is a failure marker: report it, and nothing else
   if printf '%s\n' "$AD_ROWS" | grep -q '^!'; then echo '! !'; return 0; fi
-  # the signature blob of each row, one line per row ("<name> missing" when there is none); a row left without
-  # one (cat-file failed) is still listed
+  # the signature blob of each row (and the message blob when a row came from a .md.sig-only commit); a row left
+  # without a lookup (cat-file failed) is still listed
   { printf '%s\n' "$AD_ROWS"; echo =
-    printf '%s\n' "$AD_ROWS" | awk -F'\t' '{ print $1 ":" $2 ".sig" }' | ad_git cat-file --batch-check='%(objectname)'; } |
-    awk -F'\t' '!s { if ($0 == "=") s = 1; else r[++m] = $0; next }
-                 { split(r[++n], f, "\t"); b = /^[0-9a-f]+$/ ? $0 : "-"; if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
-                 END { while (n < m) { split(r[++n], f, "\t"); print f[1], f[2] } }'
+    printf '%s\n' "$AD_ROWS" | awk -F'\t' '{ if ($3 == "?") print $1 ":" $2; print $1 ":" $2 ".sig" }' |
+      ad_git cat-file --batch-check='%(objecttype) %(objectname)'; } |
+    awk -F'\t' '
+      !s { if ($0 == "=") s = 1; else r[++m] = $0; next }
+      pending { pending = 0; if (f[3] == "") next
+                b = ($0 ~ /^blob [0-9a-f]+$/) ? substr($0, 6) : "-"
+                if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2]; next }
+      { split(r[++n], f, "\t")
+        if (f[3] == "?") { f[3] = ($0 ~ /^blob [0-9a-f]+$/) ? substr($0, 6) : ""; pending = 1; next }
+        b = ($0 ~ /^blob [0-9a-f]+$/) ? substr($0, 6) : "-"
+        if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
+      END { if (pending && f[3] != "") print f[1], f[2]
+            while (n < m) { split(r[++n], f, "\t"); if (f[3] != "?") print f[1], f[2] } }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>; 1 when that version has no such file (ls-tree lists no blob there:
 # a folder isn't one), 2 when it has and it can't be read, or when ls-tree itself fails (then it can't be told)

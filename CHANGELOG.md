@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The git adapter clones and fetches without tags (`--no-tags`, `remote.origin.tagOpt=--no-tags`), clears any tags in
+  an existing mailbox clone on open, and refers to the remote branch as `refs/remotes/origin/<branch>`.** Tags in a
+  store repository no longer affect what a mailbox clone sees.
+- **`holds` with the git adapter lists a message when a commit adds or updates only its `.sig` file**, so a message and
+  its signature committed separately give `holds` the same verdict as `read` and `verify`.
+- **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
+  under those roots are no longer skipped.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give
