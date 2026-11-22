@@ -58,8 +58,9 @@ ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
 # merge and diff come first, so a store macro of either name ([attr]merge ...) can't undo the neutral settings after them
 AD_ATTRS='* merge !diff -text -eol -filter -ident -working-tree-encoding'
+# (written as put does: a size limit fails the write rather than ending the shell, and nothing it couldn't write is printed)
 ad_attrs_put() { mkdir -p "$AD_DIR/.git/info" &&
-  printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" && mv -f "$af.$$" "$af"; }
+  ( trap '' XFSZ; printf '%s\n' ${1:+"$1"} "$AD_ATTRS" > "$af.$$" ) >/dev/null 2>&1 && mv -f "$af.$$" "$af"; }
 ad_attrs() {
   af="$AD_DIR/.git/info/attributes" al=
   [ ! -f "$af" ] || IFS= read -r al < "$af"
@@ -314,7 +315,8 @@ ad_can_make() { ( : > "$ld/probe.$$" ) 2>/dev/null && rm -f "$ld/probe.$$"; }
 # that later takers wait out and blame on an unknown holder. (`|| exit 1` after the exec: a non-POSIX bash goes on
 # after a failed `exec 3>`, and would remove another taker's lock; XFSZ ignored, so a size limit fails the write
 # rather than killing the shell)
-ad_take() { ( trap '' XFSZ; set -C; exec 3> "$lk" || exit 1; printf '%s\n' "$mine" >&3 && exit 0; rm -f "$lk"; exit 3 ) 2>/dev/null
+# (its own output goes nowhere: bash's printf, failing under a size limit, prints what it couldn't write there on exit)
+ad_take() { ( trap '' XFSZ; set -C; exec 3> "$lk" || exit 1; printf '%s\n' "$mine" >&3 && exit 0; rm -f "$lk"; exit 3 ) >/dev/null 2>&1
   case $? in (0) return 0 ;; (3) die "can't write the lock $lk (is the disk full?)" ;; esac; return 1; }
 ad_lock() {
   ld="$STATE/locks/$AD_ID"; mkdir -p "$ld" 2>/dev/null || die "can't create $ld"

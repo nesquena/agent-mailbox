@@ -338,11 +338,19 @@ mkdir -p "$W/tmp2/agent mailbox test.OLDxxx" "$W/tmp2/agent mailbox test.NEWxxx"
   echo 'echo "dir $W"; ( "$SH" -c "sleep 600; :" "$W/orphan" & ); sleep 600 & wait'; } > "$W/sig.sh"
 TMPDIR="$W/tmp2" "$SH" "$W/sig.sh" > "$W/sig.out" 2>&1 & sp=$!
 i=0; while [ -z "$(sed -n 's/^dir //p' "$W/sig.out")" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; sleep 1
-kill -HUP "$sp"; i=0; while kill -0 "$sp" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
-! kill -0 "$sp" 2>/dev/null || kill -KILL "$sp" 2>/dev/null; wait "$sp"; rc=$?
-sd=$(sed -n 's/^dir //p' "$W/sig.out")
-[ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
-  ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
+# (a signal that was ignored when this suite began stays ignored in every shell it starts, which can't trap it: a
+# harness or sandbox that starts the suite with HUP ignored can't test this, and it's skipped there, saying so)
+if "$SH" -c 'trap "exit 0" HUP; kill -HUP $$; sleep 1; exit 1' 2>/dev/null; then
+  kill -HUP "$sp"; i=0; while kill -0 "$sp" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  ! kill -0 "$sp" 2>/dev/null || kill -KILL "$sp" 2>/dev/null; wait "$sp"; rc=$?
+  sd=$(sed -n 's/^dir //p' "$W/sig.out")
+  [ "$rc" = 130 ] && [ -n "$sd" ] && [ ! -d "$sd" ] && [ -z "$(procs_naming "$sd")" ] &&
+    ok "a run stopped by a signal stops what it started and removes its folder" || no "a run stopped by a signal left something behind (exit $rc)" "$(cat "$W/sig.out")"
+else
+  sd=$(sed -n 's/^dir //p' "$W/sig.out"); kill_tree "$sp"; wait "$sp" 2>/dev/null
+  for p in $(procs_naming "${sd:-/nonexistent}" | awk '{ print $1 }'); do kill_tree "$p"; done; rm -rf "${sd:-/nonexistent}"
+  sk "a run stopped by a signal stops what it started (HUP is ignored in this suite's environment, so no shell it starts can trap it)"
+fi
 [ ! -d "$W/tmp2/agent mailbox test.OLDxxx" ] && [ -d "$W/tmp2/agent mailbox test.NEWxxx" ] &&
   ok "a run sweeps an hour-old folder a killed run left, and keeps a recent one" || no "the sweep removed the wrong folders" "$(ls "$W/tmp2")"
 # a run read through dash's $(...), which reads the run's output to its end before reaping it, returns at once, with
@@ -397,6 +405,10 @@ ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
 # or FAIL, and the bats line gets the rest of the section's time, about 0.6 s (loose bounds: it's timed by sleep)
 mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 3' \
   'printf "1..2\nok 1 aa in 1200ms\nnot ok 2 bb in 1200ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
+# (warm up the stub once before timing: the first exec of a newly written executable can stall 1-3 s under OS scanning
+# such as macOS provenance, billing that delay to b0; warming it keeps the [200, 1700] window below 1800 ms so dropping
+# even one of the two 1200 ms tests still fails, while still fitting a whole-second clock's 600 or 1600 ms)
+"$W/stub/bats" --count >/dev/null 2>&1
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
   echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
 _otd=${TMPDIR-unset}
@@ -1227,8 +1239,9 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
     '{ ( ulimit -f 0; STATE=$2/state AD_ID=x AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; echo took ) 2>&1; echo "exit $?"; } | cat' > "$RF/taker"
   out=$(time_cap 30 "$SH" "$RF/taker" "$ROOTDIR/adapters/git.sh" "$RF" 2>&1); rc=${out##*exit }
+  # (and prints only its message and the exit line: under bash, printf printed the lock line it couldn't write)
   [ ! -e "$RF/state/locks/x/lock" ] && [ "$rc" = 1 ] && case "$out" in (*"can't write the lock "*) true ;; (*) false ;; esac &&
-    case "$out" in (*took*) false ;; (*) true ;; esac &&
+    case "$out" in (*took*) false ;; (*) true ;; esac && [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] &&
     ok "a lock that can't be written is removed, and the command says so" ||
     no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
   # several waiters on a dead holder's lock break it once, and then take turns: no two ever fetch at once (a git on
@@ -2125,7 +2138,7 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
     > "$T/store/mailbox/inbox/pm2/$en"
   out=$(planted pm2 tmp.holds.PID/m holds "pm#2" --version v1 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't copy mailbox/inbox/pm2/[0-9]*T[0-9]*Z-pm1-pin-[a-z]*\.md " &&
-    ! printf '%s' "$out" | grep -q "$esc" &&
+    ! printf '%s' "$out" | grep -q "$esc" && ! printf '%s\n' "$out" | grep -q " as of " &&
     ok "holds passes over a record whose name isn't plain before naming it" || no "holds named a record whose name holds escapes (exit $rc)" "$(printf '%s' "$out" | od -c | head -4)"
   rm -f "$T/store/mailbox/inbox/pm2/$en"
   [ -z "$(ls -d "$SP"/tmp.* 2>/dev/null)" ] && ok "and none of them leaves its copies behind" || no "a stopped copy left a folder" "$(ls -d "$SP"/tmp.*)"
@@ -2154,7 +2167,7 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
       ad_show - "mailbox/inbox/pm2/$fh.sig" >/dev/null; printf '%s' $?) )
     [ "$st" = "0 1 2" ] && ok "dir: ad_show exits 0 for a file, 1 for none, 2 for one it can't read" || no "dir: ad_show's exits for a file, none and an unreadable one" "$st"
     out=$(as pm2 holds "pm#2" --version v1 2>&1); rc=$?
-    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/inbox/pm2/$fh\.sig as of " &&
+    [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't read mailbox/inbox/pm2/$fh\.sig\$" &&
       ! printf '%s\n' "$out" | grep -q "^holds: " && ok "a hold's signature in the store that can't be read stops holds, deciding nothing" ||
       no "holds read a signature it couldn't read as none, or didn't say why (exit $rc)" "$out"
     chmod 644 "$IB/$fh.sig"; chmod 000 "$IB/$f"
@@ -2205,6 +2218,12 @@ if [ -n "$PP" ] && [ -n "$fh" ] && [ ! -f "$PP/pm1" ]; then chmod a-w "$PP"
   else expect "register that can't record its own key pin stops, saying so" 1 "^agent-mailbox: can't record your own key" \
     as pm4 register --kind t --about t; fi
   chmod u+w "$P4"
+  # update whose own pin is already its key's writes nothing there, so a read-only pins folder doesn't stop it
+  P1=$(ls -d "$W/home-pm1/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); P1=${P1%/}; chmod a-w "$P1"
+  if (true > "$P1/probe") 2>/dev/null; then rm -f "$P1/probe"; sk "update with its pin unchanged and the pins folder read-only (read-only folders don't stop this user)"
+  else expect "update whose own pin is unchanged goes ahead with the pins folder read-only" 0 "^update: pm1 " as pm1 update --about t2
+    expect "and so does trust of a key whose pin is unchanged" 0 "^pinned pm1's current key" as pm1 trust pm1; fi
+  chmod u+w "$P1"
 else no "a key pin that can't be recorded stops the command" "no hold sent, pm2 has no pins folder, or already pinned pm1: $fh; $(ls -A "$PP" 2>&1)"; fi
 # a link left at the pin's temp name, or at the key list's, isn't followed: the pin and the key list are written as
 # files of their own, and what the links lead to is left as it was (for the process id the CLI will run as)
@@ -2225,20 +2244,49 @@ if (ulimit -f 0; "$SH" -c ': <<E
 x
 E') >/dev/null 2>&1; then
   out=$( (ulimit -f 0; echo g | as pm1 send pm2 pin-gate - --hold "pm#3 v1") 2>&1 ); rc=$?
-  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*/gates/" && ! printf '%s\n' "$out" | grep -qi "file size" &&
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*/gates/" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
     [ -z "$(as pm2 list | grep -- '-pin-gate\.md$')" ] && ok "send whose hold can't record its gate stops, saying only so, and sends nothing" ||
     no "send under a size limit didn't stop with its own message, or sent (exit $rc)" "$out"
 else sk "send whose hold can't record its gate stops, saying only so ($SH writes here-documents to files, which a size limit stops first)"; fi
 # trust that can't write (a size limit of 0) leaves the old pin as it was, byte for byte, and no temp beside it: the
 # pin is written beside it and moved over it, never truncated in place (a later read would take an empty pin as changed)
 PP=$(ls -d "$W/home-pm2/.local/state/agent-mailbox/pins/"*/ 2>/dev/null | head -n 1); PP=${PP%/}
-if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.pin"
+# (an earlier key's pin, so there's a pin to replace: one that's already the key's is left as it is. "Only so" is the
+# CLI's one line: no shell's note of the signal, and nothing bash's printf couldn't write)
+if [ -f "$PP/pm1" ]; then cp "$PP/pm1" "$T/pm1.now"; echo 0123456789abcdef > "$PP/pm1"; cp "$PP/pm1" "$T/pm1.pin"
   out=$( (ulimit -f 0; as pm2 trust pm1) 2>&1 ); rc=$?
-  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && ! printf '%s\n' "$out" | grep -qi "file size" &&
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't record pm1's key" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
     ok "trust that can't write its pin stops, saying only so" || no "trust under a size limit didn't stop, or said more (exit $rc)" "$out"
   cmp -s "$PP/pm1" "$T/pm1.pin" && [ -z "$(ls -A "$PP" | grep '\.tmp\.')" ] && ok "and leaves the old pin as it was, with no temp beside it" ||
     no "trust under a size limit changed the pin or left a temp" "$(ls -A "$PP"; od -c "$PP/pm1" | head -2)"
+  cp "$T/pm1.now" "$PP/pm1"
+  # verify that can't write its key list (the same limit) says only its one line (bash's printf printed the line)
+  out=$( (ulimit -f 0; as pm2 verify "$f") 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*tmp\.allowed" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
+    ok "verify that can't write its key list stops, saying only so" || no "verify under a size limit didn't stop with only its own message (exit $rc)" "$out"
+  # setup that can't write the config (the same limit) stops with the CLI's one line, and leaves the config as it was
+  cf="$W/home-pm2/.config/agent-mailbox/config"; cp "$cf" "$T/config.was"
+  out=$( (ulimit -f 0; as pm2 setup --store "$T/store" --adapter dir --name pm2 --human hx) 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write .*/config\$" && [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
+    cmp -s "$cf" "$T/config.was" && ok "setup that can't write its config stops, saying only so, and leaves it as it was" ||
+    no "setup under a size limit didn't stop with only its own message, or changed the config (exit $rc)" "$out"
 else no "trust that can't write its pin stops" "verify recorded no pin for pm1: $(ls -A "$PP" 2>&1)"; fi
+# a signature too big for a size limit (an RSA-4096 one under 1 block; the message fits) stops send with "signing
+# failed", and nothing is published: ssh-keygen, ignoring XFSZ, wrote a cut signature and exited 0
+as pm6 setup --store "$T/store" --adapter dir --name pm6 >/dev/null; K6="$W/home-pm6/.config/agent-mailbox/keys"
+mkdir -p "$K6" && chmod 700 "$K6" && ssh-keygen -q -t rsa -b 4096 -N '' -C t -f "$K6/pm6" && as pm6 register --kind t --about t >/dev/null 2>&1
+out=$( (ulimit -f 1; echo x | as pm6 send pm2 bigsig -) 2>&1 ); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: signing failed with " &&
+  [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
+  ok "send whose signature is too big for a size limit stops with signing failed, publishing nothing" ||
+  no "send under a size limit too small for its signature didn't stop with signing failed, or left a file (exit $rc)" "$out$NL$(ls -A "$T/store/mailbox/inbox/pm2")"
+# and a message too big for that limit stops send with the CLI's one line: put_signed's write ignores XFSZ, so no shell
+# prints the signal's note first
+out=$( (ulimit -f 1; head -c 3000 /dev/zero | tr '\0' a | as pm1 send pm2 bigbody -) 2>&1 ); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: can't write mailbox/inbox/pm2/[^ ]*-pm1-bigbody\.md\$" &&
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm1-bigbody')" ] &&
+  ok "send of a message too big for a size limit stops, saying only so, publishing nothing" ||
+  no "send of a message too big for a size limit didn't stop with only its own message, or left a file (exit $rc)" "$out"
 # a hold whose sender's key is gone from the registry still blocks in a strict store when the reader has a pin for it,
 # whatever is at the pin's path (here a folder): before, only a file there counted, and the hold was dropped
 as pm5 setup --store "$T/store" --adapter dir --name pm5 >/dev/null; as pm5 register --kind t --about t >/dev/null
@@ -3156,14 +3204,29 @@ rm -f "$RS/session-stores/r-leg" "$RS/run/rw.pid" "$RS/run/rw@"*.pid
 wakes "SessionStart wakes a session with legacy session-configs record" "rw-ss.md" \
   rewakess '{"session_id":"r-leg","hook_event_name":"SessionStart","source":"resume"}'
 rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
-# (a session that never ran watch starts nothing on SessionStart, whether startup or clear)
+# (a session watching two stores (--also) wakes on SessionStart for mail on the second store too)
+am2 update --status active >/dev/null 2>&1
+for f in $(as rw list 2>/dev/null | sed 's#.*/##'); do as rw consume "$f" >/dev/null 2>&1; done
+for f in $(am2 list 2>/dev/null | sed 's#.*/##'); do am2 consume "$f" >/dev/null 2>&1; done
+regs r-ss2; ALSO=--also; regs r-ss2 --config "$C2"; ALSO=
+echo hi | as rz send rw rz-ss2 - >/dev/null 2>&1
+if [ -z "$(find "$T/store2" -path '*/mailbox/inbox/rw/*' -name '*rz-ss2.md' 2>/dev/null)" ]; then
+  no "SessionStart wakes a two-store (--also) session for mail on its second store (rz-ss2.md was never sent)"
+else
+  r=$(RWMAX=60 time_cap 120 rewakess '{"session_id":"r-ss2","hook_event_name":"SessionStart","source":"resume"}'); rc=$?
+  case "$rc $r" in ("2 agent-mailbox: new mail for rw (1 new message). Read it: "*"--config "*second*" --as rw read")
+    grep -q rz-ss2 "$RS/rewake/rw/r-ss2@$S2/woke" &&
+      ok "SessionStart wakes a two-store (--also) session for mail on its second store" ||
+      no "SessionStart wakes a two-store (--also) session for mail on its second store" "$(cat "$RS/rewake/rw/r-ss2@$S2/woke" 2>/dev/null)" ;;
+    (*) no "SessionStart wakes a two-store (--also) session for mail on its second store" "$rc $r" ;; esac
+fi
+rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid
+# (a session that never ran watch starts nothing on SessionStart)
 expect "SessionStart does nothing for a session that never ran watch (startup)" 0 '^$' \
   rewakess '{"session_id":"never-watched","hook_event_name":"SessionStart","source":"startup"}'
-expect "SessionStart does nothing for a fresh session after clear" 0 '^$' \
-  rewakess '{"session_id":"after-clear","hook_event_name":"SessionStart","source":"clear"}'
-[ -z "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null)" ] && [ ! -e "$RS/run/rw.pid" ] &&
-  ok "and starts no watcher or state for sessions that never ran watch" ||
-  no "SessionStart left watcher or state for unwatched sessions" "$(find "$RS/rewake" -name 'never-watched*' -o -name 'after-clear*' 2>/dev/null; ls -A "$RS/run" 2>/dev/null)"
+[ -z "$(find "$RS/rewake" -name 'never-watched*' 2>/dev/null)" ] && [ ! -e "$RS/run/rw.pid" ] &&
+  ok "and starts no watcher or state for a session that never ran watch" ||
+  no "SessionStart left watcher or state for unwatched session" "$(find "$RS/rewake" -name 'never-watched*' 2>/dev/null; ls -A "$RS/run" 2>/dev/null)"
 # (at the end, every hook and watcher the section left running is stopped, with what it started, by the pid its pid file
 # holds: their command lines name the plugin, not this run's folder, so the exit cleanup wouldn't find them, and one
 # still running holds the run's output open until its 60 s limit)

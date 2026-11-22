@@ -55,6 +55,13 @@
   refusing any that isn't in your inbox. A message that can't be read stops `list --long` and a filtered `list` or
   `read`, as it stops `read`, rather than being left out. Plain `list` prints exactly what it did before.
 
+- **`update` and `trust` with a key whose pin is unchanged no longer stop on a read-only pins folder.** There's
+  nothing to write, so the pin is left as it is; before, both stopped with "can't record ...'s key".
+- **Under a file size limit, a write that fails prints only the CLI's own message.** The shell's "File size limit
+  exceeded" no longer comes first; and under bash, what couldn't be written (a config file's text, a key's fingerprint)
+  is no longer printed to the terminal.
+- **`holds` with the dir adapter no longer says "as of -"** when it names a file it can't read.
+
 ## 0.1.3 (2026-11-19)
 
 Commands that can't write or read a file they need now stop, saying why, where they used to say "verified", "bad",
