@@ -82,6 +82,7 @@ ad_open() {
   AD_DIR="$STATE/checkouts/$AD_ID"
   mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
   ad_lock
+  ad_clear_locks
   if [ ! -d "$AD_DIR/.git" ]; then
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
     # part-way never leaves a clone that later commands take as ready. ceiling: that cut-off one's .<id>.<pid> folder
@@ -370,13 +371,22 @@ ad_lock() {
 # ad_unlock: release the lock, if this command still holds it
 ad_unlock() { [ -n "$AD_LOCK" ] || return 0; [ "$(cat "$AD_LOCK" 2>/dev/null)" != "$AD_LOCKED" ] || rm -f "$AD_LOCK"; AD_LOCK=""; }
 
+# ad_clear_locks: under ad_lock, no other lock-holding command is in this clone, so any git *.lock left behind is
+# debris from a command killed by SIGXFSZ, SIGKILL or a crash. A live watch releases ad_lock and only fetches into
+# refs/agent-mailbox/peek, so peek's own ref/reflog locks are left alone
+ad_clear_locks() { [ -d "$AD_DIR/.git" ] || return 0
+  find "$AD_DIR/.git" -type f -name '*.lock' \
+    ! -path "$AD_DIR/.git/refs/agent-mailbox/peek.lock" \
+    ! -path "$AD_DIR/.git/logs/refs/agent-mailbox/peek.lock" \
+    -exec rm -f -- {} + 2>/dev/null || :; }
+
 ad_sync() {
-  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: a rebase it
-  # was in, git's own lock on the index, and changes it never committed (a message written but not added, a consumed
-  # one removed but not committed). Commits it made but couldn't push are kept, and published below
+  # under the lock, nothing else works in this clone, so what a command cut off part-way left is debris: stale git lock
+  # files, a rebase it was in, and changes it never committed (a message written but not added, a consumed one removed
+  # but not committed). Commits it made but couldn't push are kept, and published below
+  ad_clear_locks
   if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
-  rm -f "$AD_DIR/.git/index.lock"
   if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
   # (-x: files the store's own .gitignore names are debris too)
   ad_git clean -fdqx -- "$ROOT" 2>/dev/null

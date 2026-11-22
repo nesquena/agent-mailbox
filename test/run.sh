@@ -1297,6 +1297,21 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
   expect "a rebase left half-removed doesn't stop the next command" 3 "no mail" as lp list
   : > "$ck/.git/index.lock"; echo junk > "$ck/mailbox/inbox/lp/20200101T000000Z-zz-junk.md"
   expect "nor does git's lock on the index, and a file written but never added isn't taken for mail" 3 "no mail" as lp list
+  # nor stale git locks left by a command killed mid-commit (HEAD.lock, refs/heads/main.lock, next-index-*.lock,
+  # config.lock); a live watcher's peek lock is left alone
+  mkdir -p "$ck/.git/refs/agent-mailbox"
+  : > "$ck/.git/HEAD.lock"; : > "$ck/.git/refs/heads/main.lock"; : > "$ck/.git/next-index-99999.lock"
+  : > "$ck/.git/config.lock"; : > "$ck/.git/refs/agent-mailbox/peek.lock"
+  expect "nor do stale git locks (HEAD, branch, next-index, config) stop the next send" 0 "^sent " as lp send lr after-stale-locks "$T/m"
+  [ ! -e "$ck/.git/HEAD.lock" ] && [ ! -e "$ck/.git/refs/heads/main.lock" ] &&
+    [ ! -e "$ck/.git/next-index-99999.lock" ] && [ ! -e "$ck/.git/config.lock" ] &&
+    [ -f "$ck/.git/refs/agent-mailbox/peek.lock" ] &&
+    ok "stale git locks are removed while a watcher's peek lock is kept" ||
+    no "stale git locks weren't cleared cleanly" "$(find "$ck/.git" -name '*.lock' 2>&1)"
+  rm -f "$ck/.git/HEAD.lock" "$ck/.git/refs/heads/main.lock" "$ck/.git/next-index-99999.lock" "$ck/.git/config.lock" "$ck/.git/refs/agent-mailbox/peek.lock"
+  # a send killed by a file size limit mid-git doesn't wedge the clone: the next send without the limit succeeds
+  ( ulimit -f 4; echo x | as lp send lr under-limit - ) >/dev/null 2>&1 || :
+  expect "a send after one killed under a size limit still succeeds" 0 "^sent " as lp send lr after-limit "$T/m"
   # nor one the store's own .gitignore names
   git clone -q "$T/store.git" "$T/gi" && printf '*-junk.md\n' > "$T/gi/mailbox/inbox/lp/.gitignore" &&
     git -C "$T/gi" add mailbox/inbox/lp/.gitignore && git -C "$T/gi" -c user.name=s -c user.email=s@s commit -qm ignore &&
@@ -2292,6 +2307,21 @@ out=$( (ulimit -f 1; echo x | as pm6 send pm2 bigsig -) 2>&1 ); rc=$?
   [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
   ok "send whose signature is too big for a size limit stops with only signing failed, publishing nothing" ||
   no "send under a size limit too small for its signature didn't stop with only signing failed, or left a file (exit $rc)" "$out$NL$(ls -A "$T/store/mailbox/inbox/pm2")"
+# and the same on sign_file's terminal branch (askpass_never): with a terminal on stdin, dash still prints only "signing failed"
+if command -v script >/dev/null 2>&1; then
+  echo x > "$T/bigsig.body"
+  printf '%s\n' '#!/bin/sh' "export HOME='$W/home-pm6'" \
+    'unset XDG_CONFIG_HOME XDG_STATE_HOME AGENT_MAILBOX_SESSION CLAUDE_CODE_SESSION_ID AGENT_MAILBOX_NAME SSH_ASKPASS_REQUIRE' \
+    "ulimit -f 1; '$SH' '$CLI' send pm2 bigsig-tty '$T/bigsig.body' > '$T/bstty.out' 2>&1; echo \$? > '$T/bstty.rc'" > "$T/bstty.sh"
+  chmod +x "$T/bstty.sh"
+  case "$(uname)" in (Linux) script -qc "'$T/bstty.sh'" /dev/null ;; (*) script -q /dev/null "$T/bstty.sh" ;; esac < /dev/null >/dev/null 2>&1
+  rc=$(cat "$T/bstty.rc" 2>/dev/null); out=$(cat "$T/bstty.out" 2>/dev/null)
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "^agent-mailbox: signing failed with " &&
+    [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] &&
+    [ -z "$(ls -A "$T/store/mailbox/inbox/pm2" | grep -- '-pm6-')" ] &&
+    ok "and in a terminal (askpass_never branch), it still prints only signing failed" ||
+    no "in a terminal under a size limit, signing didn't stop with only signing failed (exit ${rc:-none})" "$out"
+else sk "sign_file terminal branch under a size limit (no script here)"; fi
 # and a message too big for that limit stops send with the CLI's one line: put_signed's write ignores XFSZ, so no shell
 # prints the signal's note first
 out=$( (ulimit -f 1; head -c 3000 /dev/zero | tr '\0' a | as pm1 send pm2 bigbody -) 2>&1 ); rc=$?
