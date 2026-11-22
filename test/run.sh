@@ -397,6 +397,10 @@ ms=$(awk -F '\t' '$2 == "two" && $4 == "x" { print $1 }' "$W/m.tsv" 2>/dev/null)
 # or FAIL, and the bats line gets the rest of the section's time, about 0.6 s (loose bounds: it's timed by sleep)
 mkdir -p "$W/stub"; printf '%s\n' '#!/bin/sh' 'case "$1" in (--count) echo 2; exit 0 ;; esac' 'sleep 3' \
   'printf "1..2\nok 1 aa in 1200ms\nnot ok 2 bb in 1200ms\n"' 'exit "${STUBRC:-0}"' > "$W/stub/bats"; chmod +x "$W/stub/bats"
+# (warm up the stub once before timing: the first exec of a newly written executable can stall 1-3 s under OS scanning
+# such as macOS provenance, billing that delay to b0; warming it keeps the [200, 1700] window below 1800 ms so dropping
+# even one of the two 1200 ms tests still fails, while still fitting a whole-second clock's 600 or 1600 ms)
+"$W/stub/bats" --count >/dev/null 2>&1
 { sed -n '1,/^SUITE=\$\$$/p' "$0"; sed -n '/^sec_bats() {$/,/^}$/p' "$0"
   echo 'PATH="$STUBDIR:$PATH"; BATS=1; W=$RUNW; TSEC=bats; times_mark; sec_bats'; } > "$W/batsstub.sh"
 _otd=${TMPDIR-unset}
