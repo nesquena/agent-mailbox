@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Message-name arguments now refuse whitespace (spaces, tabs, line breaks) before taking a basename**, in `consume`,
+  `send --consume`, `send --in-reply-to`, `reply`, `verify` (by name), `read` (`<file>` and `--except`), and
+  `watch --except`. Before, one argument holding several paths (such as `"$(agent-mailbox list)"` or space-separated
+  paths) narrowed to its last path's basename and silently dropped the rest; pass each file as its own argument
+  (`consume <file>...`, or repeat `--consume` / `--except` once per message). A single path without whitespace (such as
+  `mailbox/inbox/<you>/<name>`) still works, as does `verify` on an existing file path whose folder holds spaces.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give

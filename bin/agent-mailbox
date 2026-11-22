@@ -96,7 +96,7 @@ once() { case " $seen " in (*" $1 "*) die "$1 was given twice: ${2:-it takes one
 # matches <ERE> <value>: the whole value, on one line, matches. printf, not echo: dash's echo reads backslash escapes
 # (a `\c` would cut the value short), and a line break or carriage return never passes
 NL='
-' CR=$(printf '\r')
+' CR=$(printf '\r') TAB=$(printf '\t')
 matches() { case "$2" in (*"$NL"*|*"$CR"*) return 1 ;; esac; printf '%s\n' "$2" | grep -Eq -- "$1"; }
 # phys <folder>: its physical path. hops <file>: the physical path of the file as named, then of each link it leads to
 # (at most 40), one per line (plain readlink is on Linux, macOS, BSD); each hop's folders that are links are followed
@@ -466,6 +466,21 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
+# msg_name [--soft] <arg> [<keep_msg>]: take one message file name from an argument (a bare name or a path with no
+# whitespace, such as mailbox/inbox/<me>/<name>). Refuses whitespace (spaces, tabs, line breaks) in the argument as
+# given, so a value holding several paths (such as "$(agent-mailbox list)") isn't silently narrowed to its last
+# basename, then takes its basename and checks it against MSG_RE (valid_msg). With --soft (verify's inbox lookup after
+# checking paths on disk), a non-message name returns 1 while whitespace still stops the command. Sets MSG_NAME.
+msg_name() {
+  soft=""; [ "${1:-}" != --soft ] || { soft=1; shift; }
+  case "$1" in
+    (*" "*|*"$TAB"*|*"$NL"*|*"$CR"*|*[[:space:]]*) die "argument isn't a message file name (can't hold whitespace; pass one file per argument)" ;;
+  esac
+  MSG_NAME=$(basename -- "$1")
+  [ -z "${2:-}" ] || [ "$MSG_NAME" != .keep ] || die "$2"
+  if [ -n "$soft" ]; then matches "$MSG_RE" "$MSG_NAME"
+  else valid_msg "$MSG_NAME"; fi
+}
 rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
 # secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh (this HOME's, or the account's own
 # when HOME is elsewhere) or this CLI's config or state folder, or is (or is under) where a link kept in ~/.ssh or the
@@ -651,7 +666,7 @@ if [ "$cmd" = reply ]; then
   ru='usage: reply <file> <body.md|-> [--needs text] [--context c] [--hold|--release "<item> <version>"] [--keep]'
   [ $# -ge 1 ] || die "$ru"
   case "$1" in (-*) misplaced "$1"; matches "$MSG_RE" "$1" || die "$ru" ;; esac
-  rf=$(basename -- "$1"); shift; rbody="" keep="" seen=""
+  rarg=$1; shift; rbody="" keep="" seen=""
   # what isn't reply's own is kept, in order, for send: each option with its value
   n=$#; while [ "$n" -gt 0 ]; do a=$1; shift; n=$((n-1))
     case "$a" in
@@ -663,7 +678,7 @@ if [ "$cmd" = reply ]; then
     esac
   done
   [ -n "$rbody" ] || die "$ru"
-  need_me; valid_msg "$rf"
+  need_me; msg_name "$rarg"; rf=$MSG_NAME
   load_adapter; ad_sync; need_store; LOADED=1
   rp="$M/inbox/$ME/$rf"
   # (a link isn't a message of your inbox's, as for read)
@@ -934,19 +949,20 @@ trust)
 send)
   [ $# -ge 3 ] || die "usage: send <to> <topic> <body.md|-> [--context c] [--in-reply-to file] [--needs text] [--consume file]... [--hold|--release \"<item> <version>\"]"
   to=$1 topic=$2 body=$3; shift 3
-  context="" ctx_set="" reply="" needs=none consume="" hold="" release="" seen=""
+  context="" ctx_set="" reply="" reply_raw="" rset="" needs=none consume="" hold="" release="" seen=""
   while [ $# -gt 0 ]; do
     misplaced "$1"; [ $# -ge 2 ] || die "$1 needs a value"
     case "$1" in (--consume) ;; (--hold|--release) once "$1" "a message carries one hold or release; send one message per item" ;;
       (*) once "$1" ;; esac
     case "$1" in
-      --context) context=$2; ctx_set=1 ;; --in-reply-to) reply=$(basename -- "$2") ;; --needs) needs=$2 ;;
-      --consume) c=$(basename -- "$2"); valid_msg "$c"
+      --context) context=$2; ctx_set=1 ;; --in-reply-to) reply_raw=$2; rset=1 ;; --needs) needs=$2 ;;
+      --consume) msg_name "$2"; c=$MSG_NAME
         case " $consume " in (*" $c "*) ;; (*) consume="${consume:+$consume }$c" ;; esac ;; --hold) hold=$2 ;; --release) release=$2 ;;
       *) unknown "$1" ;;
     esac; shift 2
   done
   need_me; valid_name "$to"
+  [ -z "$rset" ] || { msg_name "$reply_raw"; reply=$MSG_NAME; }
   [ -n "$reply" ] || reply=${consume%% *}; [ -n "$reply" ] || reply=none
   [ -n "$hold" ] && [ -n "$release" ] && die "a message records a hold or a release, not both"
   for h in "$hold" "$release"; do [ -z "$h" ] || matches "$ITEM_RE" "$h" || die "a hold or release is \"<item> <version>\", not '$h'"; done
@@ -1141,12 +1157,12 @@ read)
   # after the first -- is one
   while [ $# -gt 0 ]; do
     if [ -z "$e" ]; then
-      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2; continue ;;
+      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; msg_name "$2"; except="$except $MSG_NAME"; shift 2; continue ;;
         --from|--topic|--context) [ $# -ge 2 ] || die "$1 needs a name"; filter_opt "$1" "$2"; shift 2; continue ;;
         --) e=1; shift; continue ;; (-*) matches "$MSG_RE" "$1" || unknown "$1" ;; esac
     fi
-    b=$(basename -- "$1"); [ "$b" != .keep ] || die "an inbox's .keep isn't a message"; valid_msg "$b"
-    ids="$ids $b"; shift
+    msg_name "$1" "an inbox's .keep isn't a message"
+    ids="$ids $MSG_NAME"; shift
   done
   need_me; load_adapter; ad_sync; need_store
   # the files named are checked against the same listing read goes through, so one consumed after the check is still
@@ -1205,8 +1221,7 @@ consume)
   [ ! -d "$M/inbox/$ME" ] || [ -w "$M/inbox/$ME" ] || die "can't write $(rel "$M/inbox/$ME")"
   uc=""
   for a in "$@"; do
-    b=$(basename -- "$a"); [ "$b" = .keep ] && die "an inbox's .keep is never consumed"
-    valid_msg "$b"
+    msg_name "$a" "an inbox's .keep is never consumed"; b=$MSG_NAME
     [ -f "$M/inbox/$ME/$b" ] || die "not in your inbox: $b"
     case " $uc " in (*" $b "*) ;; (*) uc="${uc:+$uc }$b" ;; esac
   done
@@ -1233,7 +1248,7 @@ verify)
   # by path, by path in the store, or by message file name in your own inbox (a name only, never a pattern)
   # (by name it's checked as mail to you, so a copy addressed to someone else reads misrouted, as in read)
   f=$1 inb=""; [ -f "$f" ] || f="$AD_DIR/$1"
-  if [ ! -f "$f" ]; then b=$(basename -- "$1"); f=""; matches "$MSG_RE" "$b" && { need_me; f="$M/inbox/$ME/$b" inb=$ME; }; fi
+  if [ ! -f "$f" ]; then f=""; msg_name --soft "$1" && { need_me; f="$M/inbox/$ME/$MSG_NAME" inb=$ME; }; fi
   [ -n "$f" ] && [ -f "$f" ] || { [ -z "$inb" ] || inbox_ok "$ME"; die "no such message $1"; }
   # by path, a message sitting in an inbox is checked against that inbox, so a misrouted copy reads misrouted there too
   if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
@@ -1351,7 +1366,7 @@ watch)
   interval=120 max=7000 except="" pos=0 also=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --except) [ $# -ge 2 ] || die "--except needs a file"; except="$except $(basename -- "$2")"; shift 2 ;;
+      --except) [ $# -ge 2 ] || die "--except needs a file"; msg_name "$2"; except="$except $MSG_NAME"; shift 2 ;;
       --also) also=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"
