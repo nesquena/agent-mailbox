@@ -107,6 +107,10 @@ times_summary() { [ -n "$TT" ] && [ -s "$TT" ] || return 0
 tree() { for _tn in $(pgrep -P "$1" 2>/dev/null); do tree "$_tn"; done; echo "$1"; }
 # alive <pid>...: any of them still running
 alive() { for _ap in "$@"; do kill -0 "$_ap" 2>/dev/null && return 0; done; return 1; }
+# seen <file> <seconds>: poll hard for <file> to be there and not empty, up to <seconds> (the clock is read every 2000
+# tries, so the poll stays tight even on a slow machine); status 1 when it never was
+seen() { _snn=0 _snd=$(( $(date +%s) + $2 )); while [ ! -s "$1" ]; do _snn=$((_snn+1))
+  [ $((_snn % 2000)) -ne 0 ] || [ "$(date +%s)" -lt "$_snd" ] || return 1; done; return 0; }
 # kill_tree <pid>: stop a process and everything it started: TERM, then up to 5 s for them to exit (their traps may clean
 # up), then KILL whatever is left (the pids are kept as arguments, so every shell splits them, zsh included)
 kill_tree() { set -- $(tree "$1"); [ $# -gt 0 ] || return 0
@@ -1246,6 +1250,19 @@ for AD in $ADAPTERS; do section "adapter-$AD" sec_adapter "$AD"; done
     case "$out" in (*took*) false ;; (*) true ;; esac && [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] &&
     ok "a lock that can't be written is removed, and the command says so" ||
     no "a lock that can't be written is removed, and the command says so" "exit $rc: $out; lock left: $(ls -l "$RF/state/locks/x/lock" 2>&1)"
+  # a command stopped the moment its lock is written still removes it: its traps are set before it takes it (10 tries,
+  # each polling hard for the lock, then a TERM). Before, it was left, until a later command broke it as a dead one
+  RT="$T/lterm"; mkdir -p "$RT/state"; LY="$RT/state/locks/y/lock"
+  printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' 'STATE=$2/state AD_ID=y AGENT_MAILBOX_LOCK_WAIT=3; ad_lock; sleep 2' > "$RT/holder"
+  left=0 tried=0 t=0
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$LY"
+    "$SH" "$RT/holder" "$ROOTDIR/adapters/git.sh" "$RT" >/dev/null 2>&1 & hp=$!
+    seen "$LY" 5 && tried=$((tried+1)); kill -TERM "$hp" 2>/dev/null
+    i=0; while kill -0 "$hp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+    kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; [ ! -e "$LY" ] || left=$((left+1)); done
+  rm -f "$LY"
+  [ "$tried" -ge 5 ] && [ "$left" = 0 ] && ok "a command stopped the moment its lock is written removes it" ||
+    no "a command stopped the moment its lock was written left it ($left of $tried tries; under 5 saw the lock)"
   # an attributes file that can't be written under the same limit stops, saying only its message, and leaves no temp
   mkdir -p "$RF/repo/.git/info"
   printf '%s\n' 'BRANCH=main; . "$1"; die() { echo "$*"; exit 1; }' \
@@ -2457,14 +2474,26 @@ wait "$wp" 2>/dev/null
 RD="$W/home-w1/.local/state/agent-mailbox/run"; left=0 tried=0 t=0
 while [ $t -lt 20 ]; do t=$((t+1)); rm -f "$RD"/w1*.pid
   HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!; i=0
-  while [ ! -s "$WPF" ] && [ $i -lt 200000 ]; do i=$((i+1)); done
-  [ -s "$WPF" ] && tried=$((tried+1)); kill -TERM "$wp" 2>/dev/null
+  seen "$WPF" 5 && tried=$((tried+1)); kill -TERM "$wp" 2>/dev/null
   i=0; while kill -0 "$wp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
   kill -9 "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
   [ -z "$(ls "$RD" 2>/dev/null | grep '^w1.*\.pid$')" ] || left=$((left+1)); done
 rm -f "$RD"/w1*.pid
 [ "$tried" -ge 10 ] && [ "$left" = 0 ] && ok "a watcher stopped the moment its pid file appears removes it" ||
   no "a watcher stopped the moment its pid file appeared left it behind ($left of $tried tries; under 10 tries saw the file)"
+# a HUP (a hand-started watch's terminal closing) ends the watcher as TERM does, removing its pid files: it ended with
+# HUP's own status and left them. (Skipped where HUP is ignored on entry: no shell started then can trap it)
+if "$SH" -c 'trap "exit 0" HUP; kill -HUP $$; sleep 1; exit 1' 2>/dev/null; then
+  HOME="$W/home-w1" AGENT_MAILBOX_SESSION=s1 "$SH" "$CLI" watch 1 60 >/dev/null 2>&1 & wp=$!
+  i=0; while [ ! -s "$WPF" ] && kill -0 "$wp" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+  if [ -s "$WPF" ] && kill -0 "$wp" 2>/dev/null; then sleep 0.5
+    kill -HUP "$wp" 2>/dev/null; i=0; while kill -0 "$wp" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+    kill -9 "$wp" 2>/dev/null; wait "$wp"; rc=$?
+    [ "$rc" = 130 ] && [ -z "$(ls "$RD" 2>/dev/null | grep '^w1.*\.pid$')" ] && ok "HUP ends the watcher, removing its pid files (exit 130)" ||
+      no "a HUP left the watcher's pid files, or another status (exit $rc)" "$(ls "$RD")"
+  else no "the watcher never started (no pid file), so HUP wasn't tested"; kill -9 "$wp" 2>/dev/null; wait "$wp" 2>/dev/null; fi
+  rm -f "$RD"/w1*.pid
+else sk "HUP ends the watcher, removing its pid files (HUP is ignored in this suite's environment)"; fi
 expect "a bad root is refused" 1 "root must be" env HOME="$W/home-w1" AGENT_MAILBOX_ROOT=../x "$SH" "$CLI" agents
 # branch names git refuses are refused by every adapter, from the environment, the config file or setup
 for b in a/../b a..b a//b a/ /a a.lock a.lock/b a/b.lock -a .a a/.b a. HEAD 'a@{b'; do
@@ -2858,6 +2887,29 @@ if up "$R1/pid"; then
   kill -TERM "$(cut -d' ' -f1 "$R1/pid")"; wait "$bg"; rc=$?
   [ "$rc" = 0 ] && [ ! -s "$T/bg.out" ] && ok "a stopped hook exits 0, silently" || no "a stopped hook exits 0, silently" "exit $rc: $(cat "$T/bg.out")"
   expect "and removes its pid file" 1 - test -e "$R1/pid"
+  # a hook stopped the moment its pid file appears still removes it: its traps are set before it's written (10 tries,
+  # each polling hard for the file, then a TERM to the hook it names)
+  left=0 tried=0 t=0
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"
+    rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg2.out" & bg=$!
+    if seen "$R1/pid" 10; then tried=$((tried+1)); kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; fi
+    i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+    kill_tree "$bg"; wait "$bg" 2>/dev/null; [ ! -e "$R1/pid" ] || left=$((left+1)); done
+  rm -f "$R1/pid"
+  [ "$tried" -ge 5 ] && [ "$left" = 0 ] && ok "a hook stopped the moment its pid file appears removes it" ||
+    no "a hook stopped the moment its pid file appeared left it ($left of $tried tries; under 5 saw the file)"
+  # and with a deadline file an earlier run left (its watchdog writing it as that hook was already leaving), such a stop
+  # ends the hook silently, exit 0: it isn't this run's day's end (10 tries, the file planted before each)
+  bad=0 tried=0 t=0
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"
+    rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg3.out" & bg=$!
+    if seen "$R1/pid" 10; then tried=$((tried+1)); kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; fi
+    i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+    kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
+    { [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg3.out" 2>/dev/null; } || bad=$((bad+1)); done
+  rm -f "$R1/pid" "$R1/deadline"
+  [ "$tried" -ge 5 ] && [ "$bad" = 0 ] && ok "and with an earlier run's deadline file there, it ends silently, not at the day's limit" ||
+    no "a hook stopped as it started, with an earlier run's deadline file there, said it reached its limit ($bad of $tried tries)"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
 # a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
 # check, then create): a mkdir on PATH that never fails on a folder that's there, and a fresh claim (as an older
