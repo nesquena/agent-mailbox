@@ -4812,6 +4812,8 @@ else
   [ "$(cksum < "$A/ub.md")" = "$ck" ] && ok "and the record is left as it was" || no "an update that couldn't read the record changed it" "$(cat "$A/ub.md")"
   chmod 000 "$A/uc.md"
   expect "list with no mail and your own record unreadable stops, saying so, not no mail" 1 "^agent-mailbox: can't read mailbox/agents/uc\.md, uc's record" as uc list
+  # (and read, with no hint about other messages: there are none)
+  expect "and so does read, with no hint about other messages" 1 "^agent-mailbox: can't read mailbox/agents/uc\.md, uc's record\$" as uc read
   chmod 644 "$A/uc.md"
   # agents checks the records folder and every record before printing anything: a list cut short reads as the whole
   for m in 000 600; do chmod "$m" "$A"

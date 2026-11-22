@@ -1134,9 +1134,9 @@ read)
   # each message is read once, into a private copy (with its .sig), and verified, read and shown from that copy, so a
   # file swapped in the store meanwhile can't be shown under another's status; the filters are checked on that copy too
   rt="$STATE/tmp.read.$$"; mkdir -p "$rt" || die "can't create $rt"
-  # (a sender's record it can't read stops read too, saying how to read the rest, as for a message it can't read)
-  RH=" (consume its message, or pass --except, to read the rest)"
-  shown=$(printf '%s\n' "$ib" | while IFS= read -r p; do [ -n "$p" ] || continue
+  # (a sender's record it can't read stops read too, saying how to read the rest, as for a message it can't read. RH is
+  # set inside this $(...) only, so a stop after it, as no_mail's on your own record, says nothing of messages)
+  shown=$(RH=" (consume its message, or pass --except, to read the rest)"; printf '%s\n' "$ib" | while IFS= read -r p; do [ -n "$p" ] || continue
     case " $except " in (*" $(basename "$p") "*) continue ;; esac
     [ -z "$ids" ] || case " $ids " in (*" ${p##*/} "*) ;; (*) continue ;; esac
     # (a message consumed since it was listed is skipped, unless it was named, which stops read as one not in the inbox
