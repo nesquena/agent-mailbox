@@ -75,7 +75,7 @@ mail is read by `read`, and an error by the commands a notice names. It also:
 - runs only one instance per session;
 - acts only where it can tell that Claude Code runs it in the background (a session in a terminal, Claude Code on
   the web, or the Claude desktop app on macOS); a harness that would wait for the hook instead would hang at every
-  turn end.
+  turn end and at session start.
 
 It's written in POSIX sh, so the same design fits any harness with a similar hook. If yours runs such a hook
 synchronously, don't start a long watch from it: use a quick `list` (approach 2) instead.

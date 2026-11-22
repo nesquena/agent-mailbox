@@ -1,6 +1,7 @@
 #!/bin/sh
-# claude-rewake.sh: the session's mailbox watcher, run as a Claude Code Stop hook with "asyncRewake": true
-# (hooks/hooks.json). Claude Code starts it in the background at every turn end, and an asyncRewake hook that exits 2
+# claude-rewake.sh: the session's mailbox watcher, run as a Claude Code Stop and SessionStart hook with
+# "asyncRewake": true (hooks/hooks.json). Claude Code starts it in the background at every turn end and when a
+# session starts or resumes, and an asyncRewake hook that exits 2
 # wakes the session, even an idle one, with what it printed on stderr. So nothing has to be re-armed by hand:
 # - new mail: it exits 2 with how many new messages there are and the read command (never the store's own text, file
 #   names included);
@@ -32,7 +33,8 @@ else sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 case "$sid" in (''|.|..|*/*) exit 0 ;; esac
 # this stop's prompt id, which the Stop guard gets too: the notes below that tell the guard what this hook did at this
-# turn end carry it (or, from a Claude Code that sends none, the time)
+# turn end carry it. SessionStart sends no prompt_id (so key falls back to @<epoch>) and no stop_hook_active (so sha
+# stays false/empty); a Stop from a Claude Code that sends no prompt_id takes the same fallback
 # (read the way the guard reads it: with jq where there is one)
 if command -v jq >/dev/null 2>&1; then key=$(printf '%s' "$input" | jq -r '.prompt_id // empty' 2>/dev/null | head -n 1)
 else key=$(printf '%s' "$input" | sed -n 's/.*"prompt_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1); fi
@@ -179,8 +181,9 @@ ccver() {
 # on its own where /proc has them, else from the command line split at spaces.
 # ceiling: without /proc (macOS), a word like -help in a prompt given on the command line reads as -p, and the hook
 # declines; and a cloud launch gets its real arguments only once a session claims it, which /proc doesn't show, so
-# one claimed for a headless run would be taken as streaming. Upgrade path: a field in the hook's input saying
-# whether it runs in the background
+# one claimed for a headless run would be taken as streaming. A wrongly-detected synchronous run on SessionStart would
+# hold the session's start, just as it already holds a Stop. Upgrade path: a field in the hook's input saying whether
+# it runs in the background
 term() { case "$1" in (/dev/pts/*|/dev/tty*|/dev/console) return 0 ;; esac; return 1; }
 # fdname <pid> <fd>: what that descriptor names, from /proc, else lsof (which macOS keeps in /usr/sbin)
 fdname() { readlink "/proc/$1/fd/$2" 2>/dev/null ||
