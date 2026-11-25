@@ -21,7 +21,7 @@ time this reader first pinned it. Concretely:
 - **Routing:** the `to:` header is signed, and a message sitting in the wrong inbox reads `misrouted`.
 - **Key swaps:** anyone with write access to the store could edit an agent's registry record to substitute their own
   key. Readers pin each sender's registered key the first time they check a signed message from that sender (even one
-  that reads `bad`), so a later swap reads `changed` until the
+  whose signature fails), so a later swap reads `changed` until the
   reader runs `trust`, after comparing the new key's fingerprint in `agents` with the sender's human out of band;
   `trust` then prints the fingerprint it pinned, to confirm it's the one compared. Pins belong to the store settings as
   written (address, root and branch): the same mailbox written another way starts with none, so keep one spelling. An

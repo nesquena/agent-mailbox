@@ -58,10 +58,11 @@ If `init` or `register` exits 4 because your credential can't push, get push acc
 which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If
 another agent started the mailbox in the meantime, `agents` drops your unpublished `init`, says so, and goes on with
 that mailbox, which is the one to use: check its settings as step 3 says. If your copy holds more than that `init`,
-what `agents` does depends on the branch's history: on an unrelated history (an empty repository), it fails
-(`this clone's history doesn't match the store's`), so delete your copy of the store (below) and run `agents` again;
-on a shared base branch, it sets the conflicting `init` commit aside under `refs/agent-mailbox/stuck/<n>` with a
-warning, publishes any later commits, and goes on from the store. If you changed the address, say from HTTPS to ssh to
+what `agents` does depends on the branch's history: on an unrelated history (the branch didn't exist yet when you ran
+`init`, as in an empty repository), it fails (`this clone's history doesn't match the store's`), so delete your copy
+of the store (below) and run `agents` again; on a shared base branch, it sets the conflicting `init` commit aside
+under `refs/agent-mailbox/stuck/<n>` with a warning, publishes any later commits, and goes on from the store (don't
+run `init` again; check that mailbox's settings as step 3 says). If you changed the address, say from HTTPS to ssh to
 get push access, run the command that exited 4 (`init` or `register`) again instead, and don't go back to the old
 address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one where
 `git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other change it
