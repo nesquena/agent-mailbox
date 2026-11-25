@@ -39,7 +39,7 @@ ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.
 # ad_gist: git's error output as one line for a die or warn. In the C locale, so a byte that isn't UTF-8 can't make grep
 # take it for binary and drop it, and through clean: git masks ASCII controls in its errors, but not C1 ones
 ad_gist() { ( LC_ALL=C && export LC_ALL && sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' ' | clean ); }
-ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; }
+ad_remote_has_branch() { ad_git show-ref -q --verify "refs/remotes/origin/$BRANCH"; }
 # ad_clone: clone the store into $AD_DIR, in the C locale so its messages read the same everywhere. git clone takes a
 # name that exists as a repository or bundle where it runs as that local path first, even a URL's (ssh://h/x is also
 # the path ssh:/h/x), so a store named by a URL, host:path or an absolute path is cloned from the agent's own folder,
@@ -52,7 +52,14 @@ ad_remote_has_branch() { ad_git rev-parse -q --verify "refs/remotes/origin/$BRAN
 ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
-  LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --no-tags --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
+  LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
+# ad_no_tags: mailbox clones don't use tags; keep tag auto-following off and drop any tags fetched on clone or earlier
+ad_no_tags() {
+  [ "$(ad_git config remote.origin.tagOpt)" = --no-tags ] || ad_git config remote.origin.tagOpt --no-tags
+  ad_git for-each-ref --format='%(refname)' refs/tags/ | while IFS= read -r t; do
+    [ -z "$t" ] || ad_git update-ref -d "$t" 2>/dev/null || :
+  done
+}
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
 # file. A first line (a comment) marks work still to do: the file counts as done only once it starts with the rules.
@@ -83,14 +90,8 @@ ad_open() {
   mkdir -p "$STATE/checkouts" || die "can't create $STATE/checkouts"
   ad_lock
   ad_clear_locks
-  # mailbox clones don't use tags: keep tag auto-following off and drop any tags an earlier clone fetched
   if [ -d "$AD_DIR/.git" ]; then
-    if [ "$(ad_git config remote.origin.tagOpt)" != --no-tags ]; then
-      ad_git config remote.origin.tagOpt --no-tags
-    fi
-    ad_git for-each-ref --format='%(refname)' refs/tags/ | while IFS= read -r t; do
-      [ -z "$t" ] || ad_git update-ref -d "$t" 2>/dev/null || :
-    done
+    ad_no_tags
   fi
   if [ ! -d "$AD_DIR/.git" ]; then
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
@@ -105,7 +106,7 @@ ad_open() {
       case $err in (*"Remote branch $BRANCH not found in upstream"*) err=$(ad_clone) ;; (*) false ;; esac; } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
-    ad_git config remote.origin.tagOpt --no-tags
+    ad_no_tags
     ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
@@ -499,11 +500,12 @@ ad_history() {
   [ -n "$AD_ROWS" ] || return 0
   # every row starts with a commit id, so a row starting with "!" is a failure marker: report it, and nothing else
   if printf '%s\n' "$AD_ROWS" | grep -q '^!'; then echo '! !'; return 0; fi
-  # the signature blob of each row (and the message blob when a row came from a .md.sig-only commit); a row left
-  # without a lookup (cat-file failed) is still listed
+  # the signature blob of each row (and the message blob when a row came from a .md.sig-only commit); if cat-file
+  # fails or ends short, normal rows are still listed (never dropped) and any unresolved .md.sig-only row reports "! !"
+  # so holds fails closed rather than decide from partial history
   { printf '%s\n' "$AD_ROWS"; echo =
     printf '%s\n' "$AD_ROWS" | awk -F'\t' '{ if ($3 == "?") print $1 ":" $2; print $1 ":" $2 ".sig" }' |
-      ad_git cat-file --batch-check='%(objecttype) %(objectname)'; } |
+      ad_git cat-file --batch-check='%(objecttype) %(objectname)' 2>/dev/null; } |
     awk -F'\t' '
       !s { if ($0 == "=") s = 1; else r[++m] = $0; next }
       pending { pending = 0; if (f[3] == "") next
@@ -513,8 +515,8 @@ ad_history() {
         if (f[3] == "?") { f[3] = ($0 ~ /^blob [0-9a-f]+$/) ? substr($0, 6) : ""; pending = 1; next }
         b = ($0 ~ /^blob [0-9a-f]+$/) ? substr($0, 6) : "-"
         if (!seen[f[2] "\t" f[3] "\t" b]++) print f[1], f[2] }
-      END { if (pending && f[3] != "") print f[1], f[2]
-            while (n < m) { split(r[++n], f, "\t"); if (f[3] != "?") print f[1], f[2] } }'
+      END { if (pending) { print "! !"; exit }
+            while (n < m) { split(r[++n], f, "\t"); if (f[3] == "?") { print "! !"; exit }; print f[1], f[2] } }'
 }
 # ad_show <ref> <path>: a file's content as of <ref>; 1 when that version has no such file (ls-tree lists no blob there:
 # a folder isn't one), 2 when it has and it can't be read, or when ls-tree itself fails (then it can't be told)

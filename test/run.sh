@@ -2114,14 +2114,16 @@ exec "%s" "$@"
   [ "$(head -n 1 "$C/.git/info/attributes")" = '* merge !diff -text -eol -filter -ident -working-tree-encoding' ] &&
     ok "finishes its second checkout" || no "an empty branch's second checkout is retried forever" "$(head -n 1 "$C/.git/info/attributes")"
 
-  # a tag in the store doesn't change what a clone sees (even named origin/<branch> or HEAD, pointing at an older commit)
+  # a tag in the store doesn't change what a clone sees (even named origin/<branch>, <branch> or HEAD, pointing at an older commit)
   oldtip=$(git --git-dir="$S" rev-list --max-parents=0 main | head -n 1)
   echo hold | as p1 send p2 tag-h - --hold "tag#1 v1" >/dev/null 2>&1
   git --git-dir="$S" update-ref refs/tags/origin/main "$oldtip"
   git --git-dir="$S" update-ref refs/tags/HEAD "$oldtip"
+  git --git-dir="$S" update-ref refs/tags/main "$oldtip"
   for C in "$W/home-p2/.local/state/agent-mailbox/checkouts/"*; do :; done
   git -C "$C" update-ref refs/tags/origin/main "$oldtip"
   git -C "$C" update-ref refs/tags/HEAD "$oldtip"
+  git -C "$C" update-ref refs/tags/main "$oldtip"
   expect "a tag in the store doesn't change what a clone sees (list)" 0 "p1-tag-h\.md" as p2 list
   expect "a tag in the store doesn't change what a clone sees (read)" 0 "topic: tag-h" as p2 read
   expect "a tag in the store doesn't change what a clone sees (holds)" 5 "tag#1 is held by p1" as p2 holds "tag#1" --version v1
@@ -2142,6 +2144,21 @@ exec "%s" "$@"
     no "a fresh clone kept tags or missed tagOpt" "tags=$(git -C "$C8" for-each-ref --format='%(refname)' refs/tags/) opt=$(git -C "$C8" config remote.origin.tagOpt)"
   git --git-dir="$S" update-ref -d refs/tags/origin/main
   git --git-dir="$S" update-ref -d refs/tags/HEAD
+  git --git-dir="$S" update-ref -d refs/tags/main
+
+  # a store with no mailbox branch whose default branch is named refs/remotes/origin/main isn't taken for origin/main
+  RB="$T/refbranch.git"; git init -q --bare "$RB"
+  git init -q "$T/rbw" && (cd "$T/rbw" && git config user.email t@t && git config user.name t &&
+    git checkout -q -b refs/remotes/origin/main && mkdir -p mailbox &&
+    printf -- '---\nprotocol: 1\ntitle: decoy\nrequire_signatures: false\ncreated: 2026-01-01T00:00:00Z\n---\n' > mailbox/store.md &&
+    echo other > other.txt && git add . && git commit -qm decoy &&
+    git push -q "$RB" HEAD:refs/heads/refs/remotes/origin/main)
+  git --git-dir="$RB" symbolic-ref HEAD refs/heads/refs/remotes/origin/main
+  as p9 setup --store "$RB" --name p9 >/dev/null
+  expect "a default branch named refs/remotes/origin/main isn't taken for the mailbox branch" 1 "no mailbox at 'mailbox/' yet" as p9 list
+  expect "init creates main cleanly when the default branch is named refs/remotes/origin/main" 0 "initialized" as p9 init
+  [ "$(git --git-dir="$RB" ls-tree -r --name-only main | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
+    ok "and main holds only its own mailbox files" || no "main carried files from the default branch" "$(git --git-dir="$RB" ls-tree -r --name-only main)"
   }
   section git-planted sec_git_planted git
 
@@ -4345,6 +4362,42 @@ if [ -n "$SSH" ]; then
   expect "a separately committed message and signature verify" 0 "^verified$" as sg1 verify 29990101T000010Z-sg2-split-h.md
   expect "read sees the separately committed message as verified" 0 "\[verified: from sg2\]" as sg1 read 29990101T000010Z-sg2-split-h.md
   expect "a message and its signature committed separately give holds the same verdict as read and verify" 5 "item#split is held by sg2" as sg1 holds "item#split" --version v1
+  # a failing cat-file --batch-check during ad_history makes holds fail closed rather than drop rows
+  mkdir -p "$T/failcf"
+  printf '#!/bin/sh\ncase " $* " in (*" cat-file "*"--batch-check"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failcf/git"
+  chmod +x "$T/failcf/git"
+  expect "holds fails closed when cat-file --batch-check fails" 1 "can't read this store's full, latest history" \
+    env PATH="$T/failcf:$PATH" HOME="$W/home-sg1" "$SH" "$CLI" holds "item#split" --version v1
+  # split-committed shapes: signature added on a side branch and merged; signature added only in a merge commit; split then consumed
+  echo r | as sg2 send sg1 split-side-r - --release "item#split-side v1" >/dev/null
+  echo r | as sg2 send sg1 split-merge-r - --release "item#split-merge v1" >/dev/null
+  echo r | as sg2 send sg1 split-cons-r - --release "item#split-cons v1" >/dev/null
+  sleep 1
+  (cd "$T/plant" && git pull -q --rebase origin main 2>/dev/null &&
+    f1="mailbox/inbox/sg1/29990101T000012Z-sg2-split-side-h.md" &&
+    printf -- '---\nprotocol: 1\nfrom: sg2\nto: sg1\ntopic: split-side-h\ncontext: general\nsent: 2999-01-01T00:00:12Z\nin_reply_to: none\nneeds: none\nhold: item#split-side v1\n---\n\nheld\n' > "$f1" &&
+    git add "$f1" && git commit -qm "add side msg" &&
+    git checkout -q -b sig-side &&
+    ssh-keygen -Y sign -q -n agent-mailbox -f "$sg2k" < "$f1" > "$f1.sig" &&
+    git add "$f1.sig" && git commit -qm "add side sig" &&
+    git checkout -q main && git merge -q --no-ff -m "merge side sig" sig-side >/dev/null 2>&1 &&
+    f2="mailbox/inbox/sg1/29990101T000013Z-sg2-split-merge-h.md" &&
+    printf -- '---\nprotocol: 1\nfrom: sg2\nto: sg1\ntopic: split-merge-h\ncontext: general\nsent: 2999-01-01T00:00:13Z\nin_reply_to: none\nneeds: none\nhold: item#split-merge v1\n---\n\nheld\n' > "$f2" &&
+    git add "$f2" && git commit -qm "add merge msg" &&
+    git checkout -q -b merge-other && echo x > merge-other.txt && git add merge-other.txt && git commit -qm "other" &&
+    git checkout -q main && git merge -q --no-ff --no-commit merge-other >/dev/null 2>&1 &&
+    ssh-keygen -Y sign -q -n agent-mailbox -f "$sg2k" < "$f2" > "$f2.sig" &&
+    git add "$f2.sig" && git commit -qm "merge with sig resolution" &&
+    f3="mailbox/inbox/sg1/29990101T000014Z-sg2-split-cons-h.md" &&
+    printf -- '---\nprotocol: 1\nfrom: sg2\nto: sg1\ntopic: split-cons-h\ncontext: general\nsent: 2999-01-01T00:00:14Z\nin_reply_to: none\nneeds: none\nhold: item#split-cons v1\n---\n\nheld\n' > "$f3" &&
+    git add "$f3" && git commit -qm "add cons msg" &&
+    ssh-keygen -Y sign -q -n agent-mailbox -f "$sg2k" < "$f3" > "$f3.sig" &&
+    git add "$f3.sig" && git commit -qm "add cons sig" &&
+    git push -q origin HEAD:main)
+  expect "a signature added on a side branch and merged gives holds the same verdict" 5 "item#split-side is held by sg2" as sg1 holds "item#split-side" --version v1
+  expect "a signature added only in a merge commit gives holds the same verdict" 5 "item#split-merge is held by sg2" as sg1 holds "item#split-merge" --version v1
+  as sg1 consume 29990101T000014Z-sg2-split-cons-h.md >/dev/null
+  expect "a separately committed message and signature still hold after consume" 5 "item#split-cons is held by sg2" as sg1 holds "item#split-cons" --version v1
 fi
 # 10c. holds with --root ./mailbox normalises ./ segments before matching inbox paths
 T="$W/rules-dotroot"; mkdir -p "$T"; git init -q --bare "$T/store.git"

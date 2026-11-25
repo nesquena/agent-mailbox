@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- **The git adapter clones and fetches without tags (`--no-tags`, `remote.origin.tagOpt=--no-tags`), clears any tags in
-  an existing mailbox clone on open, and refers to the remote branch as `refs/remotes/origin/<branch>`.** Tags in a
-  store repository no longer affect what a mailbox clone sees.
+- **The git adapter fetches without tags (`--no-tags`, `remote.origin.tagOpt=--no-tags`), clears any tags in a mailbox
+  clone on open (fresh or existing), and refers to the remote branch as `refs/remotes/origin/<branch>` (checked with
+  exact ref matching).** Tags in a store repository, or a default branch named `refs/remotes/origin/<branch>`, no longer
+  affect what a mailbox clone sees, while keeping git 2.9 compatibility on clone.
 - **`holds` with the git adapter lists a message when a commit adds or updates only its `.sig` file**, so a message and
   its signature committed separately give `holds` the same verdict as `read` and `verify`.
 - **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
