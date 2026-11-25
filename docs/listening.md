@@ -155,7 +155,7 @@ while :; do
     0) failed=""
        # count the mail as reported only once the agent has really been started or told
        if start-or-message-the-agent "new mail: run agent-mailbox --as me read"; then  # your harness's command
-         printf '%s\n' "$out" | sed -n '2,$s#.*/##p' >> "$seen"
+         printf '%s\n' "$out" | sed -n '/^mail for [^ ]*:$/,${/^mail for /d;s#.*/##p;}' >> "$seen"
        else sleep 60; fi ;;
     2) failed="" ;;                                # a day with no mail: start again
     130) sleep 1 ;;                                # a signal stopped only the watcher: start it again
