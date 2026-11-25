@@ -470,7 +470,8 @@ valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
 # whitespace, such as mailbox/inbox/<me>/<name>). Refuses whitespace (spaces, tabs, line breaks) in the argument as
 # given, so a value holding several paths (such as "$(agent-mailbox list)") isn't silently narrowed to its last
 # basename, then takes its basename and checks it against MSG_RE (valid_msg). With --soft (verify's inbox lookup after
-# checking paths on disk), a non-message name returns 1 while whitespace still stops the command. Sets MSG_NAME.
+# checking paths on disk, and read/watch --except), a non-message name returns 1 while whitespace still stops the
+# command. Sets MSG_NAME.
 msg_name() {
   soft=""; [ "${1:-}" != --soft ] || { soft=1; shift; }
   case "$1" in
@@ -962,7 +963,10 @@ send)
     esac; shift 2
   done
   need_me; valid_name "$to"
-  [ -z "$rset" ] || { msg_name "$reply_raw"; reply=$MSG_NAME; }
+  if [ -n "$rset" ]; then
+    if [ "$reply_raw" = none ]; then reply=none
+    else msg_name "$reply_raw"; reply=$MSG_NAME; fi
+  fi
   [ -n "$reply" ] || reply=${consume%% *}; [ -n "$reply" ] || reply=none
   [ -n "$hold" ] && [ -n "$release" ] && die "a message records a hold or a release, not both"
   for h in "$hold" "$release"; do [ -z "$h" ] || matches "$ITEM_RE" "$h" || die "a hold or release is \"<item> <version>\", not '$h'"; done
@@ -1157,7 +1161,7 @@ read)
   # after the first -- is one
   while [ $# -gt 0 ]; do
     if [ -z "$e" ]; then
-      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; msg_name "$2"; except="$except $MSG_NAME"; shift 2; continue ;;
+      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name --soft "$2"; then except="$except $MSG_NAME"; fi; shift 2; continue ;;
         --from|--topic|--context) [ $# -ge 2 ] || die "$1 needs a name"; filter_opt "$1" "$2"; shift 2; continue ;;
         --) e=1; shift; continue ;; (-*) matches "$MSG_RE" "$1" || unknown "$1" ;; esac
     fi
@@ -1366,7 +1370,7 @@ watch)
   interval=120 max=7000 except="" pos=0 also=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --except) [ $# -ge 2 ] || die "--except needs a file"; msg_name "$2"; except="$except $MSG_NAME"; shift 2 ;;
+      --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name --soft "$2"; then except="$except $MSG_NAME"; fi; shift 2 ;;
       --also) also=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"

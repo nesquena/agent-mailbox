@@ -4119,6 +4119,16 @@ out=$(as mw2 read --except "$ma" 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-mw1-mb\.md" && ! printf '%s\n' "$out" | grep -q -- "-mw1-ma\.md" &&
   ok "read --except still accepts a single path without spaces" || no "read --except failed on single path (exit $rc)" "$out"
 expect "watch --except still accepts single paths without spaces" 2 "no mail" as mw2 watch 1 1 --except "$ma" --except "$mb"
+out=$(as mw2 read --except not-a-message 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-mw1-ma\.md" && printf '%s\n' "$out" | grep -q -- "-mw1-mb\.md" &&
+  ok "read --except ignores a non-message name" || no "read --except failed on a non-message name (exit $rc)" "$out"
+expect "watch --except ignores a non-message name" 2 "no mail" as mw2 watch 1 1 --except not-a-message --except "$ma" --except "$mb"
+expect "send --in-reply-to accepts none" 0 "^sent " as mw2 send mw1 sp-irt-none "$T/mw.body" --in-reply-to none
+out=$(as mw1 read 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^in_reply_to: none$' &&
+  ok "and records in_reply_to: none" || no "send --in-reply-to none didn't record none (exit $rc)" "$out"
+expect "send --in-reply-to refuses another non-message name" 1 "isn't a message file name" as mw2 send mw1 sp-irt-bad "$T/mw.body" --in-reply-to not-a-message
+expect "send --in-reply-to refuses a path ending in none" 1 "isn't a message file name" as mw2 send mw1 sp-irt-pnone "$T/mw.body" --in-reply-to a/none
 expect "send --in-reply-to still accepts a single path without spaces" 0 "^sent " as mw2 send mw1 sp-irt "$T/mw.body" --in-reply-to "$ma"
 expect "reply still accepts a single path without spaces" 0 "^sent " as mw2 reply "$ma" "$T/mw.body"
 expect "send --consume still accepts a single path without spaces" 0 "^sent " as mw2 send mw1 sp-con "$T/mw.body" --consume "$mb"

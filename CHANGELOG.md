@@ -8,6 +8,8 @@
   paths) narrowed to its last path's basename and silently dropped the rest; pass each file as its own argument
   (`consume <file>...`, or repeat `--consume` / `--except` once per message). A single path without whitespace (such as
   `mailbox/inbox/<you>/<name>`) still works, as does `verify` on an existing file path whose folder holds spaces.
+  `send --in-reply-to` now accepts only `none` or a message file name (or a path to one without whitespace), where
+  before it took any basename; `read --except` and `watch --except` still ignore a non-message name without whitespace.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give
