@@ -466,22 +466,24 @@ no_link() {
   done; return 0
 }
 valid_msg() { matches "$MSG_RE" "$1" || die "'$1' isn't a message file name"; }
-# msg_name [--soft] <arg> [<keep_msg>]: take one message file name from an argument (a bare name or a path with no
-# whitespace, such as mailbox/inbox/<me>/<name>). Refuses whitespace (spaces, tabs, line breaks) in the argument as
-# given, so a value holding several paths (such as "$(agent-mailbox list)") isn't silently narrowed to its last
-# basename, then takes its basename and checks it against MSG_RE (valid_msg). With --soft (verify's inbox lookup after
-# checking paths on disk, and read/watch --except), a non-message name returns 1 while whitespace still stops the
-# command. Sets MSG_NAME.
-msg_name() {
-  soft=""; [ "${1:-}" != --soft ] || { soft=1; shift; }
+# msg_name_raw <arg>: refuse whitespace (spaces, tabs, line breaks) in <arg> before taking its basename, so a value
+# holding several paths (such as "$(agent-mailbox list)") isn't silently narrowed to its last basename. Sets MSG_NAME.
+msg_name_raw() {
   case "$1" in
     (*" "*|*"$TAB"*|*"$NL"*|*"$CR"*|*[[:space:]]*) die "argument isn't a message file name (can't hold whitespace; pass one file per argument)" ;;
   esac
   MSG_NAME=$(basename -- "$1")
-  [ -z "${2:-}" ] || [ "$MSG_NAME" != .keep ] || die "$2"
-  if [ -n "$soft" ]; then matches "$MSG_RE" "$MSG_NAME"
-  else valid_msg "$MSG_NAME"; fi
 }
+# msg_name <arg> [<keep_msg>]: take one message file name from an argument (a bare name or a path with no whitespace,
+# such as mailbox/inbox/<me>/<name>), checking it against MSG_RE (valid_msg). Sets MSG_NAME.
+msg_name() {
+  msg_name_raw "$1"
+  [ -z "${2:-}" ] || [ "$MSG_NAME" != .keep ] || die "$2"
+  valid_msg "$MSG_NAME"
+}
+# msg_name_soft <arg>: like msg_name, for verify's inbox lookup after checking paths on disk and read/watch --except:
+# whitespace still stops the command, while a non-message name returns 1. Sets MSG_NAME.
+msg_name_soft() { msg_name_raw "$1"; matches "$MSG_RE" "$MSG_NAME"; }
 rel() { if [ -n "${AD_DIR:-}" ]; then case $1 in ("$AD_DIR"/*) printf '%s\n' "${1#"$AD_DIR"/}"; return ;; esac; fi; printf '%s\n' "$1"; }
 # secret_file <file>: the file as named, or any link on the way to it, is in ~/.ssh (this HOME's, or the account's own
 # when HOME is elsewhere) or this CLI's config or state folder, or is (or is under) where a link kept in ~/.ssh or the
@@ -1161,7 +1163,7 @@ read)
   # after the first -- is one
   while [ $# -gt 0 ]; do
     if [ -z "$e" ]; then
-      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name --soft "$2"; then except="$except $MSG_NAME"; fi; shift 2; continue ;;
+      case "$1" in --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name_soft "$2"; then except="$except $MSG_NAME"; fi; shift 2; continue ;;
         --from|--topic|--context) [ $# -ge 2 ] || die "$1 needs a name"; filter_opt "$1" "$2"; shift 2; continue ;;
         --) e=1; shift; continue ;; (-*) matches "$MSG_RE" "$1" || unknown "$1" ;; esac
     fi
@@ -1252,7 +1254,7 @@ verify)
   # by path, by path in the store, or by message file name in your own inbox (a name only, never a pattern)
   # (by name it's checked as mail to you, so a copy addressed to someone else reads misrouted, as in read)
   f=$1 inb=""; [ -f "$f" ] || f="$AD_DIR/$1"
-  if [ ! -f "$f" ]; then f=""; msg_name --soft "$1" && { need_me; f="$M/inbox/$ME/$MSG_NAME" inb=$ME; }; fi
+  if [ ! -f "$f" ]; then f=""; msg_name_soft "$1" && { need_me; f="$M/inbox/$ME/$MSG_NAME" inb=$ME; }; fi
   [ -n "$f" ] && [ -f "$f" ] || { [ -z "$inb" ] || inbox_ok "$ME"; die "no such message $1"; }
   # by path, a message sitting in an inbox is checked against that inbox, so a misrouted copy reads misrouted there too
   if [ -z "$inb" ] && d=$(phys "$(dirname -- "$f")") && [ "$(dirname -- "$d")" = "$(phys "$M/inbox")" ]; then inb=$(basename -- "$d"); fi
@@ -1370,7 +1372,7 @@ watch)
   interval=120 max=7000 except="" pos=0 also=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name --soft "$2"; then except="$except $MSG_NAME"; fi; shift 2 ;;
+      --except) [ $# -ge 2 ] || die "--except needs a file"; if msg_name_soft "$2"; then except="$except $MSG_NAME"; fi; shift 2 ;;
       --also) also=1; shift ;;
       -*) unknown "$1" ;;
       *) pos=$((pos+1)); [ $pos -le 2 ] || die "watch takes an interval and a max, not '$1' too"

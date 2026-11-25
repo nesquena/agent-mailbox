@@ -4128,6 +4128,11 @@ out=$(as mw1 read 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^in_reply_to: none$' &&
   ok "and records in_reply_to: none" || no "send --in-reply-to none didn't record none (exit $rc)" "$out"
 expect "send --in-reply-to refuses another non-message name" 1 "isn't a message file name" as mw2 send mw1 sp-irt-bad "$T/mw.body" --in-reply-to not-a-message
+expect "send --in-reply-to refuses an empty value" 1 "isn't a message file name" as mw2 send mw1 sp-irt-empty "$T/mw.body" --in-reply-to ""
+expect "send --in-reply-to refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 send mw1 sp-irt-soft "$T/mw.body" --in-reply-to --soft
+expect "send --consume refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 send mw1 sp-con-soft "$T/mw.body" --consume --soft
+expect "consume -- --soft refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 consume -- --soft
+expect "read -- --soft refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 read -- --soft
 expect "send --in-reply-to refuses a path ending in none" 1 "isn't a message file name" as mw2 send mw1 sp-irt-pnone "$T/mw.body" --in-reply-to a/none
 expect "send --in-reply-to still accepts a single path without spaces" 0 "^sent " as mw2 send mw1 sp-irt "$T/mw.body" --in-reply-to "$ma"
 expect "reply still accepts a single path without spaces" 0 "^sent " as mw2 reply "$ma" "$T/mw.body"
