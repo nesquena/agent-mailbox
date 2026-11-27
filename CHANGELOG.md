@@ -3,14 +3,17 @@
 ## Unreleased
 
 - **A mailbox clone now holds only the store's mailbox branch: no tags, and no other branch or ref the store has can
-  stand in for it.** New checkouts are set up with `git init` and fetch only the exact `refs/heads/<branch>` tip
-  verified against `ls-remote`; existing checkouts clear any other local refs (tags, default branches, `origin/HEAD`,
-  or a local `refs/heads/HEAD`) on open via batched `update-ref --stdin --no-deref` with a per-ref fallback, keeping
-  `refs/heads/<branch>`, `refs/remotes/origin/<branch>`, and `refs/agent-mailbox/*`. All local branch checks and pushes
-  use full `refs/heads/<branch>` and `refs/remotes/origin/<branch>` names. When a push collides with another store ref
-  that git matches for `refs/heads/<branch>` (such as `refs/tags/refs/heads/<branch>`,
-  `refs/heads/refs/heads/<branch>`, `refs/refs/heads/<branch>`, or `refs/remotes/refs/heads/<branch>`), the adapter
-  stops at once with exit 4 and names the colliding ref(s) to remove from the store.
+  stand in for it.** New checkouts fetch only the store's exact `refs/heads/<branch>` tip, existing checkouts clear any
+  other local refs (tags, default branches, `origin/HEAD`, or a local `refs/heads/HEAD`) on open while keeping
+  `refs/heads/<branch>`, `refs/remotes/origin/<branch>`, and `refs/agent-mailbox/*`, and a detached `HEAD` left by an
+  earlier run is reattached to `refs/heads/<branch>` without dropping unpublished commits (setting a diverged commit
+  aside under `refs/agent-mailbox/stuck/*`). Bare `insteadOf` aliases now work as `--store` names alongside local
+  paths (including `<name>.git` and `<name>.bundle`). If a fetch still does not match the store's `refs/heads/<branch>`
+  after retrying, the command stops with `"fetched commit (...) did not match refs/heads/<branch> (...)"` instead of
+  using the mismatched commit. When a push collides with another store ref that git matches for `refs/heads/<branch>`
+  (such as `refs/tags/refs/heads/<branch>`, `refs/heads/refs/heads/<branch>`, `refs/refs/heads/<branch>`, or
+  `refs/remotes/refs/heads/<branch>`), the adapter stops at once with exit 4 and names the colliding ref(s) to remove
+  from the store.
 - **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
   retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
   the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails

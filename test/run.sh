@@ -2191,7 +2191,11 @@ exec "%s" "$@"
     as "exd$ei" setup --store "$DS" --name ex1 >/dev/null
     expect "holds ignores $dref when refs/heads/main is absent" 1 "no mailbox at 'mailbox/' yet" as "exd$ei" holds "item#ex" --version v1
     expect "list ignores $dref when refs/heads/main is absent" 1 "no mailbox at 'mailbox/' yet" as "exd$ei" list
-    expect "init stops naming colliding ref $dref when refs/heads/main is absent" 4 "$dref" as "exd$ei" init
+    out=$(as "exd$ei" init 2>&1); rc=$?
+    [ "$rc" = 4 ] && printf '%s\n' "$out" | grep -qF "store ref collides with refs/heads/main ($dref); remove $dref from the store" &&
+      ! printf '%s\n' "$out" | grep -q "push failed 10 times" &&
+      ok "init stops at once naming colliding ref $dref when refs/heads/main is absent" ||
+      no "init didn't stop via pre-check for $dref (exit $rc)" "$out"
     [ "$(git --git-dir="$DS" rev-parse --verify "$dref" 2>/dev/null)" = "$src_oid" ] &&
       ! git --git-dir="$DS" show-ref -q --verify refs/heads/main &&
       ok "and init left $dref untouched" || no "init modified $dref or created main" "$(git --git-dir="$DS" show-ref)"
@@ -2303,8 +2307,8 @@ exec "%s" "$@"
   for a in mv1 mv2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
   as mv2 list >/dev/null 2>&1
   mkdir -p "$T/movegit"
-  printf '#!/bin/sh\nreal="%s"\nstamp="%s/done"\ncase " $* " in\n  (*" fetch "*) if [ ! -e "$stamp" ]; then : > "$stamp"; echo moved | HOME="%s" "%s" "%s" send mv2 moved-mid-fetch - >/dev/null 2>&1; fi ;;\nesac\nexec "$real" "$@"\n' \
-    "$(command -v git)" "$T/movegit" "$W/home-mv1" "$SH" "$CLI" > "$T/movegit/git"
+  printf '#!/bin/sh\nreal="%s"\nopath="%s"\nstamp="%s/done"\ncase " $* " in\n  (*" fetch "*) if [ ! -e "$stamp" ]; then : > "$stamp"; echo moved | env PATH="$opath" HOME="%s" "%s" "%s" send mv2 moved-mid-fetch - >/dev/null 2>&1; fi ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$PATH" "$T/movegit" "$W/home-mv1" "$SH" "$CLI" > "$T/movegit/git"
   chmod +x "$T/movegit/git"
   expect "list succeeds when refs/heads/main advances between ls-remote and fetch" 0 "mv1-moved-mid-fetch\.md" \
     env PATH="$T/movegit:$PATH" HOME="$W/home-mv2" "$SH" "$CLI" list
@@ -2348,6 +2352,77 @@ exec "%s" "$@"
     [ -z "$(git -C "$Ceu" for-each-ref --format='%(refname)')" ] &&
     ok "and clears local refs/heads/HEAD without publishing to the store" ||
     no "existing unborn clone kept refs/heads/HEAD or published it" "store=$(git --git-dir="$EU" show-ref) clone=$(git -C "$Ceu" for-each-ref)"
+
+  # O1: if refs/heads/main advances twice during ls-remote, fetch and re-check, ad_fetch_branch retries and succeeds
+  mkdir -p "$T/movegit2"
+  printf '#!/bin/sh\nreal="%s"\nopath="%s"\nstate="%s/step"\nstep=$(cat "$state" 2>/dev/null || echo 0)\ncase " $* " in\n  (*" fetch "*) if [ "$step" = 0 ]; then echo 1 > "$state"; echo m1 | env PATH="$opath" HOME="%s" "%s" "%s" send mv2 moved-twice-1 - >/dev/null 2>&1; fi ;;\n  (*" ls-remote "*) if [ "$step" = 1 ]; then echo 2 > "$state"; echo m2 | env PATH="$opath" HOME="%s" "%s" "%s" send mv2 moved-twice-2 - >/dev/null 2>&1; fi ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$PATH" "$T/movegit2" "$W/home-mv1" "$SH" "$CLI" "$W/home-mv1" "$SH" "$CLI" > "$T/movegit2/git"
+  chmod +x "$T/movegit2/git"
+  expect "list succeeds when refs/heads/main advances twice during fetch and re-check" 0 "mv1-moved-twice-2\.md" \
+    env PATH="$T/movegit2:$PATH" HOME="$W/home-mv2" "$SH" "$CLI" list
+
+  # B1: detached HEAD recovery (plain detached via ad_open/doctor, unabortable rebase-merge dir, upgrade with unpublished
+  # detached commit, diverged detached commit set aside under stuck/*, and ad_commit refusing detached HEAD)
+  # 1. plain detached HEAD is reattached by ad_sync (tested via doctor)
+  git -C "$Cep" checkout -q --detach
+  as ep1 doctor >/dev/null 2>&1
+  [ "$(git -C "$Cep" symbolic-ref -q HEAD 2>/dev/null)" = refs/heads/main ] &&
+    ok "ad_sync reattaches a plain detached HEAD to refs/heads/main" ||
+    no "ad_sync left HEAD detached" "$(git -C "$Cep" symbolic-ref -q HEAD 2>&1; git -C "$Cep" rev-parse --short HEAD 2>&1)"
+  # 2. detached HEAD + unabortable .git/rebase-merge dir: ad_sync cleans the dir and reattaches before commit/push
+  git -C "$Cep" checkout -q --detach
+  mkdir -p "$Cep/.git/rebase-merge"
+  expect "send succeeds after detached HEAD with unabortable rebase-merge dir" 0 "^sent mailbox/inbox/ep2/" \
+    sh -c 'echo hello | HOME="$1" "$2" "$3" send ep2 det-rb -' _ "$W/home-ep1" "$SH" "$CLI"
+  expect "delivering det-rb to ep2" 0 "ep1-det-rb\.md" as ep2 list
+  [ "$(git -C "$Cep" symbolic-ref -q HEAD 2>/dev/null)" = refs/heads/main ] &&
+    ok "and leaves HEAD attached to refs/heads/main" || no "HEAD stayed detached after rebase-merge cleanup"
+  # 3. upgrade with an unpublished commit on detached HEAD ahead of refs/heads/main: published, never dropped
+  git -C "$Cep" checkout -q --detach
+  printf -- '---\nprotocol: 1\nfrom: ep1\nto: ep2\ntopic: det-up\ncontext: general\nsent: 2026-01-01T00:00:01Z\nin_reply_to: none\nneeds: none\n---\n\nhi\n' \
+    > "$Cep/mailbox/inbox/ep2/20260101T000001Z-ep1-det-up.md"
+  git -C "$Cep" add mailbox/inbox/ep2/20260101T000001Z-ep1-det-up.md &&
+    git -C "$Cep" -c user.name=ep1 -c user.email=ep1@agent-mailbox.invalid commit -qm "mailbox: ep1 -> ep2 (det-up)"
+  out=$(as ep1 agents 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+    ok "upgrade publishes an unpublished commit left on a detached HEAD" ||
+    no "unpublished detached commit was dropped or failed (exit $rc)" "$out"
+  expect "delivering det-up to ep2" 0 "ep1-det-up\.md" as ep2 list
+  # 4. diverged commit left on a detached HEAD is set aside under refs/agent-mailbox/stuck/* with a warning
+  git -C "$Cep" checkout -q --detach HEAD~1
+  echo div > "$Cep/mailbox/inbox/ep2/diverged-note.txt"
+  git -C "$Cep" add mailbox/inbox/ep2/diverged-note.txt &&
+    git -C "$Cep" -c user.name=ep1 -c user.email=ep1@agent-mailbox.invalid commit -qm "mailbox: diverged detached"
+  div_oid=$(git -C "$Cep" rev-parse HEAD)
+  out=$(as ep1 agents 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit left on a detached HEAD" &&
+    git -C "$Cep" for-each-ref --format='%(objectname) %(refname)' refs/agent-mailbox/stuck/ | grep -q "^$div_oid " &&
+    [ "$(git -C "$Cep" symbolic-ref -q HEAD 2>/dev/null)" = refs/heads/main ] &&
+    ok "a diverged commit on detached HEAD is set aside under stuck/* before reattaching" ||
+    no "diverged detached commit wasn't saved under stuck/* (exit $rc)" "$out | $(git -C "$Cep" for-each-ref refs/agent-mailbox/stuck/)"
+  # 5. ad_commit refuses to commit when HEAD is detached
+  git -C "$Cep" checkout -q --detach
+  before_det=$(git -C "$Cep" rev-parse HEAD)
+  echo x > "$Cep/mailbox/inbox/ep2/should-not-commit.txt"
+  out=$( (AD_DIR=$Cep BRANCH=main ME=ep1 ROOT=mailbox CAP=200; die() { printf '%s\n' "$*" >&2; exit 1; }; warn() { :; }; clean() { cat; }; . "$ROOTDIR/adapters/git.sh"
+    ad_commit "test" mailbox/inbox/ep2/should-not-commit.txt) 2>&1 ); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q "HEAD is not on refs/heads/main" &&
+    [ "$(git -C "$Cep" rev-parse HEAD)" = "$before_det" ] &&
+    ok "ad_commit refuses to commit when HEAD is detached" ||
+    no "ad_commit didn't refuse detached HEAD (exit $rc)" "$out"
+  rm -f "$Cep/mailbox/inbox/ep2/should-not-commit.txt"
+  as ep1 agents >/dev/null 2>&1
+
+  # O2: bare/relative store names resolve <name>.git and <name>.bundle relative to PWD, while bare insteadOf aliases work
+  git clone -q --bare "$PC" "$T/barestore.git"
+  as o2g setup --store barestore --name ep2 >/dev/null
+  expect "a bare store name resolves <name>.git in the caller's folder" 0 "ep1-det-rb\.md" in_dir "$T" as o2g list
+  git -C "$Cep" bundle create -q "$T/bundlestore.bundle" refs/heads/main 2>/dev/null
+  as o2b setup --store bundlestore --name ep2 >/dev/null
+  expect "a bare store name resolves <name>.bundle in the caller's folder" 0 "ep1-det-rb\.md" in_dir "$T" as o2b list
+  ga="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.$PC.insteadOf' GIT_CONFIG_VALUE_0=mybarealias HOME='$W/home-o2a'"
+  sh -c "$ga '$SH' '$CLI' setup --store mybarealias --name ep2" >/dev/null 2>&1
+  expect "a bare insteadOf alias works as --store" 0 "ep1-det-rb\.md" sh -c "$ga '$SH' '$CLI' list"
   }
   section git-planted sec_git_planted git
 

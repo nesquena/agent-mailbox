@@ -63,10 +63,41 @@ ad_clean_refs() {
     ad_git update-ref --no-deref -d refs/remotes/origin/HEAD 2>/dev/null || :
 }
 
+# ad_attach_branch: ensure HEAD is the symbolic ref refs/heads/$BRANCH (outside an active rebase). If HEAD is
+# detached at a commit (e.g. a checkout made by an older CLI, or after an interrupted rebase that couldn't be
+# aborted cleanly), advance refs/heads/$BRANCH when it is absent or an ancestor of HEAD; keep refs/heads/$BRANCH when
+# HEAD is already an ancestor of it; otherwise set the diverged detached commit aside under refs/agent-mailbox/stuck/<n>
+# with a warning before reattaching.
+ad_attach_branch() {
+  [ ! -d "$AD_DIR/.git/rebase-merge" ] && [ ! -d "$AD_DIR/.git/rebase-apply" ] || return 0
+  [ "$(ad_git symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ] || return 0
+  if ! ad_git symbolic-ref -q HEAD >/dev/null 2>&1; then
+    ab_h=$(ad_git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || ab_h=""
+    if [ -n "$ab_h" ]; then
+      if ! ad_local_has_branch || ad_git merge-base --is-ancestor "refs/heads/$BRANCH" "$ab_h" 2>/dev/null; then
+        ad_git update-ref "refs/heads/$BRANCH" "$ab_h" || die "can't update refs/heads/$BRANCH"
+      elif ! ad_git merge-base --is-ancestor "$ab_h" "refs/heads/$BRANCH" 2>/dev/null; then
+        ab_ref=$(ad_git for-each-ref --format='%(objectname) %(refname)' refs/agent-mailbox/stuck/ | awk -v c="$ab_h" '$1 == c { print $2; exit }')
+        if [ -z "$ab_ref" ]; then
+          ab_n=1; while ad_git show-ref -q --verify "refs/agent-mailbox/stuck/$ab_n"; do ab_n=$((ab_n+1)); done
+          ab_ref="refs/agent-mailbox/stuck/$ab_n"
+          ad_git update-ref "$ab_ref" "$ab_h" || die "can't save detached commit under $ab_ref"
+        fi
+        warn "set aside a commit left on a detached HEAD ($(ad_git log -1 --format=%s "$ab_h" | clean "$CAP")), which diverges from $BRANCH: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as $ab_ref in $AD_DIR); this clone goes on from $BRANCH"
+      fi
+    fi
+  fi
+  ad_git symbolic-ref HEAD "refs/heads/$BRANCH" || die "can't attach HEAD to refs/heads/$BRANCH"
+}
+
 # ad_fetch_branch [--no-gc] <dest> [<fetch-opt>...]: fetch the store's exact refs/heads/$BRANCH into <dest>.
 # Exit 0 on success, 2 when the store has no exact refs/heads/$BRANCH (leaving <dest> untouched), 1 on error or
 # mismatch (printing the error and restoring <dest>). Checking ls-remote before and comparing the fetched object id
 # stops git's refspec abbreviation from fetching another store ref (such as refs/tags/refs/heads/$BRANCH) instead.
+# Under contention, if the branch moves between ls-remote and fetch, retries up to 5 times while the exact tip keeps
+# advancing; a non-moving mismatch fails closed on the first try.
+# ceiling: one ls-remote per fetch (~2x round trips), so a fetch never downloads objects from another ref when
+# refs/heads/$BRANCH is absent; can be dropped once git offers an exact-only fetch refspec.
 ad_fetch_branch() {
   fb_gc=""
   if [ "${1:-}" = --no-gc ]; then fb_gc=1; shift; fi
@@ -75,23 +106,39 @@ ad_fetch_branch() {
   fb_want=$(printf '%s\n' "$fb_lb" | awk -F'\t' -v r="refs/heads/$BRANCH" \
     '$2 == r && $1 ~ /^[0-9a-f]+$/ && length($1) >= 40 { print $1; f = 1; exit } END { exit f ? 0 : 2 }') || return 2
   fb_prev=$(ad_ref_oid "$fb_dst") || fb_prev=""
-  if [ -n "$fb_gc" ]; then
-    fb_err=$(ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
-  else
-    fb_err=$(ad_git fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
-  fi
-  if [ $? != 0 ]; then
-    ad_ls_branch >/dev/null 2>&1; [ $? -ne 2 ] || return 2
-    printf '%s\n' "$fb_err"; return 1
-  fi
-  fb_got=$(ad_ref_oid "$fb_dst") || fb_got=""
-  if [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want" ]; then return 0; fi
-  # the branch may have moved between ls-remote and fetch; re-check once against the exact branch tip
-  fb_want2=$(ad_ls_branch 2>/dev/null); fb_rc2=$?
-  if [ "$fb_rc2" = 0 ] && [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want2" ]; then return 0; fi
+  fb_got="" fb_want2="" fb_try=0
+  while [ $fb_try -lt 5 ]; do
+    fb_try=$((fb_try+1))
+    if [ -n "$fb_gc" ]; then
+      fb_err=$(ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
+    else
+      fb_err=$(ad_git fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
+    fi
+    if [ $? != 0 ]; then
+      fb_cur=$(ad_ref_oid "$fb_dst") || fb_cur=""
+      if [ -n "$fb_prev" ]; then ad_git update-ref "$fb_dst" "$fb_prev" ${fb_cur:+"$fb_cur"} 2>/dev/null || :
+      else ad_git update-ref -d "$fb_dst" ${fb_cur:+"$fb_cur"} 2>/dev/null || :; fi
+      ad_ls_branch >/dev/null 2>&1; [ $? -ne 2 ] || return 2
+      printf '%s\n' "$fb_err"; return 1
+    fi
+    fb_got=$(ad_ref_oid "$fb_dst") || fb_got=""
+    if [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want" ]; then return 0; fi
+    # the branch may have moved between ls-remote and fetch; re-check against the exact branch tip
+    fb_want2=$(ad_ls_branch 2>/dev/null); fb_rc2=$?
+    if [ "$fb_rc2" = 0 ] && [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want2" ]; then return 0; fi
+    if [ "$fb_rc2" = 2 ]; then
+      if [ -n "$fb_prev" ]; then ad_git update-ref "$fb_dst" "$fb_prev" ${fb_got:+"$fb_got"} 2>/dev/null || :
+      else ad_git update-ref -d "$fb_dst" ${fb_got:+"$fb_got"} 2>/dev/null || :; fi
+      return 2
+    fi
+    if [ "$fb_rc2" = 0 ] && [ -n "$fb_want2" ] && [ "$fb_want2" != "$fb_want" ]; then
+      fb_want=$fb_want2
+      continue
+    fi
+    break
+  done
   if [ -n "$fb_prev" ]; then ad_git update-ref "$fb_dst" "$fb_prev" ${fb_got:+"$fb_got"} 2>/dev/null || :
   else ad_git update-ref -d "$fb_dst" ${fb_got:+"$fb_got"} 2>/dev/null || :; fi
-  [ "$fb_rc2" != 2 ] || return 2
   printf 'fetched commit (%s) did not match refs/heads/%s (%s)\n' "${fb_got:-none}" "$BRANCH" "${fb_want2:-$fb_want}"
   return 1
 }
@@ -143,10 +190,6 @@ ad_open() {
   ad_clear_locks
   if [ -d "$AD_DIR/.git" ]; then
     ad_clean_refs
-    if [ ! -d "$AD_DIR/.git/rebase-merge" ] && [ ! -d "$AD_DIR/.git/rebase-apply" ] &&
-      [ "$(ad_git symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then
-      ad_git symbolic-ref HEAD "refs/heads/$BRANCH" 2>/dev/null || :
-    fi
   fi
   if [ ! -d "$AD_DIR/.git" ]; then
     # set the clone up under a temporary name and move it into place once it's complete, so a command cut off
@@ -154,16 +197,34 @@ ad_open() {
     # stays behind (removing another command's could break a setup still running); delete it by hand
     d=$AD_DIR AD_DIR="$STATE/checkouts/.$AD_ID.$$"
     # build the checkout with git init rather than git clone, so it holds only the mailbox branch (no default branch,
-    # no tags, no other refs). A store named by a URL, host:path or an absolute path is kept as written and read from
-    # $AD_DIR, so a local bundle or repo in the caller's folder can't shadow it; a relative path (or an existing bare
-    # name in the caller's folder) is anchored to $PWD. The remote is always origin.
+    # no tags, no other refs). A store named by a URL or host:path is kept as written and read from $AD_DIR, so a
+    # local bundle or repo in the caller's folder can't shadow it; a local or relative path checks <name>, <name>.git
+    # and <name>.bundle (as git clone does) and anchors relative paths to $PWD, while an unmatched bare name stays as
+    # written so bare insteadOf aliases work. The remote is always origin.
     # ceiling: an insteadOf alias spelled like a path (a slash before its colon) is read as that path where the command
     # runs, as git reads it; name such a store by its URL
     case $STORE in
-      (/*) su=$STORE ;;
-      (*:*) case ${STORE%%:*} in (*/*) su="${PWD%/}/$STORE" ;; (*) su=$STORE ;; esac ;;
-      (*/*) su="${PWD%/}/$STORE" ;;
-      (*) if [ -e "$STORE" ]; then su="${PWD%/}/$STORE"; else su=$STORE; fi ;;
+      (/*)
+        if [ -e "$STORE" ]; then su=$STORE
+        elif [ -e "$STORE.git" ]; then su="$STORE.git"
+        elif [ -e "$STORE.bundle" ]; then su="$STORE.bundle"
+        else su=$STORE; fi ;;
+      (*:*)
+        case ${STORE%%:*} in
+          (*/*)
+            if [ -e "$STORE" ]; then su="${PWD%/}/$STORE"
+            elif [ -e "$STORE.git" ]; then su="${PWD%/}/$STORE.git"
+            elif [ -e "$STORE.bundle" ]; then su="${PWD%/}/$STORE.bundle"
+            else su="${PWD%/}/$STORE"; fi ;;
+          (*) su=$STORE ;;
+        esac ;;
+      (*)
+        if [ -e "$STORE" ]; then su="${PWD%/}/$STORE"
+        elif [ -e "$STORE.git" ]; then su="${PWD%/}/$STORE.git"
+        elif [ -e "$STORE.bundle" ]; then su="${PWD%/}/$STORE.bundle"
+        else
+          case $STORE in (*/*) su="${PWD%/}/$STORE" ;; (*) su=$STORE ;; esac
+        fi ;;
     esac
     rm -rf "$AD_DIR"
     ierr=$( ( LC_ALL=C && export LC_ALL && ad_g init -q --template= "$AD_DIR" ) 2>&1 ) ||
@@ -491,6 +552,7 @@ ad_sync() {
   # a consumed one removed but not committed). Commits it made but couldn't push are kept, and published below
   if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
+  ad_attach_branch
   if ad_local_has_branch; then ad_git reset -q --hard "refs/heads/$BRANCH" 2>/dev/null; fi
   # (-x: files the store's own .gitignore names are debris too)
   ad_git clean -fdqx -- "$ROOT" 2>/dev/null
@@ -509,6 +571,8 @@ ad_sync() {
 
 # ad_commit <message> <path>...: publish exactly these paths (added, changed or removed), nothing else
 ad_commit() {
+  [ "$(ad_git symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$BRANCH" ] ||
+    die "HEAD is not on refs/heads/$BRANCH; remove $AD_DIR and run this again"
   msg=$1; shift; keep=""; AD_UNCHANGED=""
   for p in "$@"; do
     if [ -e "$AD_DIR/$p" ] || ad_git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then keep="$keep $p"; fi
