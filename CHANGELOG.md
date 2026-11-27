@@ -2,16 +2,15 @@
 
 ## Unreleased
 
-- **The git adapter keeps tags out of mailbox clones (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
-  and tags removed on open, including those a fresh clone fetched, via batched `update-ref --stdin` with a per-ref
-  fallback), verifies the store's exact `refs/heads/<branch>` tip on every fetch, and refers to the branch locally
-  only by its full remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, a local
-  branch named like the remote one (including a store whose default branch is named `origin/<branch>` or
-  `refs/remotes/origin/<branch>`), or another ref in the store that git's refspec rules would otherwise match for
-  `refs/heads/<branch>` (such as `refs/tags/refs/heads/<branch>`, `refs/heads/refs/heads/<branch>`,
-  `refs/refs/heads/<branch>`, or `refs/remotes/refs/heads/<branch>`) can't stand in for the mailbox branch, while
-  keeping git 2.9 compatibility on clone. When a push collides with such a ref (`matches more than one`, or a
-  colliding ref present before the branch exists), the adapter stops immediately and names the colliding ref(s).
+- **A mailbox clone now holds only the store's mailbox branch: no tags, and no other branch or ref the store has can
+  stand in for it.** New checkouts are set up with `git init` and fetch only the exact `refs/heads/<branch>` tip
+  verified against `ls-remote`; existing checkouts clear any other local refs (tags, default branches, `origin/HEAD`,
+  or a local `refs/heads/HEAD`) on open via batched `update-ref --stdin --no-deref` with a per-ref fallback, keeping
+  `refs/heads/<branch>`, `refs/remotes/origin/<branch>`, and `refs/agent-mailbox/*`. All local branch checks and pushes
+  use full `refs/heads/<branch>` and `refs/remotes/origin/<branch>` names. When a push collides with another store ref
+  that git matches for `refs/heads/<branch>` (such as `refs/tags/refs/heads/<branch>`,
+  `refs/heads/refs/heads/<branch>`, `refs/refs/heads/<branch>`, or `refs/remotes/refs/heads/<branch>`), the adapter
+  stops at once with exit 4 and names the colliding ref(s) to remove from the store.
 - **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
   retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
   the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails

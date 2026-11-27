@@ -1045,7 +1045,7 @@ notes.md"'
     gitlog np agents >/dev/null 2>&1; gitlog alice send bob np-1 "$T/body" >/dev/null 2>&1; gitlog bob watch 1 1 >/dev/null 2>&1
     # every logged call, but ad_open's local rev-parse --local-env-vars, which runs before git's environment is set up
     calls=$(grep -v '|rev-parse --local-env-vars$' "$T/gitlog" 2>/dev/null)
-    for c in clone fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
+    for c in init fetch push ls-remote; do printf '%s\n' "$calls" | grep -q " $c " || no "no git $c call was logged" "$calls"; done
     bad=$(printf '%s\n' "$calls" | grep -v '^0 never|')
     [ -n "$calls" ] && [ -z "$bad" ] && ok "every git call the adapter makes runs with git's own prompts off" ||
       no "a git call could wait on git's own prompt" "$bad"
@@ -1972,7 +1972,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # and so is one cut off part-way (here the command is killed as the second checkout starts)
   printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
   find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
-  mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree HEAD "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+  mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree HEAD "*|*" read-tree refs/heads/"*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
     "$(command -v git)" > "$T/killgit/git"; chmod +x "$T/killgit/git"
   env PATH="$T/killgit:$PATH" HOME="$W/home-p2" "$SH" "$CLI" list >/dev/null 2>&1
   [ "$(head -n 1 "$C/.git/info/attributes")" = "# retry" ] && ok "(the command was cut off with the second checkout still to do)" ||
@@ -2042,7 +2042,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   printf '#!/bin/sh\necho "$*" >> "%s/ssh.log"; exit 255\n' "$T" > "$T/fakessh"; chmod +x "$T/fakessh"
   gr="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.mailrem.url GIT_CONFIG_VALUE_0=hq:repo GIT_SSH='$T/fakessh' HOME='$W/home-p15'"
   sh -c "$gr '$SH' '$CLI' setup --store mailrem --name p15" >/dev/null 2>&1
-  expect "a store named like a configured remote is cloned by that name" 1 "repository 'mailrem' does not exist" \
+  expect "a store named like a configured remote is cloned by that name" 1 "'mailrem' does not appear to be a git repository" \
     in_dir "$T" sh -c "$gr '$SH' '$CLI' list"
   [ ! -s "$T/ssh.log" ] && ok "and isn't looked up at that remote" ||
     no "the first setup contacted a remote the store's name matches" "$(cat "$T/ssh.log")"
@@ -2055,7 +2055,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   [ -z "$(git --git-dir="$S" ls-tree -r --name-only main | grep stray)" ] && ok "but not an ignored file it wasn't asked to send" ||
     no "a send published a file it wasn't asked to"
   # a first command cut off part-way (here at its first fetch, after the clone) leaves no checkout later ones take as ready
-  mkdir -p "$T/killfetch"; printf '#!/bin/sh\ncase " $* " in (*" fetch -q --no-tags origin "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+  mkdir -p "$T/killfetch"; printf '#!/bin/sh\ncase " $* " in (*" fetch -q --no-tags "*" origin "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
     "$(command -v git)" > "$T/killfetch/git"; chmod +x "$T/killfetch/git"
   as p6 setup --store "$S" --name p6 >/dev/null; env PATH="$T/killfetch:$PATH" HOME="$W/home-p6" "$SH" "$CLI" --as p2 list >/dev/null 2>&1
   expect "a first command cut off part-way is set up again by the next one" 0 "p1-planted\.md" as p6 --as p2 list
@@ -2247,36 +2247,107 @@ exec "%s" "$@"
     pi=$((pi+1))
     git --git-dir="$PC" update-ref "$cref" "$ptip"
     out=$(echo hi | HOME="$W/home-ep1" "$SH" "$CLI" send ep2 "col-$pi" - 2>&1); rc=$?
-    [ "$rc" = 4 ] && printf '%s\n' "$out" | grep -qF "$cref" && ! printf '%s\n' "$out" | grep -q "push failed 10 times" &&
-      ok "push stops at once and names colliding ref $cref" ||
+    [ "$rc" = 4 ] && printf '%s\n' "$out" | grep -qF "remove $cref from the store" && ! printf '%s\n' "$out" | grep -q "push failed 10 times" &&
+      ok "push stops at once and names colliding ref $cref to remove" ||
       no "push didn't report colliding ref $cref (exit $rc)" "$out"
     git --git-dir="$PC" update-ref -d "$cref"
     expect "and the next command publishes once $cref is removed" 0 "NAME" as ep1 agents
     expect "delivering col-$pi to ep2" 0 "ep1-col-$pi\.md" as ep2 list
   done
 
-  # ad_no_tags clears tags in one update-ref --stdin batch, and falls back to per-ref update-ref -d if --stdin fails
+  # an unrelated suffix ref (refs/heads/x/refs/tags/refs/heads/main) doesn't trigger the ambiguous-refs pre-check on init
+  UR="$T/exact-unrelated.git"; git init -q --bare "$UR"
+  git --git-dir="$SR" push -q "$UR" "refs/heads/main:refs/heads/x/refs/tags/refs/heads/main"
+  as exun setup --store "$UR" --name exun >/dev/null
+  expect "init succeeds beside unrelated ref refs/heads/x/refs/tags/refs/heads/main" 0 "initialized" as exun init
+
+  # a store with no main whose default branch is refs/heads/HEAD publishes nothing, holds fails closed, list says no mailbox yet
+  HB="$T/headbranch.git"; git init -q --bare "$HB"
+  git --git-dir="$SR" push -q "$HB" "refs/heads/main:refs/heads/HEAD"
+  git --git-dir="$HB" symbolic-ref HEAD refs/heads/HEAD
+  as exhb setup --store "$HB" --name ex1 >/dev/null
+  expect "holds fails closed on a store whose default branch is refs/heads/HEAD" 1 "no mailbox at 'mailbox/' yet" as exhb holds "item#ex" --version v1
+  expect "list says no mailbox yet on a store whose default branch is refs/heads/HEAD" 1 "no mailbox at 'mailbox/' yet" as exhb list
+  ! git --git-dir="$HB" show-ref -q --verify refs/heads/main &&
+    ok "and nothing was published to refs/heads/main on the HEAD-branch store" ||
+    no "HEAD-branch store gained refs/heads/main" "$(git --git-dir="$HB" show-ref)"
+
+  # a store whose branch exists only as a tag (refs/tags/main, no refs/heads/main) has no mailbox and leaves no tags in the clone
+  TB="$T/tagonly.git"; git init -q --bare "$TB"
+  git --git-dir="$SR" push -q "$TB" "refs/heads/main:refs/tags/main"
+  as extag setup --store "$TB" --name ex1 >/dev/null
+  expect "list sees no mailbox when only refs/tags/main exists" 1 "no mailbox at 'mailbox/' yet" as extag list
+  for Ctag in "$W/home-extag/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ -z "$(git -C "$Ctag" for-each-ref --format='%(refname)')" ] &&
+    ok "and the clone holds no tags or other refs" ||
+    no "tag-only store left refs in clone" "$(git -C "$Ctag" for-each-ref --format='%(refname)')"
+
+  # delete-before-ls-remote / delete-after-clone race: if refs/heads/main is deleted during initial setup, nothing is republished
+  DR="$T/delrace.git"; git init -q --bare "$DR"
+  git --git-dir="$SR" push -q "$DR" "refs/heads/main:refs/heads/main"
+  as exdr setup --store "$DR" --name ex1 >/dev/null
+  mkdir -p "$T/delracegit"
+  printf '#!/bin/sh\nreal="%s"\nstore="%s"\nstamp="%s/done"\ncase " $* " in\n  (*" ls-remote "*|*" fetch "*) if [ ! -e "$stamp" ]; then : > "$stamp"; "$real" --git-dir="$store" update-ref -d refs/heads/main; fi ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$DR" "$T/delracegit" > "$T/delracegit/git"
+  chmod +x "$T/delracegit/git"
+  expect "branch deleted during initial setup reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" \
+    env PATH="$T/delracegit:$PATH" HOME="$W/home-exdr" "$SH" "$CLI" list
+  ! git --git-dir="$DR" show-ref -q --verify refs/heads/main &&
+    ok "and initial setup did not republish the deleted branch" ||
+    no "initial setup republished refs/heads/main" "$(git --git-dir="$DR" show-ref)"
+
+  # re-check success path: when refs/heads/main advances between ls-remote and fetch, the fetch still succeeds with the new tip
+  MV="$T/movebranch.git"; git init -q --bare "$MV"
+  for a in mv1 mv2; do as $a setup --store "$MV" --name $a >/dev/null; done
+  as mv1 init >/dev/null
+  for a in mv1 mv2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  as mv2 list >/dev/null 2>&1
+  mkdir -p "$T/movegit"
+  printf '#!/bin/sh\nreal="%s"\nstamp="%s/done"\ncase " $* " in\n  (*" fetch "*) if [ ! -e "$stamp" ]; then : > "$stamp"; echo moved | HOME="%s" "%s" "%s" send mv2 moved-mid-fetch - >/dev/null 2>&1; fi ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$T/movegit" "$W/home-mv1" "$SH" "$CLI" > "$T/movegit/git"
+  chmod +x "$T/movegit/git"
+  expect "list succeeds when refs/heads/main advances between ls-remote and fetch" 0 "mv1-moved-mid-fetch\.md" \
+    env PATH="$T/movegit:$PATH" HOME="$W/home-mv2" "$SH" "$CLI" list
+
+  # existing clones from an older CLI: ad_clean_refs removes tags, refs/heads/HEAD, extra branches and origin/HEAD on open,
+  # keeping refs/heads/main, refs/remotes/origin/main and refs/agent-mailbox/stuck/* intact (both --stdin and fallback)
   for Cep in "$W/home-ep1/.local/state/agent-mailbox/checkouts/"*; do :; done
-  ti=1; while [ $ti -le 10 ]; do git -C "$Cep" update-ref "refs/tags/t$ti" HEAD; ti=$((ti+1)); done
-  mkdir -p "$T/taglog"
-  printf '#!/bin/sh\ncase " $* " in (*" update-ref "*) printf "%%s\\n" "$*" >> "%s/log" ;; esac\nexec "%s" "$@"\n' \
-    "$T/taglog" "$(command -v git)" > "$T/taglog/git"
-  chmod +x "$T/taglog/git"
-  rm -f "$T/taglog/log"
-  env PATH="$T/taglog:$PATH" HOME="$W/home-ep1" "$SH" "$CLI" list >/dev/null 2>&1
-  [ -z "$(git -C "$Cep" for-each-ref --format='%(refname)' refs/tags/)" ] &&
-    [ "$(grep -c 'update-ref --stdin' "$T/taglog/log" 2>/dev/null)" = 1 ] &&
-    [ "$(grep -c 'update-ref -d' "$T/taglog/log" 2>/dev/null)" = 0 ] &&
-    ok "ad_no_tags removes tags in one update-ref --stdin batch" ||
-    no "ad_no_tags didn't batch via update-ref --stdin" "tags=$(git -C "$Cep" for-each-ref refs/tags/) log=$(cat "$T/taglog/log" 2>/dev/null)"
-  ti=1; while [ $ti -le 5 ]; do git -C "$Cep" update-ref "refs/tags/fb$ti" HEAD; ti=$((ti+1)); done
+  ep_tip=$(git -C "$Cep" rev-parse --verify refs/heads/main)
+  ti=1; while [ $ti -le 10 ]; do git -C "$Cep" update-ref "refs/tags/t$ti" "$ep_tip"; ti=$((ti+1)); done
+  git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
+  git -C "$Cep" update-ref refs/heads/extra "$ep_tip"
+  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$Cep" update-ref refs/agent-mailbox/stuck/1 "$ep_tip"
+  as ep1 list >/dev/null 2>&1
+  kept=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
+  [ "$kept" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
+    ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
+    ok "existing clone clears tags, refs/heads/HEAD, extra branches and origin/HEAD while keeping stuck refs" ||
+    no "existing clone kept extra refs or dropped stuck/branch refs" "$kept"
+  # fallback when update-ref --stdin --no-deref fails: per-ref update-ref --no-deref -d still clears extra refs and keeps origin/main
+  ti=1; while [ $ti -le 5 ]; do git -C "$Cep" update-ref "refs/tags/fb$ti" "$ep_tip"; ti=$((ti+1)); done
+  git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
+  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
   mkdir -p "$T/tagfb"
   printf '#!/bin/sh\ncase " $* " in (*" update-ref --stdin"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/tagfb/git"
   chmod +x "$T/tagfb/git"
   env PATH="$T/tagfb:$PATH" HOME="$W/home-ep1" "$SH" "$CLI" list >/dev/null 2>&1
-  [ -z "$(git -C "$Cep" for-each-ref --format='%(refname)' refs/tags/)" ] &&
-    ok "ad_no_tags falls back to per-ref update-ref -d when --stdin fails" ||
-    no "ad_no_tags fallback left tags behind" "$(git -C "$Cep" for-each-ref refs/tags/)"
+  kept2=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
+  [ "$kept2" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
+    ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
+    ok "ad_clean_refs falls back to per-ref update-ref --no-deref -d when --stdin fails" ||
+    no "ad_clean_refs fallback left extra refs or dropped branch refs" "$kept2"
+  # an existing unborn clone with a local refs/heads/HEAD planted by an older CLI is cleaned on open and publishes nothing
+  EU="$T/existing-head.git"; git init -q --bare "$EU"
+  as exeu setup --store "$EU" --name ex1 >/dev/null
+  as exeu list >/dev/null 2>&1
+  for Ceu in "$W/home-exeu/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Ceu" fetch -q "$SR" "refs/heads/main:refs/heads/HEAD"
+  expect "existing unborn clone with local refs/heads/HEAD still reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exeu list
+  ! git --git-dir="$EU" show-ref -q --verify refs/heads/main &&
+    [ -z "$(git -C "$Ceu" for-each-ref --format='%(refname)')" ] &&
+    ok "and clears local refs/heads/HEAD without publishing to the store" ||
+    no "existing unborn clone kept refs/heads/HEAD or published it" "store=$(git --git-dir="$EU" show-ref) clone=$(git -C "$Ceu" for-each-ref)"
   }
   section git-planted sec_git_planted git
 
