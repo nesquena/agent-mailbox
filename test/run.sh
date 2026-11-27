@@ -2159,6 +2159,22 @@ exec "%s" "$@"
   expect "init creates main cleanly when the default branch is named refs/remotes/origin/main" 0 "initialized" as p9 init
   [ "$(git --git-dir="$RB" ls-tree -r --name-only main | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/inbox/.keep mailbox/store.md " ] &&
     ok "and main holds only its own mailbox files" || no "main carried files from the default branch" "$(git --git-dir="$RB" ls-tree -r --name-only main)"
+
+  # a store with no mailbox branch whose default branch is named origin/main isn't shadowed by that local branch
+  OB="$T/origbranch.git"; git init -q --bare "$OB"
+  git init -q "$T/obw" && (cd "$T/obw" && git config user.email t@t && git config user.name t &&
+    git checkout -q -b origin/main && mkdir -p mailbox &&
+    printf -- '---\nprotocol: 1\ntitle: decoy\nrequire_signatures: false\ncreated: 2026-01-01T00:00:00Z\n---\n' > mailbox/store.md &&
+    echo other > other.txt && git add . && git commit -qm decoy &&
+    git push -q "$OB" HEAD:refs/heads/origin/main)
+  git --git-dir="$OB" symbolic-ref HEAD refs/heads/origin/main
+  as p10 setup --store "$OB" --name p10 >/dev/null
+  expect "a default branch named origin/main isn't taken for the mailbox branch" 1 "no mailbox at 'mailbox/' yet" as p10 list
+  expect "init creates main cleanly when the default branch is named origin/main" 0 "initialized" as p10 init
+  expect "and register works when the clone also holds a local origin/main branch" 0 "register: p10" as p10 register --kind t --about t --no-key
+  expect "and list works cleanly on that clone" 3 "no mail for p10" as p10 list
+  [ "$(git --git-dir="$OB" ls-tree -r --name-only main | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/agents/p10.md mailbox/inbox/.keep mailbox/inbox/p10/.keep mailbox/store.md " ] &&
+    ok "and main holds only its own mailbox files (origin/main default branch)" || no "main carried files from origin/main" "$(git --git-dir="$OB" ls-tree -r --name-only main)"
   }
   section git-planted sec_git_planted git
 
@@ -4398,6 +4414,12 @@ if [ -n "$SSH" ]; then
   expect "a signature added only in a merge commit gives holds the same verdict" 5 "item#split-merge is held by sg2" as sg1 holds "item#split-merge" --version v1
   as sg1 consume 29990101T000014Z-sg2-split-cons-h.md >/dev/null
   expect "a separately committed message and signature still hold after consume" 5 "item#split-cons is held by sg2" as sg1 holds "item#split-cons" --version v1
+  # a truncated cat-file --batch-check that ends mid-row (after the last .md.sig-only row's blob lookup, before its .sig lookup) fails closed
+  mkdir -p "$T/trunccf"
+  printf '#!/bin/sh\ncase " $* " in (*" cat-file "*"--batch-check"*) "%s" "$@" | sed "\$d"; exit 0 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" "$(command -v git)" > "$T/trunccf/git"
+  chmod +x "$T/trunccf/git"
+  expect "holds fails closed when cat-file --batch-check truncates mid-row" 1 "can't read this store's full, latest history" \
+    env PATH="$T/trunccf:$PATH" HOME="$W/home-sg1" "$SH" "$CLI" holds "item#split-cons" --version v1
 fi
 # 10c. holds with --root ./mailbox normalises ./ segments before matching inbox paths
 T="$W/rules-dotroot"; mkdir -p "$T"; git init -q --bare "$T/store.git"

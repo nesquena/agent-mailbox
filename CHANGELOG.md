@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- **The git adapter fetches without tags (`--no-tags`, `remote.origin.tagOpt=--no-tags`), clears any tags in a mailbox
-  clone on open (fresh or existing), and refers to the remote branch as `refs/remotes/origin/<branch>` (checked with
-  exact ref matching).** Tags in a store repository, or a default branch named `refs/remotes/origin/<branch>`, no longer
-  affect what a mailbox clone sees, while keeping git 2.9 compatibility on clone.
-- **`holds` with the git adapter lists a message when a commit adds or updates only its `.sig` file**, so a message and
-  its signature committed separately give `holds` the same verdict as `read` and `verify`.
+- **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
+  and any tags already in the clone are removed on open), and refers to the store's branch only by its full
+  remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, or a local branch named like
+  the remote one (including a store whose default branch is named `origin/<branch>` or `refs/remotes/origin/<branch>`),
+  can't change which commit the clone uses, while keeping git 2.9 compatibility on clone.
+- **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
+  retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
+  the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails
+  or stops short, `holds` now stops with its "can't read this store's full, latest history" error instead of going on.
 - **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
   under those roots are no longer skipped.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
