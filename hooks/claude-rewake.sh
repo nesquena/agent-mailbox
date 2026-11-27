@@ -259,6 +259,9 @@ cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
   if [ -n "$held" ] || { [ -n "$ours" ] && claim; }; then
     [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; held="" ours=""; unclaim
   fi; }
+# (a deadline file of this pid's, an earlier hook's that had it, is cleared before the traps are set, as they read it as
+# this run's day's end: no live hook has this pid, so it needs no mutex)
+rm -f "$run/deadline.$$"
 # (the traps are set before the mutex is taken, so a stop at any point from there releases it, and removes the pid file
 # once it names this hook. A stop at the watchdog's deadline, below, is the day's end, and the session hears so, as at
 # the limit: the watchdog writes deadline.<this hook's pid>, so a deadline file an earlier run's watchdog wrote, even
@@ -275,8 +278,9 @@ if claim && held=1 ours=1; then :; else
 fi
 # (both cleared before the unclaim: cleared after it, cleanup could remove a mutex another hook had just taken)
 if mine; then held="" ours=""; unclaim; exit 0; fi
-# (a deadline file of this pid's, or one an older version wrote, is no deadline of this run's)
-rm -f "$run/deadline" "$run/deadline.$$"
+# (a deadline file an older version wrote, under the shared name, is no deadline of this run's; it goes only once no
+# live hook holds the lock, as it may be that hook's)
+rm -f "$run/deadline"
 # (a stop between clearing held and the unclaim, one builtin's time, leaves the mutex, which the next hook clears after
 # a minute; clearing held after the unclaim instead would let cleanup remove a mutex another hook had just taken)
 printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; held=""; unclaim

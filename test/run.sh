@@ -2922,17 +2922,19 @@ if up "$R1/pid"; then
     no "a deadline file not its own, landing while the hook ran, read as its day's end (exit $rc)" "$(cat "$T/bg4.out")"
   # a stop at each point from the claim to the pid write (a copy of the hook that stops itself there, in a plugin folder
   # of its own whose bin and adapters are this one's) leaves no mutex, pid file or deadline of its own, and ends
-  # silently, exit 0, with another run's deadline file there too. Before, a stop ahead of the traps left the mutex
-  # (every hook in the next minute or so then stepped aside) and ended with TERM's own status
+  # silently, exit 0, with another run's deadline file there too, and one an earlier hook with its pid left (the copy
+  # writes it as it starts). Before, a stop ahead of the traps left the mutex (every hook in the next minute or so then
+  # stepped aside) and ended with TERM's own status
   mkdir -p "$T/plug/hooks"; ln -sf "$P/bin" "$T/plug/bin"; ln -sf "$P/adapters" "$T/plug/adapters"; PH="$T/plug/hooks/claude-rewake.sh"
   for pt in claim mine deadline before-pid after-pid; do
     awk -v pt="$pt" -v k='kill -TERM $$' '
       pt == "before-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }
       { print }
+      /^note\(\) / { print ": > \"$run/deadline.$$\"" }
       pt == "claim" && !c && /^if (! )?claim/ { c = 1 }
       pt == "claim" && c == 1 && /^fi$/ { print k; c = 2 }
       pt == "mine" && /^if mine; then/ { print k }
-      pt == "deadline" && /^rm -f "\$run\/deadline/ { print k }
+      pt == "deadline" && /^rm -f "\$run\/deadline"( |$)/ { print k }
       pt == "after-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }' "$P/hooks/claude-rewake.sh" > "$PH"
     if [ "$(grep -cx 'kill -TERM \$\$' "$PH")" != 1 ]; then no "the hook copy for a stop at '$pt' has its stop in place" "$(grep -n 'kill -TERM' "$PH")"; continue; fi
     rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1/claiming" "$R1"/deadline*; : > "$R1/deadline.1"
