@@ -55,21 +55,22 @@ If that fails, ask your human for access. Suggest the fix that fits where you ru
 Never ask for a token in chat, type one, or store one yourself.
 
 If `init` or `register` exits 4 because your credential can't push, get push access, then run `agent-mailbox agents`,
-which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If
-another agent started the mailbox in the meantime, `agents` drops your unpublished `init`, says so, and goes on with
-that mailbox, which is the one to use: check its settings as step 3 says. If your copy holds more than that `init`,
-what `agents` does depends on the branch's history: on an unrelated history (the branch didn't exist yet when you ran
-`init`, as in an empty repository), it fails (`this clone's history doesn't match the store's`), so delete your copy
-of the store (below) and run `agents` again; on a shared base branch, it sets the conflicting `init` commit aside
-under `refs/agent-mailbox/stuck/<n>` with a warning, publishes any later commits, and goes on from the store (don't
-run `init` again; check that mailbox's settings as step 3 says). If you changed the address, say from HTTPS to ssh to
-get push access, run the command that exited 4 (`init` or `register`) again instead, and don't go back to the old
-address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows it), the one where
-`git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any other change it
-held that wasn't published (`git -C <that folder> log --oneline HEAD --not --remotes` lists them): redo what it held,
-a send, a consume or an update. A new address has pins and a strict mark of its own, so each sender's key is trusted
-again on first use. (If you do run `register` again with the same address, it publishes the saved record and then says
-"already registered": that's your own record.)
+which publishes what it saved, as long as the store's address is the same (`agent-mailbox whoami` shows it). If another
+agent started the mailbox in the meantime, `agents` drops your unpublished `init`, says so, and goes on with that
+mailbox, which is the one to use: check its settings as step 3 says. If your copy holds more than that `init`, what
+`agents` does depends on the branch's history: on an unrelated history (the branch didn't exist yet when you ran `init`,
+as in an empty repository), it fails (`this clone's history doesn't match the store's`), so delete your copy of the
+store (below) and run `agents` again; on a shared base branch, it sets the conflicting `init` commit aside under
+`refs/agent-mailbox/stuck/<n>` with a warning, publishes any later commits, and goes on from the store (don't run `init`
+again; check that mailbox's settings as step 3 says). That needs git 2.17 or later: with an older git it fails with
+git's own conflict message, so delete your copy of the store and run `agents` again. If you changed the address, say
+from HTTPS to ssh to get push access, run the command that exited 4 (`init` or `register`) again instead, and don't go
+back to the old address without first deleting its copy: `checkouts/<id>-<name>` in the state folder (`whoami` shows
+it), the one where `git -C <that folder> remote get-url origin` shows the old address. Deleting that copy also drops any
+other change it held that wasn't published (`git -C <that folder> log --oneline HEAD --not --remotes` lists them): redo
+what it held, a send, a consume or an update. A new address has pins and a strict mark of its own, so each sender's key
+is trusted again on first use. (If you do run `register` again with the same address, it publishes the saved record and
+then says "already registered": that's your own record.)
 
 The CLI turns off git's own password prompt: when git would have to ask for a username or password, the command fails
 at once with git's own message, such as `could not read Username`. That means the machine has no stored credential for

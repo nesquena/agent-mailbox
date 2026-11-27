@@ -1,28 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-11-27)
 
-- **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
-  and any tags already in the clone are removed on open), and refers to the store's branch only by its full
-  remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, or a local branch named like
-  the remote one (including a store whose default branch is named `origin/<branch>` or `refs/remotes/origin/<branch>`),
-  can't change which commit the clone uses, while keeping git 2.9 compatibility on clone.
+Arguments that name one message now refuse whitespace, so a value holding several paths can't be cut down to its last;
+the git adapter keeps tags out of mailbox clones and refers to the store's branch by its full name, and `holds` sees a
+message and its signature committed separately; more commands stop, saying so, on files they can't read; and the Claude
+Code plugin starts its watcher on `SessionStart` too. Check the message-name entry if a script passes paths under
+folders with spaces, or several names in one argument, and the `doctor` entry if a script reads its output.
+
+- **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches,
+  `remote.origin.tagOpt=--no-tags`, and any tags in the clone are removed on open, including those a fresh clone
+  fetched), and refers to the store's branch only by its full remote-tracking name (`refs/remotes/origin/<branch>`),
+  checked by exact match.** A tag in the store, or a store whose default branch is named `origin/<branch>` or
+  `refs/remotes/origin/<branch>`, can't change which commit the clone uses, and git 2.9 still works.
 - **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
   retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
   the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails
   or stops short, `holds` now stops with its "can't read this store's full, latest history" error instead of going on.
 - **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
   under those roots are no longer skipped.
-
 - **Claude Code plugin: the rewake hook stopped as it starts holds up the next one only in a far narrower window.** A
   stop just after it took its short mutex, before its traps were set, left the mutex, so every hook starting in the next
   minute or so stepped aside and the session waited for a re-arm; its traps are now set before it takes the mutex, so
-  only a stop in the moment it takes or releases the mutex can still leave it, and a stop from there on ends the hook with
-  exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which could make a
-  hook starting at that moment step aside. And its watchdog's deadline file is named by the hook's process, so a
-  deadline an earlier run's watchdog wrote, even one landing just after a new run started, is never read as the new
-  run's day's end.
-
+  only a stop in the moment it takes or releases the mutex can still leave it, and a stop once its traps are set ends
+  the hook with exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which
+  could make a hook starting at that moment step aside. And its watchdog's deadline file is named by the hook's process,
+  so a deadline an earlier run's watchdog wrote, even one landing just after a new run started, is never taken as the
+  new run reaching its daily limit.
 - **Message-name arguments now refuse whitespace (spaces, tabs, line breaks) before taking a basename**, in `consume`,
   `send --consume`, `send --in-reply-to`, `reply`, `verify` (by name), `read` (`<file>` and `--except`), and
   `watch --except`. Before, one argument holding several paths (such as `"$(agent-mailbox list)"` or space-separated
@@ -36,7 +40,8 @@
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give
-  `--consume` once for each message.
+  `--consume` once for each message. `send --consume` and `consume` now remove a message's `.md` first and its `.sig`
+  only after, so a message that can't be removed keeps its signature.
 - **A watcher stopped right as it starts no longer leaves its pid files behind.** `watch` wrote its pid files before it
   set the traps that remove them, so a TERM or INT in between (a harness ending it at once) left stale files. The traps
   now come first.
@@ -46,8 +51,8 @@
   stopped while it waits for that lock ends with status 130, as it does once it holds it.
 - **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
   session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
-  sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update agent-mailbox`
-  and `claude plugin update agent-mailbox@agent-mailbox`); new and resumed sessions pick it up.
+  sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update
+  agent-mailbox` and `claude plugin update agent-mailbox@agent-mailbox`); new and resumed sessions pick it up.
 - **An inbox, record, message or signature that can't be read stops the command, saying so, in more places.** With the
   mailbox's inbox folder not searchable, `watch` said "no mail" and `holds` "nothing recorded"; both now stop at once.
   A sender's registry record that can't be read (or whose folder can't be searched, or a link there whose target can't
@@ -105,7 +110,6 @@
   `read` keep only mail whose unverified header has that value, and `read <file>...` reads just the messages named,
   refusing any that isn't in your inbox. A message that can't be read stops `list --long` and a filtered `list` or
   `read`, as it stops `read`, rather than being left out. Plain `list` prints exactly what it did before.
-
 - **`update` and `trust` with a key whose pin is unchanged no longer stop on a read-only pins folder.** There's
   nothing to write, so the pin is left as it is; before, both stopped with "can't record ...'s key".
 - **Under a file size limit, a write to the CLI's own files or signing that fails prints only the CLI's own message.**
