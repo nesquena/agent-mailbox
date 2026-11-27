@@ -2175,6 +2175,108 @@ exec "%s" "$@"
   expect "and list works cleanly on that clone" 3 "no mail for p10" as p10 list
   [ "$(git --git-dir="$OB" ls-tree -r --name-only main | tr '\n' ' ')" = "mailbox/agents/.keep mailbox/agents/p10.md mailbox/inbox/.keep mailbox/inbox/p10/.keep mailbox/store.md " ] &&
     ok "and main holds only its own mailbox files (origin/main default branch)" || no "main carried files from origin/main" "$(git --git-dir="$OB" ls-tree -r --name-only main)"
+
+  # refs that git's refspec abbreviation rules match for refs/heads/main aren't fetched when refs/heads/main is absent
+  SR="$T/exact-src.git"; git init -q --bare "$SR"
+  for a in ex1 ex2; do as $a setup --store "$SR" --name $a >/dev/null; done
+  as ex1 init >/dev/null
+  for a in ex1 ex2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo ok | as ex2 send ex1 rel-ex - --release "item#ex v1" >/dev/null 2>&1
+  src_oid=$(git --git-dir="$SR" rev-parse refs/heads/main)
+  ei=0
+  for dref in refs/tags/refs/heads/main refs/heads/refs/heads/main refs/refs/heads/main refs/remotes/refs/heads/main refs/remotes/refs/heads/main/HEAD; do
+    ei=$((ei+1))
+    DS="$T/exact-d$ei.git"; git init -q --bare "$DS"
+    git --git-dir="$SR" push -q "$DS" "refs/heads/main:$dref"
+    as "exd$ei" setup --store "$DS" --name ex1 >/dev/null
+    expect "holds ignores $dref when refs/heads/main is absent" 1 "no mailbox at 'mailbox/' yet" as "exd$ei" holds "item#ex" --version v1
+    expect "list ignores $dref when refs/heads/main is absent" 1 "no mailbox at 'mailbox/' yet" as "exd$ei" list
+    expect "init stops naming colliding ref $dref when refs/heads/main is absent" 4 "$dref" as "exd$ei" init
+    [ "$(git --git-dir="$DS" rev-parse --verify "$dref" 2>/dev/null)" = "$src_oid" ] &&
+      ! git --git-dir="$DS" show-ref -q --verify refs/heads/main &&
+      ok "and init left $dref untouched" || no "init modified $dref or created main" "$(git --git-dir="$DS" show-ref)"
+  done
+
+  # after refs/heads/main is deleted from a store and a colliding ref exists, pull, history and peek treat the branch as gone
+  DD="$T/exact-del.git"; git init -q --bare "$DD"
+  git --git-dir="$SR" push -q "$DD" "refs/heads/main:refs/heads/main"
+  as exdel setup --store "$DD" --name ex1 >/dev/null
+  expect "existing clone sees release before branch deletion" 0 "item#ex released by ex2 at v1" as exdel holds "item#ex" --version v1
+  git --git-dir="$DD" update-ref -d refs/heads/main
+  git --git-dir="$SR" push -q "$DD" "refs/heads/main:refs/tags/refs/heads/main"
+  expect "list reports branch gone even with refs/tags/refs/heads/main present" 1 "the store no longer has the branch main" as exdel list
+  expect "holds fails closed when branch is gone and refs/tags/refs/heads/main is present" 1 "the store no longer has the branch main" as exdel holds "item#ex" --version v1
+  for Cdel in "$W/home-exdel/.local/state/agent-mailbox/checkouts/"*; do :; done
+  (AD_DIR=$Cdel BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"
+    ad_peek mailbox/inbox/ex1 >/dev/null 2>&1) &&
+    no "ad_peek succeeded when refs/heads/main was gone and refs/tags/refs/heads/main existed" ||
+    ok "ad_peek fails when refs/heads/main is gone even with refs/tags/refs/heads/main present"
+  (AD_DIR=$Cdel BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"
+    [ "$(ad_history mailbox/inbox/ex1)" = "! !" ]) &&
+    ok "ad_history fails closed when refs/heads/main is gone even with refs/tags/refs/heads/main present" ||
+    no "ad_history didn't fail closed when refs/heads/main was gone"
+
+  # when fetch lands on a different commit than ls-remote advertised for refs/heads/main, pull and holds fail closed and restore the ref
+  git --git-dir="$DD" update-ref -d refs/tags/refs/heads/main
+  git --git-dir="$SR" push -q "$DD" "refs/heads/main:refs/heads/main"
+  old_ex=$(git --git-dir="$DD" rev-list --max-parents=0 refs/heads/main | head -n 1)
+  mkdir -p "$T/misgit" "$T/misgit-hist"
+  printf '#!/bin/sh\nreal="%s"\ncdir="%s"\nfake="%s"\ncase " $* " in\n  (*" fetch "*) "$real" "$@" || exit $?; dst=""; for a in "$@"; do case "$a" in (+refs/heads/*:*) dst="${a#*:}" ;; esac; done; [ -z "$dst" ] || "$real" -C "$cdir" update-ref "$dst" "$fake"; exit 0 ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$Cdel" "$old_ex" > "$T/misgit/git"
+  chmod +x "$T/misgit/git"
+  printf '#!/bin/sh\nreal="%s"\ncdir="%s"\nfake="%s"\ncase " $* " in\n  (*" fetch "*"refs/agent-mailbox/history"*) "$real" "$@" || exit $?; "$real" -C "$cdir" update-ref refs/agent-mailbox/history "$fake"; exit 0 ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$Cdel" "$old_ex" > "$T/misgit-hist/git"
+  chmod +x "$T/misgit-hist/git"
+  pre_ex=$(git -C "$Cdel" rev-parse --verify refs/remotes/origin/main)
+  expect "list fails closed when fetched commit mismatches refs/heads/main" 1 "did not match refs/heads/main" \
+    env PATH="$T/misgit:$PATH" HOME="$W/home-exdel" "$SH" "$CLI" list
+  [ "$(git -C "$Cdel" rev-parse --verify refs/remotes/origin/main)" = "$pre_ex" ] &&
+    ok "and restores refs/remotes/origin/main after mismatch" ||
+    no "refs/remotes/origin/main was not restored" "$(git -C "$Cdel" rev-parse --verify refs/remotes/origin/main)"
+  expect "holds fails closed in ad_history when fetched commit mismatches refs/heads/main" 1 "can't read this store's full, latest history" \
+    env PATH="$T/misgit-hist:$PATH" HOME="$W/home-exdel" "$SH" "$CLI" holds "item#ex" --version v1
+
+  # when refs/heads/main and a colliding store ref both exist, push stops at once (no 10 retries) and names the colliding ref
+  PC="$T/exact-push.git"; git init -q --bare "$PC"
+  for a in ep1 ep2; do as $a setup --store "$PC" --name $a >/dev/null; done
+  as ep1 init >/dev/null
+  for a in ep1 ep2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  ptip=$(git --git-dir="$PC" rev-parse refs/heads/main)
+  pi=0
+  for cref in refs/tags/refs/heads/main refs/heads/refs/heads/main refs/refs/heads/main; do
+    pi=$((pi+1))
+    git --git-dir="$PC" update-ref "$cref" "$ptip"
+    out=$(echo hi | HOME="$W/home-ep1" "$SH" "$CLI" send ep2 "col-$pi" - 2>&1); rc=$?
+    [ "$rc" = 4 ] && printf '%s\n' "$out" | grep -qF "$cref" && ! printf '%s\n' "$out" | grep -q "push failed 10 times" &&
+      ok "push stops at once and names colliding ref $cref" ||
+      no "push didn't report colliding ref $cref (exit $rc)" "$out"
+    git --git-dir="$PC" update-ref -d "$cref"
+    expect "and the next command publishes once $cref is removed" 0 "NAME" as ep1 agents
+    expect "delivering col-$pi to ep2" 0 "ep1-col-$pi\.md" as ep2 list
+  done
+
+  # ad_no_tags clears tags in one update-ref --stdin batch, and falls back to per-ref update-ref -d if --stdin fails
+  for Cep in "$W/home-ep1/.local/state/agent-mailbox/checkouts/"*; do :; done
+  ti=1; while [ $ti -le 10 ]; do git -C "$Cep" update-ref "refs/tags/t$ti" HEAD; ti=$((ti+1)); done
+  mkdir -p "$T/taglog"
+  printf '#!/bin/sh\ncase " $* " in (*" update-ref "*) printf "%%s\\n" "$*" >> "%s/log" ;; esac\nexec "%s" "$@"\n' \
+    "$T/taglog" "$(command -v git)" > "$T/taglog/git"
+  chmod +x "$T/taglog/git"
+  rm -f "$T/taglog/log"
+  env PATH="$T/taglog:$PATH" HOME="$W/home-ep1" "$SH" "$CLI" list >/dev/null 2>&1
+  [ -z "$(git -C "$Cep" for-each-ref --format='%(refname)' refs/tags/)" ] &&
+    [ "$(grep -c 'update-ref --stdin' "$T/taglog/log" 2>/dev/null)" = 1 ] &&
+    [ "$(grep -c 'update-ref -d' "$T/taglog/log" 2>/dev/null)" = 0 ] &&
+    ok "ad_no_tags removes tags in one update-ref --stdin batch" ||
+    no "ad_no_tags didn't batch via update-ref --stdin" "tags=$(git -C "$Cep" for-each-ref refs/tags/) log=$(cat "$T/taglog/log" 2>/dev/null)"
+  ti=1; while [ $ti -le 5 ]; do git -C "$Cep" update-ref "refs/tags/fb$ti" HEAD; ti=$((ti+1)); done
+  mkdir -p "$T/tagfb"
+  printf '#!/bin/sh\ncase " $* " in (*" update-ref --stdin"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/tagfb/git"
+  chmod +x "$T/tagfb/git"
+  env PATH="$T/tagfb:$PATH" HOME="$W/home-ep1" "$SH" "$CLI" list >/dev/null 2>&1
+  [ -z "$(git -C "$Cep" for-each-ref --format='%(refname)' refs/tags/)" ] &&
+    ok "ad_no_tags falls back to per-ref update-ref -d when --stdin fails" ||
+    no "ad_no_tags fallback left tags behind" "$(git -C "$Cep" for-each-ref refs/tags/)"
   }
   section git-planted sec_git_planted git
 
@@ -4485,18 +4587,22 @@ if [ -n "$SSH" ]; then
     git add "$f" && git commit -qm "add message" &&
     ssh-keygen -Y sign -q -n agent-mailbox -f "$sg2k" < "$f" > "$f.sig" &&
     git add "$f.sig" && git commit -qm "add signature" &&
-    printf 'orphan\n' > "mailbox/inbox/sg1/29990101T000011Z-sg2-orphan.md.sig" &&
-    git add "mailbox/inbox/sg1/29990101T000011Z-sg2-orphan.md.sig" && git commit -qm "orphan sig" &&
     git push -q origin HEAD:main)
   expect "a separately committed message and signature verify" 0 "^verified$" as sg1 verify 29990101T000010Z-sg2-split-h.md
   expect "read sees the separately committed message as verified" 0 "\[verified: from sg2\]" as sg1 read 29990101T000010Z-sg2-split-h.md
   expect "a message and its signature committed separately give holds the same verdict as read and verify" 5 "item#split is held by sg2" as sg1 holds "item#split" --version v1
-  # a failing cat-file --batch-check during ad_history makes holds fail closed rather than drop rows
+  # a failing cat-file --batch-check during ad_history makes holds fail closed rather than drop rows (checked before any
+  # orphan .md.sig exists, so the END-loop ? guard alone decides the result)
   mkdir -p "$T/failcf"
   printf '#!/bin/sh\ncase " $* " in (*" cat-file "*"--batch-check"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failcf/git"
   chmod +x "$T/failcf/git"
   expect "holds fails closed when cat-file --batch-check fails" 1 "can't read this store's full, latest history" \
     env PATH="$T/failcf:$PATH" HOME="$W/home-sg1" "$SH" "$CLI" holds "item#split" --version v1
+  (cd "$T/plant" &&
+    printf 'orphan\n' > "mailbox/inbox/sg1/29990101T000011Z-sg2-orphan.md.sig" &&
+    git add "mailbox/inbox/sg1/29990101T000011Z-sg2-orphan.md.sig" && git commit -qm "orphan sig" &&
+    git push -q origin HEAD:main)
+  expect "an orphan .md.sig doesn't disturb holds when cat-file succeeds" 5 "item#split is held by sg2" as sg1 holds "item#split" --version v1
   # split-committed shapes: signature added on a side branch and merged; signature added only in a merge commit; split then consumed
   echo r | as sg2 send sg1 split-side-r - --release "item#split-side v1" >/dev/null
   echo r | as sg2 send sg1 split-merge-r - --release "item#split-merge v1" >/dev/null

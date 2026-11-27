@@ -24,7 +24,6 @@
 
 # every version of every file is in the store's history, so holds sees consumed mail (adapters/README.md)
 AD_HISTORY=full
-AD_SPEC="+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 # git's own terminal prompt is off (GIT_TERMINAL_PROMPT=0), and so is Git Credential Manager's (GCM_INTERACTIVE=never),
 # so a credential that needs one fails at once with git's own message. An askpass program stays on (GIT_ASKPASS,
 # core.askPass, SSH_ASKPASS): many just print a token. credential.interactive=false isn't set: from git 2.47 it turns
@@ -56,9 +55,60 @@ ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
 # ad_no_tags: mailbox clones don't use tags; keep tag auto-following off and drop any tags fetched on clone or earlier
 ad_no_tags() {
   [ "$(ad_git config remote.origin.tagOpt)" = --no-tags ] || ad_git config remote.origin.tagOpt --no-tags
-  ad_git for-each-ref --format='%(refname)' refs/tags/ | while IFS= read -r t; do
-    [ -z "$t" ] || ad_git update-ref -d "$t" 2>/dev/null || :
-  done
+  [ -n "$(ad_git for-each-ref --count=1 refs/tags/)" ] || return 0
+  ad_git for-each-ref --format='delete %(refname)' refs/tags/ | ad_git update-ref --stdin 2>/dev/null ||
+    ad_git for-each-ref --format='%(refname)' refs/tags/ | while IFS= read -r nt_r; do
+      [ -z "$nt_r" ] || ad_git update-ref -d "$nt_r" 2>/dev/null || :
+    done
+}
+
+# ad_fetch_branch [--no-gc] <dest> [<fetch-opt>...]: fetch the store's exact refs/heads/$BRANCH into <dest>.
+# Exit 0 on success, 2 when the store has no exact refs/heads/$BRANCH (leaving <dest> untouched), 1 on error or
+# mismatch (printing the error and restoring <dest>). Checking ls-remote before and comparing the fetched object id
+# stops git's refspec abbreviation from fetching another store ref (such as refs/tags/refs/heads/$BRANCH) instead.
+ad_fetch_branch() {
+  fb_gc=""
+  if [ "${1:-}" = --no-gc ]; then fb_gc=1; shift; fi
+  fb_dst=$1; shift
+  fb_lb=$(ad_git ls-remote origin "refs/heads/$BRANCH" 2>&1) || { printf '%s\n' "$fb_lb"; return 1; }
+  fb_want=$(printf '%s\n' "$fb_lb" | awk -F'\t' -v r="refs/heads/$BRANCH" \
+    '$2 == r && $1 ~ /^[0-9a-f]+$/ && length($1) >= 40 { print $1; f = 1; exit } END { exit f ? 0 : 2 }') || return 2
+  fb_prev=$(ad_git rev-parse -q --verify "$fb_dst" 2>/dev/null) || fb_prev=""
+  if [ -n "$fb_gc" ]; then
+    fb_err=$(ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
+  else
+    fb_err=$(ad_git fetch -q --no-tags --refmap= "$@" origin "+refs/heads/$BRANCH:$fb_dst" 2>&1)
+  fi
+  if [ $? != 0 ]; then
+    ad_ls_branch >/dev/null 2>&1; [ $? -ne 2 ] || return 2
+    printf '%s\n' "$fb_err"; return 1
+  fi
+  fb_got=$(ad_git rev-parse -q --verify "$fb_dst" 2>/dev/null) || fb_got=""
+  if [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want" ]; then return 0; fi
+  # the branch may have moved between ls-remote and fetch; re-check once against the exact branch tip
+  fb_want2=$(ad_ls_branch 2>/dev/null); fb_rc2=$?
+  if [ "$fb_rc2" = 0 ] && [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want2" ]; then return 0; fi
+  if [ -n "$fb_prev" ]; then ad_git update-ref "$fb_dst" "$fb_prev" ${fb_got:+"$fb_got"} 2>/dev/null || :
+  else ad_git update-ref -d "$fb_dst" ${fb_got:+"$fb_got"} 2>/dev/null || :; fi
+  [ "$fb_rc2" != 2 ] || return 2
+  printf 'fetched commit (%s) did not match refs/heads/%s (%s)\n' "${fb_got:-none}" "$BRANCH" "${fb_want2:-$fb_want}"
+  return 1
+}
+
+# ad_ambiguous_refs: store refs that git's refspec abbreviation rules match for refs/heads/$BRANCH, one per line
+ad_ambiguous_refs() {
+  ar_out=$(ad_git ls-remote origin \
+    "refs/refs/heads/$BRANCH" \
+    "refs/tags/refs/heads/$BRANCH" \
+    "refs/heads/refs/heads/$BRANCH" \
+    "refs/remotes/refs/heads/$BRANCH" \
+    "refs/remotes/refs/heads/$BRANCH/HEAD" 2>/dev/null) || return 1
+  printf '%s\n' "$ar_out" | awk -F'\t' -v b="$BRANCH" '
+    $2 == "refs/refs/heads/" b ||
+    $2 == "refs/tags/refs/heads/" b ||
+    $2 == "refs/heads/refs/heads/" b ||
+    $2 == "refs/remotes/refs/heads/" b ||
+    $2 == "refs/remotes/refs/heads/" b "/HEAD" { if (!seen[$2]++) print $2 }'
 }
 
 # ad_attrs [<first line>]: make the store's own attributes inert in this clone; succeeds only when it had to write the
@@ -110,10 +160,15 @@ ad_open() {
     ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files
-    ad_git fetch -q --no-tags origin "$AD_SPEC" 2>/dev/null
+    ferr=$(ad_fetch_branch "refs/remotes/origin/$BRANCH"); fr=$?
+    case $fr in
+      (0) ;;
+      (2) ad_git update-ref -d "refs/remotes/origin/$BRANCH" 2>/dev/null || : ;;
+      (*) rm -rf "$AD_DIR"; die "can't fetch the store${ferr:+: $(printf '%s\n' "$ferr" | ad_gist)}" ;;
+    esac
     # (git's output is kept for the one die line, never passed through: it prints a path it can't create as it is)
     cerr=""
-    if ad_remote_has_branch; then cerr=$(ad_git checkout -q -B "$BRANCH" "refs/remotes/origin/$BRANCH" 2>&1)
+    if [ "$fr" = 0 ] && ad_remote_has_branch; then cerr=$(ad_git checkout -q -B "$BRANCH" "refs/remotes/origin/$BRANCH" 2>&1)
     else cerr=$( { ad_git symbolic-ref HEAD "refs/heads/$BRANCH" && ad_git read-tree --empty; } 2>&1 )
     fi || { rm -rf "$AD_DIR"; die "can't check out the store${cerr:+: $(printf '%s\n' "$cerr" | ad_gist)}"; }
     # another command may set up the same clone meanwhile: whichever moves first is kept, and is never removed. A loser
@@ -143,14 +198,17 @@ ad_open() {
 ad_pull() {
   # whether this clone had seen the store's branch before this fetch, and where it was then
   seen="" pre=""; ! ad_remote_has_branch || { seen=1; pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH"); }
-  ferr=$(ad_git fetch -q --no-tags origin "$AD_SPEC" 2>&1) || {
-    # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
-    # a branch gone from the store since this clone fetched it
-    ad_ls_branch >/dev/null 2>&1
-    case $? in (2) ad_remote_has_branch || return 0
+  ferr=$(ad_fetch_branch "refs/remotes/origin/$BRANCH"); fr=$?
+  case $fr in
+    (0) ;;
+    (2)
+      # an empty store has no branch yet: that's not an error (exit 2), but a store that can't be reached is, and so is
+      # a branch gone from the store since this clone fetched it
+      ad_remote_has_branch || return 0
       printf 'the store no longer has the branch %s; if it was re-created, delete %s and run this again\n' "$BRANCH" "$AD_DIR"
-      return 1 ;; esac
-    printf '%s\n' "$ferr"; return 1; }
+      return 1 ;;
+    (*) printf '%s\n' "$ferr"; return 1 ;;
+  esac
   ad_remote_has_branch || return 0
   post=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH")
   # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
@@ -269,8 +327,23 @@ ad_unpublished() {
 }
 
 ad_push() {
+  # before creating a new branch on a store without one yet, check for refs that git's push refspec rules match in its place
+  if ! ad_remote_has_branch; then
+    ap_amb=$(ad_ambiguous_refs | awk '{ s = (s ? s ", " : "") $0 } END { print s }' | clean "$CAP")
+    [ -z "$ap_amb" ] || { ad_unpublished "store ref collides with refs/heads/$BRANCH: $ap_amb"; exit 4; }
+  fi
   n=0
-  until perr=$(ad_git push -q origin "HEAD:refs/heads/$BRANCH" 2>&1); do
+  until perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q origin "HEAD:refs/heads/$BRANCH" ) 2>&1 ); do
+    case $perr in
+      (*"matches more than one"*)
+        ap_amb=$(ad_ambiguous_refs | awk '{ s = (s ? s ", " : "") $0 } END { print s }' | clean "$CAP")
+        if [ -n "$ap_amb" ]; then
+          ad_unpublished "push destination refs/heads/$BRANCH matches more than one ref in the store ($ap_amb)"
+        else
+          ad_unpublished "$(printf '%s\n' "$perr" | ad_gist)"
+        fi
+        exit 4 ;;
+    esac
     n=$((n+1))
     [ $n -lt 10 ] || { ad_unpublished "push failed 10 times: $(printf '%s\n' "$perr" | ad_gist)"; exit 4; }
     ad_jitter
@@ -443,7 +516,8 @@ ad_commit() {
 # only the exact name counts
 ad_ls_branch() {
   lb=$(ad_git ls-remote origin "refs/heads/$BRANCH") || return
-  printf '%s\n' "$lb" | awk -F'\t' -v r="refs/heads/$BRANCH" '$2 == r { print $1; f = 1 } END { exit f ? 0 : 2 }'
+  printf '%s\n' "$lb" | awk -F'\t' -v r="refs/heads/$BRANCH" \
+    '$2 == r && $1 ~ /^[0-9a-f]+$/ && length($1) >= 40 { print $1; f = 1; exit } END { exit f ? 0 : 2 }'
 }
 
 # a cheap token that changes whenever the store changes: the branch tip, from one small network round trip; empty
@@ -453,7 +527,7 @@ ad_poll() { ad_ls_branch; pr=$?; [ "$pr" -ne 2 ] || pr=0; return "$pr"; }
 # ad_peek <dir>: files under <dir> in the store's latest state, without touching the working tree
 # (no auto-gc/maintenance outside ad_lock: a watcher shouldn't run pack-refs or repack concurrently with lock-holding commands)
 ad_peek() {
-  ad_git -c gc.auto=0 -c maintenance.auto=false fetch -q --no-tags --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/peek" 2>/dev/null || return 1
+  ad_fetch_branch --no-gc refs/agent-mailbox/peek >/dev/null || return 1
   pl=$(ad_git ls-tree refs/agent-mailbox/peek "$1/" 2>/dev/null) || return 1
   [ -z "$pl" ] || printf '%s\n' "$pl" | awk -F'\t' '$1 ~ /^100(644|755) blob / { print $2 }'
 }
@@ -476,7 +550,7 @@ ad_history() {
   # fetches into a ref of its own, as ad_peek does, so the clone's tracking ref still says where the clone last synced:
   # ad_pull reads it to tell what this clone published, and a store re-created in between mustn't move it
   u=; [ "$(ad_git rev-parse --is-shallow-repository)" = true ] && u=--unshallow
-  ad_git fetch -q $u --no-tags --refmap= origin "+refs/heads/$BRANCH:refs/agent-mailbox/history" 2>/dev/null || { echo '! !'; return 0; }
+  ad_fetch_branch refs/agent-mailbox/history $u >/dev/null || { echo '! !'; return 0; }
   tip=$(ad_git rev-parse -q --verify refs/agent-mailbox/history) || { echo '! !'; return 0; }
   AD_ROWS=$({ if [ -n "${2:-}" ]; then ad_git -c log.diffMerges=separate log --full-history -m --no-renames --diff-filter=A --raw --no-abbrev \
       --format='C %H' --text --no-textconv "-G$2" "$tip" -- "$1/" 2>/dev/null || echo '!'; fi | sed 's/^/G /'

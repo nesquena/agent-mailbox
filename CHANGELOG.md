@@ -2,11 +2,16 @@
 
 ## Unreleased
 
-- **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
-  and any tags already in the clone are removed on open), and refers to the store's branch only by its full
-  remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, or a local branch named like
-  the remote one (including a store whose default branch is named `origin/<branch>` or `refs/remotes/origin/<branch>`),
-  can't change which commit the clone uses, while keeping git 2.9 compatibility on clone.
+- **The git adapter keeps tags out of mailbox clones (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
+  and tags removed on open, including those a fresh clone fetched, via batched `update-ref --stdin` with a per-ref
+  fallback), verifies the store's exact `refs/heads/<branch>` tip on every fetch, and refers to the branch locally
+  only by its full remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, a local
+  branch named like the remote one (including a store whose default branch is named `origin/<branch>` or
+  `refs/remotes/origin/<branch>`), or another ref in the store that git's refspec rules would otherwise match for
+  `refs/heads/<branch>` (such as `refs/tags/refs/heads/<branch>`, `refs/heads/refs/heads/<branch>`,
+  `refs/refs/heads/<branch>`, or `refs/remotes/refs/heads/<branch>`) can't stand in for the mailbox branch, while
+  keeping git 2.9 compatibility on clone. When a push collides with such a ref (`matches more than one`, or a
+  colliding ref present before the branch exists), the adapter stops immediately and names the colliding ref(s).
 - **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
   retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
   the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails
