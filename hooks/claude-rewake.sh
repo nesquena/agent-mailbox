@@ -247,7 +247,8 @@ note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"
 # (held: this hook holds the mutex, from the moment it takes it until the pid file is written, so a stop in between can
 # still release it, and clear the file; cleanup's own claim would fail while it's held. ours: it took the mutex, so it
 # may have a pid file to clear; until then cleanup leaves the mutex alone, so a hook that loses the claim and exits
-# never takes it, even for a moment, from one starting just then)
+# never takes it, even for a moment, from one starting just then. Both are cleared once cleanup has run under the
+# mutex, so the EXIT trap's pass after a stop's doesn't take it again, from a hook starting just then)
 child="" dog="" held="" ours=""
 # cleanup: the watcher and the watchdog, and everything under them (a sleep, a git fetch and its ssh), deepest first,
 # so none outlives the lock
@@ -256,7 +257,7 @@ stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>
 # the mutex is busy, the lock stays, and reads as stale once this hook is gone)
 cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
   if [ -n "$held" ] || { [ -n "$ours" ] && claim; }; then
-    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; unclaim; held=""
+    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; held="" ours=""; unclaim
   fi; }
 # (the traps are set before the mutex is taken, so a stop at any point from there releases it, and removes the pid file
 # once it names this hook. A stop at the watchdog's deadline, below, is the day's end, and the session hears so, as at

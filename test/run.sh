@@ -2942,6 +2942,20 @@ if up "$R1/pid"; then
       ok "a hook stopped at '$pt' (from the claim to the pid write) leaves nothing behind, and ends silently" ||
       no "a hook stopped at '$pt' left something behind, or didn't end silently (exit $rc, left: $lf)" "$out"
   done
+  # a stop while it watches takes the mutex once more, to remove the pid file, and only once: the EXIT trap's pass after
+  # the stop's takes it no more (a hook starting just then would lose its claim to it, and step aside for the turn).
+  # Counted by a copy of the hook whose claim notes each try
+  awk '{ print } /^unclaim\(\) / { print "claim() { echo x >> \"$run/claims\"; ( set -C; : > \"$run/claiming\" ) 2>/dev/null; }" }' \
+    "$P/hooks/claude-rewake.sh" > "$PH"
+  rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1/claiming" "$R1/claims" "$R1"/deadline*; : > "$T/bg5.out"
+  rewake r1 RHOOK="$PH" AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg5.out" & bg=$!
+  if up "$R1/pid"; then kill -TERM "$(cut -d' ' -f1 "$R1/pid")"; fi
+  i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?; n=$(grep -c x "$R1/claims" 2>/dev/null)
+  [ "$rc" = 0 ] && [ "$n" = 2 ] && [ ! -e "$R1/claiming" ] && [ ! -e "$R1/pid" ] &&
+    ok "a hook stopped while it watches takes the mutex once to clean up, and leaves it free" ||
+    no "a hook stopped while it watched took the mutex ${n:-0} times in all (1 to start, 1 to clean up), or left it held (exit $rc)" "$(cat "$T/bg5.out"; ls "$R1")"
+  rm -f "$R1/claims" "$R1/pid"
   rm -f "$R1/deadline.1" "$R1/claiming"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
 # a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
