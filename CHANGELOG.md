@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-- **Claude Code plugin: the rewake hook stopped as it starts never holds up the next one.** A stop just after it took
-  its short mutex, before its traps were set, left the mutex, so every hook starting in the next minute or so stepped
-  aside and the session waited for a re-arm; its traps are now set before it takes the mutex. And its watchdog's
-  deadline file is named by the hook's process, so a deadline an earlier run's watchdog wrote, even one landing just
-  after a new run started, is never read as the new run's day's end.
+- **Claude Code plugin: the rewake hook stopped as it starts holds up the next one only in a far narrower window.** A
+  stop just after it took its short mutex, before its traps were set, left the mutex, so every hook starting in the next
+  minute or so stepped aside and the session waited for a re-arm; its traps are now set before it takes the mutex, so
+  only a stop during the claim itself (about one process start) can still leave it, and such a stop ends the hook with
+  exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which could make a
+  hook starting at that moment step aside. And its watchdog's deadline file is named by the hook's process, so a
+  deadline an earlier run's watchdog wrote, even one landing just after a new run started, is never read as the new
+  run's day's end.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give

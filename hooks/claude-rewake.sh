@@ -270,7 +270,8 @@ trap 'if [ -f "$run/deadline.$$" ]; then rm -f "$run/deadline.$$"; cleanup; note
   printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
   cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
-# (held is set on the claim's own line: a stop in the one builtin between them leaves the mutex, which the next hook
+# (held is set on the claim's own line: dash and bash run the trap for a stop that lands during claim's subshell (about
+# a fork's time) only once it has returned, before held is set, so such a stop leaves the mutex, which the next hook
 # clears after a minute)
 if claim && held=1 ours=1; then :; else
   [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] &&
