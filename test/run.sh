@@ -2246,6 +2246,10 @@ exec "%s" "$@"
   [ "$(git -C "$Cdel" rev-parse --verify refs/remotes/origin/main)" = "$pre_ex" ] &&
     ok "and restores refs/remotes/origin/main after mismatch" ||
     no "refs/remotes/origin/main was not restored" "$(git -C "$Cdel" rev-parse --verify refs/remotes/origin/main)"
+  git --git-dir="$DD" update-ref refs/tags/refs/heads/main "$old_ex"
+  expect "fetch mismatch names colliding store ref to remove" 1 "did not match refs/heads/main.*remove refs/tags/refs/heads/main from the store" \
+    env PATH="$T/misgit:$PATH" HOME="$W/home-exdel" "$SH" "$CLI" list
+  git --git-dir="$DD" update-ref -d refs/tags/refs/heads/main
   expect "holds fails closed in ad_history when fetched commit mismatches refs/heads/main" 1 "can't read this store's full, latest history" \
     env PATH="$T/misgit-hist:$PATH" HOME="$W/home-exdel" "$SH" "$CLI" holds "item#ex" --version v1
 
@@ -2332,24 +2336,83 @@ exec "%s" "$@"
     ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
     ok "existing clone clears tags, refs/heads/HEAD, extra branches and dangling origin/HEAD while keeping stuck refs" ||
     no "existing clone kept extra refs or dropped stuck/branch refs" "$kept"
-  # live symref origin/HEAD -> origin/main must not dereference and delete origin/main (both --stdin and fallback)
+  # live symref origin/HEAD -> origin/main must not dereference and delete origin/main: verified directly right after
+  # ad_clean_refs (before any fetch can recreate it), for both --stdin --no-deref and per-ref --no-deref -d fallback
   git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-  as ep1 list >/dev/null 2>&1
-  [ "$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
-    ok "ad_clean_refs drops live origin/HEAD without dereferencing refs/remotes/origin/main" ||
-    no "ad_clean_refs dereferenced origin/HEAD" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
+  (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
+  [ "$(git -C "$Cep" show-ref --verify -s refs/remotes/origin/main 2>/dev/null)" = "$ep_tip" ] &&
+    ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
+    ok "ad_clean_refs keeps refs/remotes/origin/main intact immediately after dropping live origin/HEAD" ||
+    no "ad_clean_refs dereferenced live origin/HEAD and wiped origin/main" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
   ti=1; while [ $ti -le 5 ]; do git -C "$Cep" update-ref "refs/tags/fb$ti" "$ep_tip"; ti=$((ti+1)); done
   git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
   git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
   mkdir -p "$T/tagfb"
   printf '#!/bin/sh\ncase " $* " in (*" update-ref --stdin"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/tagfb/git"
   chmod +x "$T/tagfb/git"
-  env PATH="$T/tagfb:$PATH" HOME="$W/home-ep1" "$SH" "$CLI" list >/dev/null 2>&1
+  (PATH="$T/tagfb:$PATH" AD_DIR=$Cep BRANCH=main ME=ep1; export PATH; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
   kept2=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
   [ "$kept2" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
     ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
-    ok "ad_clean_refs falls back to per-ref update-ref --no-deref -d when --stdin fails" ||
+    ok "ad_clean_refs fallback keeps refs/remotes/origin/main intact immediately after dropping live origin/HEAD" ||
     no "ad_clean_refs fallback left extra refs or dropped branch refs" "$kept2"
+  # upgrade of a v0.1.4-style clone (live origin/HEAD -> origin/main) on a store whose main was deleted must not recreate main
+  DG="$T/del-originhead.git"; git init -q --bare "$DG"
+  git --git-dir="$SR" push -q "$DG" "refs/heads/main:refs/heads/main"
+  as exdg setup --store "$DG" --name ex1 >/dev/null
+  as exdg list >/dev/null 2>&1
+  for Cdg in "$W/home-exdg/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Cdg" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git --git-dir="$DG" update-ref -d refs/heads/main
+  expect "v0.1.4-style clone with live origin/HEAD reports branch gone and doesn't recreate main" 1 "the store no longer has the branch main" as exdg list
+  ! git --git-dir="$DG" show-ref -q --verify refs/heads/main &&
+    ok "and deleted store branch stayed absent after upgrading live origin/HEAD clone" ||
+    no "live origin/HEAD cleanup caused clone to recreate deleted main" "$(git --git-dir="$DG" show-ref)"
+
+  # ad_clean_refs preserves the branch HEAD is on (e.g. side) and the target of a symbolic refs/heads/main,
+  # so an unpublished send on a side branch is published on the next open rather than dropped
+  as kwside setup --store "$PC" --name ep1 >/dev/null
+  as kwside agents >/dev/null 2>&1
+  for Cside in "$W/home-kwside/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Cside" checkout -q -b side
+  mkdir -p "$T/failpush"
+  printf '#!/bin/sh\ncase " $* " in (*" push "*) echo "simulated push failure" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failpush/git"
+  chmod +x "$T/failpush/git"
+  out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwside" "$SH" "$CLI" send ep2 on-side - 2>&1); rc=$?
+  [ "$rc" = 4 ] && ok "(send on side branch saved locally when push failed)" || no "side-branch send didn't exit 4 ($rc)" "$out"
+  out=$(as kwside agents 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+    git -C "$Cside" show-ref -q --verify refs/heads/side &&
+    ok "ad_clean_refs keeps HEAD's side branch and publishes its unpublished send" ||
+    no "side branch or its unpublished send was lost (exit $rc)" "$out"
+  expect "delivering on-side to ep2" 0 "ep1-on-side\.md" as ep2 list
+  # symbolic refs/heads/main -> refs/heads/symtgt: ad_clean_refs keeps refs/heads/symtgt too
+  git -C "$Cside" update-ref refs/heads/symtgt refs/heads/main
+  git -C "$Cside" symbolic-ref refs/heads/main refs/heads/symtgt
+  (AD_DIR=$Cside BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
+  git -C "$Cside" show-ref -q --verify refs/heads/symtgt &&
+    ok "ad_clean_refs keeps target of symbolic refs/heads/main" ||
+    no "ad_clean_refs deleted target of symbolic refs/heads/main" "$(git -C "$Cside" for-each-ref --format='%(refname)')"
+
+  # shallow checkout + branch advancing on first --unshallow fetch: retry drops --unshallow and holds succeeds
+  SHW="$T/shallow-retry.git"; git init -q --bare "$SHW"
+  for a in sh1 sh2; do as $a setup --store "$SHW" --name $a >/dev/null; done
+  as sh1 init >/dev/null
+  for a in sh1 sh2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  echo ok | as sh1 send sh2 sh-rel1 - --release "item#sh v1" >/dev/null 2>&1
+  as sh2 list >/dev/null 2>&1
+  for Csh in "$W/home-sh2/.local/state/agent-mailbox/checkouts/"*; do :; done
+  # make Csh genuinely shallow (depth 1) via file:// URL so git creates .git/shallow
+  git -C "$Csh" fetch -q --depth=1 "file://$SHW" "+refs/heads/main:refs/remotes/origin/main"
+  [ "$(git -C "$Csh" rev-parse --is-shallow-repository)" = true ] &&
+    ok "(checkout made shallow for --unshallow retry check)" ||
+    no "failed to make checkout shallow"
+  mkdir -p "$T/shmove"
+  printf '#!/bin/sh\nreal="%s"\nopath="%s"\nstate="%s/step"\nstep=$(cat "$state" 2>/dev/null || echo 0)\ncase " $* " in\n  (*" --unshallow "*) if [ "$step" = 0 ]; then echo 1 > "$state"; echo hi1 | env PATH="$opath" HOME="%s" "%s" "%s" send sh2 sh-mid1 - >/dev/null 2>&1; fi ;;\n  (*" ls-remote "*) if [ "$step" = 1 ]; then echo 2 > "$state"; echo hi2 | env PATH="$opath" HOME="%s" "%s" "%s" send sh2 sh-mid2 - >/dev/null 2>&1; fi ;;\nesac\nexec "$real" "$@"\n' \
+    "$(command -v git)" "$PATH" "$T/shmove" "$W/home-sh1" "$SH" "$CLI" "$W/home-sh1" "$SH" "$CLI" > "$T/shmove/git"
+  chmod +x "$T/shmove/git"
+  expect "holds succeeds when shallow checkout retries after branch advances during --unshallow fetch" 0 "item#sh released by sh1 at v1" \
+    env PATH="$T/shmove:$PATH" HOME="$W/home-sh2" "$SH" "$CLI" holds "item#sh" --version v1
   # existing unborn clone with a local refs/heads/HEAD from an older CLI is cleaned on open and publishes nothing
   EU="$T/existing-head.git"; git init -q --bare "$EU"
   as exeu setup --store "$EU" --name ex1 >/dev/null

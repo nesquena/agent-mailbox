@@ -3,11 +3,13 @@
 ## Unreleased
 
 - **A mailbox clone now uses only the store's exact mailbox branch, so no other ref in the store can stand in for it,
-  even before the branch exists.** The local copy keeps only that branch and its tracking ref (clearing tags and any
-  other branches or refs on open). If a fetch does not match the store's mailbox branch tip, the command stops with
-  `"fetched commit (...) did not match refs/heads/<branch> (...)"` (and `holds` stops with `"can't read this store's
-  full, latest history"`). When a push collides with another ref in the store that git matches for
-  `refs/heads/<branch>`, the command stops at once with exit 4 and names the colliding ref(s) to remove from the store.
+  even before the branch exists.** The local copy keeps only that branch, its tracking ref, and the CLI's own set-aside
+  refs for stuck commits (clearing tags and any other branches or refs on open). Each update from the store now makes
+  one extra network round trip to check the branch tip before fetching. If a fetch does not match the store's mailbox
+  branch tip, the command stops with `"fetched commit (...) did not match refs/heads/<branch> (...)"` (naming any
+  colliding store ref to remove, and for `holds` stopping with `"can't read this store's full, latest history"`). When
+  a push collides with another ref in the store that git matches for `refs/heads/<branch>`, the command stops at once
+  with exit 4 and names the colliding ref(s) to remove from the store.
 
 ## 0.1.4 (2026-11-27)
 

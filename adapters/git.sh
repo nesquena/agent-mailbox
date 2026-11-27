@@ -53,12 +53,16 @@ ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
   LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
-# ad_list_extra_refs / ad_clean_refs: mailbox clones keep only the mailbox branch, its remote tracking ref, and
-# refs/agent-mailbox/* (peek, history, stuck/*). Keep tag auto-following off and drop every other local ref (tags,
-# default branches, origin/HEAD, local refs/heads/HEAD) in one --no-deref batch, with a per-ref fallback.
+# ad_list_extra_refs / ad_clean_refs: mailbox clones keep only the mailbox branch, its remote tracking ref,
+# refs/agent-mailbox/* (peek, history, stuck/*), and the target of HEAD or a symbolic refs/heads/$BRANCH if either
+# points elsewhere. Keep tag auto-following off and drop every other local ref (tags, default branches, origin/HEAD,
+# local refs/heads/HEAD) in one --no-deref batch, with a per-ref fallback.
 ad_list_extra_refs() {
-  ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" '
+  cr_h=$(ad_git symbolic-ref -q HEAD 2>/dev/null) || cr_h=""
+  cr_b=$(ad_git symbolic-ref -q "refs/heads/$BRANCH" 2>/dev/null) || cr_b=""
+  ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" -v h="$cr_h" -v sb="$cr_b" '
     $0 == "refs/heads/" b || $0 == "refs/remotes/origin/" b || index($0, "refs/agent-mailbox/") == 1 { next }
+    (h != "" && $0 == h) || (sb != "" && $0 == sb) { next }
     { print }'
 }
 ad_clean_refs() {
@@ -105,6 +109,8 @@ ad_fetch_branch() {
       ad_ls_branch >/dev/null 2>&1; [ $? -ne 2 ] || return 2
       printf '%s\n' "$fb_err"; return 1
     fi
+    # options such as --unshallow apply only to the first successful fetch, never to a retry on a complete repo
+    set --
     fb_got=$(ad_ref_oid "$fb_dst") || fb_got=""
     if [ -n "$fb_got" ] && [ "$fb_got" = "$fb_want" ]; then return 0; fi
     # the branch may have moved between ls-remote and fetch; re-check against the exact branch tip
@@ -123,7 +129,12 @@ ad_fetch_branch() {
   done
   if [ -n "$fb_prev" ]; then ad_git update-ref "$fb_dst" "$fb_prev" ${fb_got:+"$fb_got"} 2>/dev/null || :
   else ad_git update-ref -d "$fb_dst" ${fb_got:+"$fb_got"} 2>/dev/null || :; fi
-  printf 'fetched commit (%s) did not match refs/heads/%s (%s)\n' "${fb_got:-none}" "$BRANCH" "${fb_want2:-$fb_want}"
+  fb_amb=$(ad_ambiguous_refs | awk '{ s = (s ? s ", " : "") $0 } END { print s }' | clean "$CAP")
+  if [ -n "$fb_amb" ]; then
+    printf 'fetched commit (%s) did not match refs/heads/%s (%s); remove %s from the store\n' "${fb_got:-none}" "$BRANCH" "${fb_want2:-$fb_want}" "$fb_amb"
+  else
+    printf 'fetched commit (%s) did not match refs/heads/%s (%s)\n' "${fb_got:-none}" "$BRANCH" "${fb_want2:-$fb_want}"
+  fi
   return 1
 }
 
@@ -188,6 +199,7 @@ ad_open() {
       case $err in (*"Remote branch $BRANCH not found in upstream"*) err=$(ad_clone) ;; (*) false ;; esac; } ||
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
+    ad_git symbolic-ref HEAD "refs/heads/$BRANCH" 2>/dev/null || :
     ad_clean_refs
     ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
