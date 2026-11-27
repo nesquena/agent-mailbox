@@ -5,8 +5,8 @@
 - **Claude Code plugin: the rewake hook stopped as it starts holds up the next one only in a far narrower window.** A
   stop just after it took its short mutex, before its traps were set, left the mutex, so every hook starting in the next
   minute or so stepped aside and the session waited for a re-arm; its traps are now set before it takes the mutex, so
-  only a stop in the moment it takes or releases the mutex can still leave it, and a stop just after the claim ends the
-  hook with exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which could make a
+  only a stop in the moment it takes or releases the mutex can still leave it, and a stop from there on ends the hook with
+  exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which could make a
   hook starting at that moment step aside. And its watchdog's deadline file is named by the hook's process, so a
   deadline an earlier run's watchdog wrote, even one landing just after a new run started, is never read as the new
   run's day's end.
