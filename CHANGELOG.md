@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches, `remote.origin.tagOpt=--no-tags`,
+  and any tags already in the clone are removed on open), and refers to the store's branch only by its full
+  remote-tracking name (`refs/remotes/origin/<branch>`), checked by exact match.** A tag, or a local branch named like
+  the remote one (including a store whose default branch is named `origin/<branch>` or `refs/remotes/origin/<branch>`),
+  can't change which commit the clone uses, while keeping git 2.9 compatibility on clone.
+- **`holds` with the git adapter lists a message when a commit (or a merge's diff against a parent) adds, changes or
+  retypes `<msg>.md.sig` without changing `<msg>.md`**, so a message and its signature committed separately give `holds`
+  the same verdict as `read` and `verify`. When inbox history contains such a `.sig` commit and the object lookup fails
+  or stops short, `holds` now stops with its "can't read this store's full, latest history" error instead of going on.
+- **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
+  under those roots are no longer skipped.
+
 - **Claude Code plugin: the rewake hook stopped as it starts holds up the next one only in a far narrower window.** A
   stop just after it took its short mutex, before its traps were set, left the mutex, so every hook starting in the next
   minute or so stepped aside and the session waited for a re-arm; its traps are now set before it takes the mutex, so
