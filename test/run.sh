@@ -2910,6 +2910,16 @@ if up "$R1/pid"; then
   rm -f "$R1/pid" "$R1/deadline" "$R1/deadline.1"
   [ "$tried" -ge 5 ] && [ "$bad" = 0 ] && ok "and with an earlier run's deadline file there, it ends silently, not at the day's limit" ||
     no "a hook stopped as it started, with an earlier run's deadline file there, said it reached its limit ($bad of $tried tries)"
+  # and a deadline file landing once the hook is running (an earlier run's watchdog writing it late), under the old name
+  # or another pid's, isn't this run's day's end either: a stop then ends it silently, exit 0
+  rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1"/deadline*; : > "$T/bg4.out"
+  rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg4.out" & bg=$!
+  if up "$R1/pid"; then hp=$(cut -d' ' -f1 "$R1/pid"); sleep 1; : > "$R1/deadline"; : > "$R1/deadline.$((hp+7))"; kill -TERM "$hp"; fi
+  i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
+  rm -f "$R1/pid" "$R1"/deadline*
+  [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg4.out" && ok "and a deadline file not its own, landing while it runs, isn't its day's end" ||
+    no "a deadline file not its own, landing while the hook ran, read as its day's end (exit $rc)" "$(cat "$T/bg4.out")"
   # a stop at each point from the claim to the pid write (a copy of the hook that stops itself there, in a plugin folder
   # of its own whose bin and adapters are this one's) leaves no mutex, pid file or deadline of its own, and ends
   # silently, exit 0, with another run's deadline file there too. Before, a stop ahead of the traps left the mutex
