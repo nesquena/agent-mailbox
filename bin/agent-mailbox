@@ -57,7 +57,7 @@
 # again once that's published); 5 not released; 6 signature not verified; 130 stopped by a signal (watch, or a
 # git-adapter command other than doctor holding or waiting on its lock).
 set -u
-VERSION=0.1.3
+VERSION=0.1.4
 # (set only by init, around its own commit: never taken from the environment)
 AD_INIT=
 PROTOCOL=1
