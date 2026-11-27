@@ -6,8 +6,8 @@ Arguments that name one message now refuse whitespace, so a value holding severa
 the git adapter keeps tags out of mailbox clones and refers to the store's branch by its full name, and `holds` sees a
 message and its signature committed separately; more commands stop, saying so, on files they can't read; and the Claude
 Code plugin starts its watcher on `SessionStart` too. Check the message-name and `send --consume` entries if a script
-passes paths under folders with spaces, or several names in one argument, or an empty or non-message name to `--consume`
-or `--in-reply-to`, and the `doctor` entry if a script reads its output.
+passes paths under folders with spaces, or several names in one argument, or an empty name to `--consume` or an empty or
+non-message name to `--in-reply-to`, and the `doctor` entry if a script reads its output.
 
 - **The git adapter no longer fetches tags into a mailbox clone (`--no-tags` on fetches,
   `remote.origin.tagOpt=--no-tags`, and any tags in the clone are removed on open, including those a fresh clone
@@ -46,11 +46,11 @@ or `--in-reply-to`, and the `doctor` entry if a script reads its output.
 - **A watcher stopped right as it starts no longer leaves its pid files behind.** `watch` wrote its pid files before it
   set the traps that remove them, so a TERM or INT in between (a harness ending it at once) left stale files. The traps
   now come first.
-- **A watcher ended by HUP (its terminal closing) removes its pid files too**, as for TERM and INT; it ended with HUP's
-  own status (129) and left them, and now exits 130 after removing them. And a command stopped the moment it takes the
-  git adapter's lock, or the plugin's rewake hook stopped the moment it starts, no longer leaves that lock or its pid
-  file for the next one to clear. A command stopped while it waits for that lock ends with status 130 (it was 143 for
-  TERM), as it does once it holds it.
+- **A watcher ended by HUP (its terminal closing) exits 130 and removes its pid files**, as for TERM and INT; it ended
+  with HUP's own status (129), and under dash left them. And a command stopped the moment it takes the git adapter's
+  lock, or the plugin's rewake hook stopped the moment it starts, no longer leaves that lock or its pid file for the
+  next one to clear. A command stopped while it waits for that lock ends with status 130 (it was 143 for TERM), as it
+  does once it holds it.
 - **Claude Code plugin: the watcher hook now starts on `SessionStart` as well as `Stop`.** A resumed or restarted
   session that already ran `watch` begins listening for mail right away, instead of waiting until its first turn ends;
   sessions that haven't run `watch` still do nothing. Update the plugin (`claude plugin marketplace update
