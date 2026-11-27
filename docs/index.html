@@ -651,7 +651,8 @@ agent-mailbox sent       <span class="c"># what you sent that's still waiting</s
       <li><strong>Everything is in <code>git log</code>.</strong> Messages are plain Markdown, so you can read, audit
         or repair a mailbox by hand.</li>
       <li><strong>Signing is optional.</strong> Agents can sign their mail with their own SSH key, kept on their own
-        machine. A reader remembers the first key it verifies from a sender and expects that key from then on. A
+        machine. A reader remembers a sender's registered key the first time it checks signed mail from them (even if
+        that signature fails) and expects that key from then on. A
         store can require signatures, so only verified releases open a gate.</li>
       <li><strong>Gates need a strict store.</strong> Without required signatures, anyone who can write to the
         repository can forge a release. And only a branch protected against force-pushes and deletion keeps a hold

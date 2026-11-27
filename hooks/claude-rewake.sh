@@ -242,35 +242,46 @@ esac
 # in (one removes the other's fresh claim); that needs a hook killed while holding it, then two starting together
 claim() { ( set -C; : > "$run/claiming" ) 2>/dev/null; }
 unclaim() { rm -f "$run/claiming"; }
-if ! claim; then
-  [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] &&
-    { rm -f "$run/claiming" 2>/dev/null; rmdir "$run/claiming" 2>/dev/null; claim; } || exit 0
-fi
-if mine; then unclaim; exit 0; fi
-# (held: this hook holds the mutex now, until the pid file is written, so a stop in between can still clear the file)
-held=1
-# (a deadline file left by an earlier run is cleared before the traps are set: they read one as this run's day's end,
-# and this run's watchdog, which writes it, hasn't started)
-rm -f "$run/deadline"
 # note <name>: a note for the guard naming the latest stop's key (a hook can run on through several stops)
 note() { k=$(cat "$run/key" 2>/dev/null); printf '%s\n' "${k:-$key}" > "$run/$1"; }
-child="" dog=""
-# (the traps are set before the pid file is written, so a stop the moment it appears still removes it: cleanup removes
-# it only while it names this hook)
+# (held: this hook holds the mutex, from the moment it takes it until the pid file is written, so a stop in between can
+# still release it, and clear the file; cleanup's own claim would fail while it's held. ours: it took the mutex, so it
+# may have a pid file to clear; until then cleanup leaves the mutex alone, so a hook that loses the claim and exits
+# never takes it, even for a moment, from one starting just then. Both are cleared once cleanup has run under the
+# mutex, so the EXIT trap's pass after a stop's doesn't take it again, from a hook starting just then)
+child="" dog="" held="" ours=""
 # cleanup: the watcher and the watchdog, and everything under them (a sleep, a git fetch and its ssh), deepest first,
 # so none outlives the lock
 stop() { for k in $(pgrep -P "$1" 2>/dev/null); do stop "$k"; done; kill "$1" 2>/dev/null; }
 # (the lock goes only under the mutex that guards replacing it, so a hook that has just taken it over keeps it; when
 # the mutex is busy, the lock stays, and reads as stale once this hook is gone)
 cleanup() { [ -z "$child" ] || stop "$child"; [ -z "$dog" ] || stop "$dog"
-  if [ -n "$held" ] || claim; then
-    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; unclaim; held=""
+  if [ -n "$held" ] || { [ -n "$ours" ] && claim; }; then
+    [ "$(cut -d' ' -f1 "$run/pid" 2>/dev/null)" != $$ ] || rm -f "$run/pid"; held="" ours=""; unclaim
   fi; }
-# (a stop at the watchdog's deadline, below, is the day's end: the session hears so, as at the limit)
-trap 'if [ -f "$run/deadline" ]; then rm -f "$run/deadline"; cleanup; note last
+# (a deadline file of this pid's, an earlier hook's that had it, is cleared before the traps are set, as they read it as
+# this run's day's end: no live hook has this pid, so it needs no mutex)
+rm -f "$run/deadline.$$"
+# (the traps are set before the mutex is taken, so a stop at any point from there releases it, and removes the pid file
+# once it names this hook. A stop at the watchdog's deadline, below, is the day's end, and the session hears so, as at
+# the limit: the watchdog writes deadline.<this hook's pid>, so a deadline file an earlier run's watchdog wrote, even
+# one landing after this run started, is never read as this run's)
+trap 'if [ -f "$run/deadline.$$" ]; then rm -f "$run/deadline.$$"; cleanup; note last
   printf "%s\\n" "agent-mailbox: the watcher for $name reached its daily limit; it starts again at this turn'"'"'s end." >&2; exit 2; fi
   cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
+# (held is set on the claim's own line: dash and bash run the trap for a stop that lands during claim's subshell (about
+# a fork's time) only once it has returned, before held is set, so such a stop leaves the mutex, which the next hook
+# clears after a minute)
+if claim && held=1 ours=1; then :; else
+  [ -n "$(find "$run/claiming" -prune -mmin +1 2>/dev/null)" ] &&
+    { rm -f "$run/claiming" 2>/dev/null; rmdir "$run/claiming" 2>/dev/null; claim && held=1 ours=1; } || exit 0
+fi
+# (both cleared before the unclaim: cleared after it, cleanup could remove a mutex another hook had just taken)
+if mine; then held="" ours=""; unclaim; exit 0; fi
+# (a deadline file an older version wrote, under the shared name, is no deadline of this run's; it goes only once no
+# live hook holds the lock, as it may be that hook's)
+rm -f "$run/deadline"
 # (a stop between clearing held and the unclaim, one builtin's time, leaves the mutex, which the next hook clears after
 # a minute; clearing held after the unclaim instead would let cleanup remove a mutex another hook had just taken)
 printf '%s %s %s\n' $$ "$sid" "$ccpid" > "$run/pid.new" && mv -f "$run/pid.new" "$run/pid"; held=""; unclaim
@@ -303,7 +314,7 @@ dl=$((start + max + iv + ck))
 # (it checks every ck seconds, and sleeps only until the deadline when that's sooner, so a hang ends at the deadline)
 ( while here && kill -0 "$hook" 2>/dev/null; do
     # (the note written in a subshell: under dash a failed write would end this one before it stops the hook)
-    now=$(date +%s); [ "$now" -lt "$dl" ] || { ( : > "$run/deadline" ) 2>/dev/null; break; }
+    now=$(date +%s); [ "$now" -lt "$dl" ] || { ( : > "$run/deadline.$hook" ) 2>/dev/null; break; }
     ds=$((dl - now)); [ "$ds" -le "$ck" ] || ds=$ck; sleep "$ds"; done
   kill -TERM "$hook" 2>/dev/null ) < /dev/null > /dev/null 2>&1 &
 dog=$!

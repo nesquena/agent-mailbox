@@ -2963,15 +2963,64 @@ if up "$R1/pid"; then
   # and with a deadline file an earlier run left (its watchdog writing it as that hook was already leaving), such a stop
   # ends the hook silently, exit 0: it isn't this run's day's end (10 tries, the file planted before each)
   bad=0 tried=0 t=0
-  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"
+  while [ $t -lt 10 ]; do t=$((t+1)); rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid"; : > "$R1/deadline"; : > "$R1/deadline.1"
     rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg3.out" & bg=$!
     if seen "$R1/pid" 10; then tried=$((tried+1)); kill -TERM "$(cut -d' ' -f1 "$R1/pid")" 2>/dev/null; fi
     i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
     kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
     { [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg3.out" 2>/dev/null; } || bad=$((bad+1)); done
-  rm -f "$R1/pid" "$R1/deadline"
+  rm -f "$R1/pid" "$R1/deadline" "$R1/deadline.1"
   [ "$tried" -ge 5 ] && [ "$bad" = 0 ] && ok "and with an earlier run's deadline file there, it ends silently, not at the day's limit" ||
     no "a hook stopped as it started, with an earlier run's deadline file there, said it reached its limit ($bad of $tried tries)"
+  # and a deadline file landing once the hook is running (an earlier run's watchdog writing it late), under the old name
+  # or another pid's, isn't this run's day's end either: a stop then ends it silently, exit 0
+  rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1"/deadline*; : > "$T/bg4.out"
+  rewake r1 AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg4.out" & bg=$!
+  if up "$R1/pid"; then hp=$(cut -d' ' -f1 "$R1/pid"); sleep 1; : > "$R1/deadline"; : > "$R1/deadline.$((hp+7))"; kill -TERM "$hp"; fi
+  i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?
+  rm -f "$R1/pid" "$R1"/deadline*
+  [ "$rc" = 0 ] && ! grep -q 'daily limit' "$T/bg4.out" && ok "and a deadline file not its own, landing while it runs, isn't its day's end" ||
+    no "a deadline file not its own, landing while the hook ran, read as its day's end (exit $rc)" "$(cat "$T/bg4.out")"
+  # a stop at each point from the claim to the pid write (a copy of the hook that stops itself there, in a plugin folder
+  # of its own whose bin and adapters are this one's) leaves no mutex, pid file or deadline of its own, and ends
+  # silently, exit 0, with another run's deadline file there too, and one an earlier hook with its pid left (the copy
+  # writes it as it starts). Before, a stop ahead of the traps left the mutex (every hook in the next minute or so then
+  # stepped aside) and ended with TERM's own status
+  mkdir -p "$T/plug/hooks"; ln -sf "$P/bin" "$T/plug/bin"; ln -sf "$P/adapters" "$T/plug/adapters"; PH="$T/plug/hooks/claude-rewake.sh"
+  for pt in claim mine deadline before-pid after-pid; do
+    awk -v pt="$pt" -v k='kill -TERM $$' '
+      pt == "before-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }
+      { print }
+      /^note\(\) / { print ": > \"$run/deadline.$$\"" }
+      pt == "claim" && !c && /^if (! )?claim/ { c = 1 }
+      pt == "claim" && c == 1 && /^fi$/ { print k; c = 2 }
+      pt == "mine" && /^if mine; then/ { print k }
+      pt == "deadline" && /^rm -f "\$run\/deadline"( |$)/ { print k }
+      pt == "after-pid" && /^printf .%s %s %s.n. \$\$ "\$sid"/ { print k }' "$P/hooks/claude-rewake.sh" > "$PH"
+    if [ "$(grep -cx 'kill -TERM \$\$' "$PH")" != 1 ]; then no "the hook copy for a stop at '$pt' has its stop in place" "$(grep -n 'kill -TERM' "$PH")"; continue; fi
+    rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1/claiming" "$R1"/deadline*; : > "$R1/deadline.1"
+    out=$(rewake r1 RHOOK="$PH" AGENT_MAILBOX_REWAKE_MAX=60); rc=$?
+    lf=$(ls "$R1" | grep -Ex 'claiming|pid|deadline|deadline\.[0-9]+' | grep -vx 'deadline\.1' | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ -z "$lf" ] && ! printf '%s\n' "$out" | grep -q 'daily limit' &&
+      ok "a hook stopped at '$pt' (from the claim to the pid write) leaves nothing behind, and ends silently" ||
+      no "a hook stopped at '$pt' left something behind, or didn't end silently (exit $rc, left: $lf)" "$out"
+  done
+  # a stop while it watches takes the mutex once more, to remove the pid file, and only once: the EXIT trap's pass after
+  # the stop's takes it no more (a hook starting just then would lose its claim to it, and step aside for the turn).
+  # Counted by a copy of the hook whose claim notes each try
+  awk '{ print } /^unclaim\(\) / { print "claim() { echo x >> \"$run/claims\"; ( set -C; : > \"$run/claiming\" ) 2>/dev/null; }" }' \
+    "$P/hooks/claude-rewake.sh" > "$PH"
+  rm -f "$RS/run/rw.pid" "$RS/run/rw@"*.pid "$R1/pid" "$R1/claiming" "$R1/claims" "$R1"/deadline*; : > "$T/bg5.out"
+  rewake r1 RHOOK="$PH" AGENT_MAILBOX_REWAKE_MAX=60 CCOUT="$T/bg5.out" & bg=$!
+  if up "$R1/pid"; then kill -TERM "$(cut -d' ' -f1 "$R1/pid")"; fi
+  i=0; while kill -0 "$bg" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  kill_tree "$bg"; wait "$bg" 2>/dev/null; rc=$?; n=$(grep -c x "$R1/claims" 2>/dev/null)
+  [ "$rc" = 0 ] && [ "$n" = 2 ] && [ ! -e "$R1/claiming" ] && [ ! -e "$R1/pid" ] &&
+    ok "a hook stopped while it watches takes the mutex once to clean up, and leaves it free" ||
+    no "a hook stopped while it watched took the mutex ${n:-0} times in all (1 to start, 1 to clean up), or left it held (exit $rc)" "$(cat "$T/bg5.out"; ls "$R1")"
+  rm -f "$R1/claims" "$R1/pid"
+  rm -f "$R1/deadline.1" "$R1/claiming"
 else no "the rewake hook records its pid" "$(cat "$T/bg.out")"; kill "$bg" 2>/dev/null; fi
 # a hook claiming the lock while another is mid-claim stays out, also where mkdir isn't exclusive (some coreutils
 # check, then create): a mkdir on PATH that never fails on a folder that's there, and a fresh claim (as an older
@@ -4138,6 +4187,70 @@ expect "consume takes names after --" 0 "^consumed$" as o1 consume -- -q.md
 expect "and after a -- that follows a name" 0 "^consumed$" as o1 consume -m.md -- -n.md
 expect "consume still refuses an unknown option" 1 "unknown option --bogus" as o1 consume --bogus
 expect "and a misplaced --as" 1 "goes before the command" as o1 consume -z.md --as o2
+# a message-name argument with whitespace (such as "$(agent-mailbox list)", space- or tab-separated paths) is refused
+# before taking its basename, at every site that takes a message name; a single path without spaces still works
+for a in mw1 mw2; do as $a setup --store "$T/ws-store" --adapter dir --name $a >/dev/null; done
+as mw1 init >/dev/null
+for a in mw1 mw2; do as $a register --kind t --about t --no-key >/dev/null; done
+echo body > "$T/mw.body"
+as mw1 send mw2 ma "$T/mw.body" >/dev/null 2>&1; as mw1 send mw2 mb "$T/mw.body" >/dev/null 2>&1
+both=$(as mw2 list)
+ma=$(printf '%s\n' "$both" | sed -n 1p); mb=$(printf '%s\n' "$both" | sed -n 2p)
+sp="$ma $mb"; tb=$(printf '%s\t%s' "$ma" "$mb")
+mw_both_present() { [ "$(as mw2 list 2>/dev/null | wc -l | tr -d ' ')" = 2 ]; }
+mw_none_sent() { as mw1 list >/dev/null 2>&1; [ $? = 3 ]; }
+expect "consume refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 consume "$both"
+mw_both_present && ok "and consumes neither message (newline)" || no "consume removed a message on newline-joined paths" "$(as mw2 list 2>&1)"
+expect "consume refuses space-joined paths" 1 "can't hold whitespace" as mw2 consume "$sp"
+expect "consume refuses tab-joined paths" 1 "can't hold whitespace" as mw2 consume "$tb"
+mw_both_present && ok "and consumes neither message (space/tab)" || no "consume removed a message on space/tab-joined paths" "$(as mw2 list 2>&1)"
+expect "send --consume refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 send mw1 sc-nl "$T/mw.body" --consume "$both"
+expect "send --consume refuses space-joined paths" 1 "can't hold whitespace" as mw2 send mw1 sc-sp "$T/mw.body" --consume "$sp"
+mw_both_present && mw_none_sent && ok "and sends and consumes nothing" || no "send --consume acted on multi-path value"
+expect "send --in-reply-to refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 send mw1 sr-nl "$T/mw.body" --in-reply-to "$both"
+expect "send --in-reply-to refuses space-joined paths" 1 "can't hold whitespace" as mw2 send mw1 sr-sp "$T/mw.body" --in-reply-to "$sp"
+mw_none_sent && ok "and send --in-reply-to sends nothing" || no "send --in-reply-to sent on multi-path value"
+expect "reply refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 reply "$both" "$T/mw.body"
+expect "reply refuses space-joined paths" 1 "can't hold whitespace" as mw2 reply "$sp" "$T/mw.body"
+mw_both_present && mw_none_sent && ok "and reply sends and consumes nothing" || no "reply acted on multi-path value"
+expect "verify refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 verify "$both"
+expect "verify refuses space-joined paths" 1 "can't hold whitespace" as mw2 verify "$sp"
+expect "read <file> refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 read "$both"
+expect "read --except refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 read --except "$both"
+expect "read --except refuses space-joined paths" 1 "can't hold whitespace" as mw2 read --except "$sp"
+expect "watch --except refuses newline-joined paths from list" 1 "can't hold whitespace" as mw2 watch 1 1 --except "$both"
+expect "watch --except refuses space-joined paths" 1 "can't hold whitespace" as mw2 watch 1 1 --except "$sp"
+# a single store path without spaces still works at every site
+expect "verify still accepts a single path without spaces" 6 "^unsigned$" as mw2 verify "$ma"
+expect "and verify still accepts an existing file path whose folder holds spaces" 6 "^unsigned$" as mw2 verify "$T/ws-store/$ma"
+out=$(as mw2 read "$ma" 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-mw1-ma\.md" && ! printf '%s\n' "$out" | grep -q -- "-mw1-mb\.md" &&
+  ok "read <file> still accepts a single path without spaces" || no "read <file> failed on single path (exit $rc)" "$out"
+out=$(as mw2 read --except "$ma" 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-mw1-mb\.md" && ! printf '%s\n' "$out" | grep -q -- "-mw1-ma\.md" &&
+  ok "read --except still accepts a single path without spaces" || no "read --except failed on single path (exit $rc)" "$out"
+expect "watch --except still accepts single paths without spaces" 2 "no mail" as mw2 watch 1 1 --except "$ma" --except "$mb"
+out=$(as mw2 read --except not-a-message 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q -- "-mw1-ma\.md" && printf '%s\n' "$out" | grep -q -- "-mw1-mb\.md" &&
+  ok "read --except ignores a non-message name" || no "read --except failed on a non-message name (exit $rc)" "$out"
+expect "watch --except ignores a non-message name" 2 "no mail" as mw2 watch 1 1 --except not-a-message --except "$ma" --except "$mb"
+expect "send --in-reply-to accepts none" 0 "^sent " as mw2 send mw1 sp-irt-none "$T/mw.body" --in-reply-to none
+out=$(as mw1 read 2>&1); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^in_reply_to: none$' &&
+  ok "and records in_reply_to: none" || no "send --in-reply-to none didn't record none (exit $rc)" "$out"
+expect "send --in-reply-to refuses another non-message name" 1 "isn't a message file name" as mw2 send mw1 sp-irt-bad "$T/mw.body" --in-reply-to not-a-message
+expect "send --in-reply-to refuses an empty value" 1 "isn't a message file name" as mw2 send mw1 sp-irt-empty "$T/mw.body" --in-reply-to ""
+expect "send --in-reply-to refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 send mw1 sp-irt-soft "$T/mw.body" --in-reply-to --soft
+expect "send --consume refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 send mw1 sp-con-soft "$T/mw.body" --consume --soft
+expect "consume -- --soft refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 consume -- --soft
+expect "read -- --soft refuses --soft as a name" 1 "'--soft' isn't a message file name" as mw2 read -- --soft
+expect "send --in-reply-to refuses a path ending in none" 1 "isn't a message file name" as mw2 send mw1 sp-irt-pnone "$T/mw.body" --in-reply-to a/none
+expect "send --in-reply-to still accepts a single path without spaces" 0 "^sent " as mw2 send mw1 sp-irt "$T/mw.body" --in-reply-to "$ma"
+expect "reply still accepts a single path without spaces" 0 "^sent " as mw2 reply "$ma" "$T/mw.body"
+expect "send --consume still accepts a single path without spaces" 0 "^sent " as mw2 send mw1 sp-con "$T/mw.body" --consume "$mb"
+as mw1 send mw2 mc "$T/mw.body" >/dev/null 2>&1; mc=$(as mw2 list | grep -- '-mw1-mc\.md$')
+expect "consume still accepts a single path without spaces" 0 "^consumed$" as mw2 consume "$mc"
+expect "and the inbox is now empty" 3 "no mail" as mw2 list
 # a dir store given by a relative path starting with '-'
 mkdir -p "$T/rel2"
 for a in d1 d2; do (cd "$T/rel2" && HOME="$W/home-$a" "$SH" "$CLI" setup --store -ds --adapter dir --name $a >/dev/null); done

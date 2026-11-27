@@ -13,6 +13,26 @@
   or stops short, `holds` now stops with its "can't read this store's full, latest history" error instead of going on.
 - **`holds` normalises `./` segments in `--root`** (such as `--root ./mailbox`) before matching inbox paths, so records
   under those roots are no longer skipped.
+
+- **Claude Code plugin: the rewake hook stopped as it starts holds up the next one only in a far narrower window.** A
+  stop just after it took its short mutex, before its traps were set, left the mutex, so every hook starting in the next
+  minute or so stepped aside and the session waited for a re-arm; its traps are now set before it takes the mutex, so
+  only a stop in the moment it takes or releases the mutex can still leave it, and a stop from there on ends the hook with
+  exit 0 rather than 143. A stopped hook also no longer takes the mutex a second time as it exits, which could make a
+  hook starting at that moment step aside. And its watchdog's deadline file is named by the hook's process, so a
+  deadline an earlier run's watchdog wrote, even one landing just after a new run started, is never read as the new
+  run's day's end.
+
+- **Message-name arguments now refuse whitespace (spaces, tabs, line breaks) before taking a basename**, in `consume`,
+  `send --consume`, `send --in-reply-to`, `reply`, `verify` (by name), `read` (`<file>` and `--except`), and
+  `watch --except`. Before, one argument holding several paths (such as `"$(agent-mailbox list)"` or space-separated
+  paths) narrowed to its last path's basename and silently dropped the rest; pass each file as its own argument
+  (`consume <file>...`, or repeat `--consume` / `--except` once per message). Outside `verify` on an existing file on
+  disk, a single path whose folders hold whitespace (such as an absolute path under `/Users/Jo Smith/...`) is now
+  refused too: pass the message by name (or a store-relative path without whitespace, such as
+  `mailbox/inbox/<you>/<name>`). `send --in-reply-to` now accepts only `none` or a message file name (or a path to one
+  without whitespace), refusing an empty value or any other non-message name where before it took any basename;
+  `read --except` and `watch --except` still ignore a non-message name without whitespace.
 - **`send --consume` refuses a pattern, an empty name, or several bare names in one value**, before anything is sent.
   Before, a pattern such as `'*.md'` could match a file in the current folder and consume the inbox message of that
   name, an empty name was ignored, and bare names separated by spaces or line breaks were each consumed. Give
