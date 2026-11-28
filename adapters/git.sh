@@ -53,39 +53,38 @@ ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
   LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
-# ad_list_extra_refs / ad_clean_refs: mailbox clones keep only the mailbox branch, its remote tracking ref, and
-# refs/agent-mailbox/* (peek, history, stuck/*). Keep tag auto-following off and drop every other local ref (tags,
-# default branches, origin/HEAD, local refs/heads/HEAD) in one --no-deref batch, with a per-ref fallback.
-# Clean only when the clone looks the way the CLI leaves it (HEAD detached or on refs/heads/$BRANCH, and no symbolic
-# local ref other than refs/remotes/origin/HEAD); otherwise delete nothing and warn, so hand-made branches or symref
-# chains never lose unpublished commits. (%(symref) in for-each-ref has been supported since git 1.6.1.)
+# ad_list_extra_refs [fresh] / ad_clean_refs [fresh]: keep tag auto-following off and drop refs with --no-deref (one
+# batch, with a per-ref fallback). A new clone (`fresh`, nothing of the user's in it yet) keeps only the mailbox branch,
+# its remote tracking ref, and refs/agent-mailbox/* (peek, history, stuck/*). An existing clone drops only tags, the
+# refs git's rules match for HEAD (refs/HEAD, refs/heads/HEAD, refs/remotes/HEAD, refs/remotes/HEAD/HEAD), and
+# refs/remotes/origin/HEAD, so any other local branch, stash, or tracking ref survives untouched.
 ad_list_extra_refs() {
-  ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" '
-    $0 == "refs/heads/" b || $0 == "refs/remotes/origin/" b || index($0, "refs/agent-mailbox/") == 1 { next }
-    { print }'
+  if [ "${1:-}" = fresh ]; then
+    ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" '
+      $0 == "refs/heads/" b || $0 == "refs/remotes/origin/" b || index($0, "refs/agent-mailbox/") == 1 { next }
+      { print }'
+  else
+    ad_git for-each-ref --format='%(refname)' | awk '
+      index($0, "refs/tags/") == 1 ||
+      $0 == "refs/HEAD" || $0 == "refs/heads/HEAD" ||
+      $0 == "refs/remotes/HEAD" || $0 == "refs/remotes/HEAD/HEAD" ||
+      $0 == "refs/remotes/origin/HEAD" { print }'
+  fi
 }
 ad_clean_refs() {
+  cr_mode=${1:-}
   [ "$(ad_git config remote.origin.tagOpt)" = --no-tags ] || ad_git config remote.origin.tagOpt --no-tags
-  cr_h=$(ad_git symbolic-ref -q HEAD 2>/dev/null) || cr_h=""
-  if [ -n "$cr_h" ] && [ "$cr_h" != "refs/heads/$BRANCH" ]; then
-    warn "HEAD isn't on $BRANCH in $AD_DIR: run \`git -C $AD_DIR checkout $BRANCH\`, or remove the clone once nothing in it is unpublished"
-    return 0
-  fi
-  cr_sym=$(ad_git for-each-ref --format='%(refname) %(symref)' | awk '$2 != "" && $1 != "refs/remotes/origin/HEAD" { print $1; exit }')
-  if [ -z "$cr_sym" ] && ad_git symbolic-ref -q "refs/heads/$BRANCH" >/dev/null 2>&1; then cr_sym="refs/heads/$BRANCH"; fi
-  if [ -n "$cr_sym" ]; then
-    warn "symbolic ref $cr_sym in $AD_DIR (skipping ref cleanup): remove $cr_sym, or remove the clone once nothing in it is unpublished"
-    return 0
-  fi
-  if [ -n "$(ad_list_extra_refs | head -n 1)" ]; then
-    ad_list_extra_refs | awk '{ print "delete " $0 }' | ad_git update-ref --stdin --no-deref 2>/dev/null ||
-      ad_list_extra_refs | while IFS= read -r cr_r; do
+  if [ -n "$(ad_list_extra_refs "$cr_mode" | head -n 1)" ]; then
+    ad_list_extra_refs "$cr_mode" | awk '{ print "delete " $0 }' | ad_git update-ref --stdin --no-deref 2>/dev/null ||
+      ad_list_extra_refs "$cr_mode" | while IFS= read -r cr_r; do
         [ -z "$cr_r" ] || ad_git update-ref --no-deref -d "$cr_r" 2>/dev/null || :
       done
   fi
-  # for-each-ref skips a dangling symref such as refs/remotes/origin/HEAD pointing at a removed ref
-  ! ad_git symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 ||
-    ad_git update-ref --no-deref -d refs/remotes/origin/HEAD 2>/dev/null || :
+  # for-each-ref skips dangling symrefs (such as refs/remotes/origin/HEAD pointing at a removed ref)
+  for cr_s in refs/HEAD refs/heads/HEAD refs/remotes/HEAD refs/remotes/HEAD/HEAD refs/remotes/origin/HEAD; do
+    ! ad_git symbolic-ref -q "$cr_s" >/dev/null 2>&1 ||
+      ad_git update-ref --no-deref -d "$cr_s" 2>/dev/null || :
+  done
 }
 
 # ad_fetch_branch [--no-gc] <dest> [<fetch-opt>...]: fetch the store's exact refs/heads/$BRANCH into <dest>.
@@ -210,7 +209,7 @@ ad_open() {
       { rm -rf "$AD_DIR"; die "can't clone the store: $(printf '%s\n' "$err" | ad_gist)"; }
     ad_git config core.symlinks false
     ad_git symbolic-ref HEAD "refs/heads/$BRANCH" 2>/dev/null || :
-    ad_clean_refs
+    ad_clean_refs fresh
     ad_attrs || :
     # check out the mailbox branch itself, whatever the store's default branch is; a store without it gets an empty
     # one, holding none of the default branch's files

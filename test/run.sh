@@ -2321,41 +2321,50 @@ exec "%s" "$@"
   expect "list succeeds when refs/heads/main advances twice during fetch and re-check" 0 "mv1-moved-twice-2\.md" \
     env PATH="$T/movegit2:$PATH" HOME="$W/home-mv2" "$SH" "$CLI" list
 
-  # existing clone holding local refs/heads/HEAD, stray branches, tags, and dangling/live origin/HEAD is cleaned on open,
-  # keeping refs/heads/main, refs/remotes/origin/main and refs/agent-mailbox/stuck/* intact (both --stdin and fallback)
+  # v0.1.4-made clone with tags, HEAD-named refs, and dangling origin/HEAD clears those while keeping local branches,
+  # refs/stash, other remote tracking refs, and refs/agent-mailbox/stuck/* intact (both --stdin and fallback)
   for Cep in "$W/home-ep1/.local/state/agent-mailbox/checkouts/"*; do :; done
   ep_tip=$(git -C "$Cep" rev-parse --verify refs/heads/main)
   ti=1; while [ $ti -le 10 ]; do git -C "$Cep" update-ref "refs/tags/t$ti" "$ep_tip"; ti=$((ti+1)); done
+  git -C "$Cep" update-ref refs/tags/HEAD "$ep_tip"
   git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
-  git -C "$Cep" update-ref refs/heads/extra "$ep_tip"
+  git -C "$Cep" update-ref refs/remotes/HEAD "$ep_tip"
+  git -C "$Cep" update-ref refs/heads/wip "$ep_tip"
+  git -C "$Cep" update-ref refs/heads/wip2 "$ep_tip"
+  git -C "$Cep" update-ref refs/stash "$ep_tip"
+  git -C "$Cep" update-ref refs/remotes/origin/other "$ep_tip"
   git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/dangling
   git -C "$Cep" update-ref refs/agent-mailbox/stuck/1 "$ep_tip"
-  expect "existing clone with stray refs keeps working on list" 3 "no mail for ep1" as ep1 list
+  expect "v0.1.4-style clone with HEAD refs, tags, and hand-made work keeps working on list" 3 "no mail for ep1" as ep1 list
   kept=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
-  [ "$kept" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
+  [ "$kept" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/heads/wip refs/heads/wip2 refs/remotes/origin/main refs/remotes/origin/other refs/stash " ] &&
     ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
-    ok "existing clone clears tags, refs/heads/HEAD, extra branches and dangling origin/HEAD while keeping stuck refs" ||
-    no "existing clone kept extra refs or dropped stuck/branch refs" "$kept"
-  # live symref origin/HEAD -> origin/main must not dereference and delete origin/main: verified directly right after
-  # ad_clean_refs (before any fetch can recreate it), for both --stdin --no-deref and per-ref --no-deref -d fallback
-  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+    ok "existing clone clears tags, HEAD refs and dangling origin/HEAD while keeping wip, wip2, stash, origin/other and stuck refs" ||
+    no "existing clone kept removed refs or dropped local work" "$kept"
+  # live symref origin/HEAD -> local branch (and -> origin/main) must not dereference or delete the local branch:
+  # verified directly right after ad_clean_refs (before any fetch), for both --stdin --no-deref and per-ref fallback
+  git -C "$Cep" update-ref refs/heads/keep-oh "$ep_tip"
+  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/heads/keep-oh
   (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
-  [ "$(git -C "$Cep" show-ref --verify -s refs/remotes/origin/main 2>/dev/null)" = "$ep_tip" ] &&
+  [ "$(git -C "$Cep" show-ref --verify -s refs/heads/keep-oh 2>/dev/null)" = "$ep_tip" ] &&
+    [ "$(git -C "$Cep" show-ref --verify -s refs/remotes/origin/main 2>/dev/null)" = "$ep_tip" ] &&
     ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
-    ok "ad_clean_refs keeps refs/remotes/origin/main intact immediately after dropping live origin/HEAD" ||
-    no "ad_clean_refs dereferenced live origin/HEAD and wiped origin/main" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
+    ok "ad_clean_refs keeps local branch target intact when dropping live origin/HEAD" ||
+    no "ad_clean_refs dropped local branch target of live origin/HEAD" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
   ti=1; while [ $ti -le 5 ]; do git -C "$Cep" update-ref "refs/tags/fb$ti" "$ep_tip"; ti=$((ti+1)); done
   git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
-  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git -C "$Cep" symbolic-ref refs/remotes/origin/HEAD refs/heads/keep-oh
   mkdir -p "$T/tagfb"
   printf '#!/bin/sh\ncase " $* " in (*" update-ref --stdin"*) exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/tagfb/git"
   chmod +x "$T/tagfb/git"
   (PATH="$T/tagfb:$PATH" AD_DIR=$Cep BRANCH=main ME=ep1; export PATH; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
-  kept2=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
-  [ "$kept2" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
+  [ "$(git -C "$Cep" show-ref --verify -s refs/heads/keep-oh 2>/dev/null)" = "$ep_tip" ] &&
+    [ "$(git -C "$Cep" show-ref --verify -s refs/remotes/origin/main 2>/dev/null)" = "$ep_tip" ] &&
+    ! git -C "$Cep" show-ref -q --verify refs/heads/HEAD &&
+    [ -z "$(git -C "$Cep" for-each-ref --format='%(refname)' refs/tags)" ] &&
     ! git -C "$Cep" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
-    ok "ad_clean_refs fallback keeps refs/remotes/origin/main intact immediately after dropping live origin/HEAD" ||
-    no "ad_clean_refs fallback left extra refs or dropped branch refs" "$kept2"
+    ok "ad_clean_refs fallback clears tags, refs/heads/HEAD and live origin/HEAD while keeping local branch target" ||
+    no "ad_clean_refs fallback left removed refs or dropped local branch" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
   # upgrade of a v0.1.4-style clone (live origin/HEAD -> origin/main) on a store whose main was deleted must not recreate main
   DG="$T/del-originhead.git"; git init -q --bare "$DG"
   git --git-dir="$SR" push -q "$DG" "refs/heads/main:refs/heads/main"
@@ -2369,92 +2378,90 @@ exec "%s" "$@"
     ok "and deleted store branch stayed absent after upgrading live origin/HEAD clone" ||
     no "live origin/HEAD cleanup caused clone to recreate deleted main" "$(git --git-dir="$DG" show-ref)"
 
-  # ad_clean_refs under-acts in any odd state (HEAD on another branch, symref chains, or any symbolic local ref):
-  # deletes nothing, prints a warning, and leaves existing sync to publish unpublished commits as on v0.1.4.
+  # hand-made work in an existing clone survives (side branch after checkout main, detached HEAD, symref chains)
   mkdir -p "$T/failpush"
   printf '#!/bin/sh\ncase " $* " in (*" push "*) echo "simulated push failure" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failpush/git"
   chmod +x "$T/failpush/git"
-  # 1. HEAD on a side branch: publishes unpublished send, deletes nothing (stray tag kept), warns
+  # 1. HEAD on side with an unpublished send, then git checkout main: the send survives on side
   as kwside setup --store "$PC" --name ep1 >/dev/null
   as kwside agents >/dev/null 2>&1
   for Cside in "$W/home-kwside/.local/state/agent-mailbox/checkouts/"*; do :; done
   git -C "$Cside" checkout -q -b side
-  git -C "$Cside" update-ref refs/tags/keep-side HEAD
   out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwside" "$SH" "$CLI" send ep2 on-side - 2>&1); rc=$?
   [ "$rc" = 4 ] && ok "(send on side branch saved locally when push failed)" || no "side-branch send didn't exit 4 ($rc)" "$out"
+  side_oid=$(git -C "$Cside" show-ref --verify -s refs/heads/side)
+  git -C "$Cside" checkout -q main
   out=$(as kwside agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
-    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
-    git -C "$Cside" show-ref -q --verify refs/heads/side &&
-    git -C "$Cside" show-ref -q --verify refs/tags/keep-side &&
-    ok "HEAD on side branch warns, deletes nothing, and publishes unpublished send" ||
-    no "side branch didn't warn/keep/publish (exit $rc)" "$out | $(git -C "$Cside" show-ref)"
-  expect "delivering on-side to ep2" 0 "ep1-on-side\.md" as ep2 list
-  # 2. symref chain HEAD -> refs/heads/x -> refs/heads/y with unpublished send on y: published, nothing deleted, warns
+  [ "$rc" = 0 ] && [ "$(git -C "$Cside" show-ref --verify -s refs/heads/side 2>/dev/null)" = "$side_oid" ] &&
+    ok "unpublished send on side survives after git checkout main" ||
+    no "side branch was lost after git checkout main (exit $rc)" "$out | $(git -C "$Cside" show-ref)"
+  # 2. a branch with commits survives on a detached HEAD while tags and HEAD-named refs are cleared
+  git -C "$Cep" checkout -q --detach
+  git -C "$Cep" update-ref refs/heads/det-work "$ep_tip"
+  git -C "$Cep" update-ref refs/tags/det-tag "$ep_tip"
+  git -C "$Cep" update-ref refs/heads/HEAD "$ep_tip"
+  (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
+  [ "$(git -C "$Cep" show-ref --verify -s refs/heads/det-work 2>/dev/null)" = "$ep_tip" ] &&
+    ! git -C "$Cep" show-ref -q --verify refs/tags/det-tag &&
+    ! git -C "$Cep" show-ref -q --verify refs/heads/HEAD &&
+    ok "local branch survives on detached HEAD while tags and refs/heads/HEAD are cleared" ||
+    no "detached HEAD cleanup dropped branch or left tag/HEAD ref" "$(git -C "$Cep" for-each-ref --format='%(refname)')"
+  git -C "$Cep" checkout -q main
+  # 3. hand-made symref chain HEAD -> refs/heads/x -> refs/heads/y with unpublished send on y: nothing lost
   as kwchain setup --store "$PC" --name ep1 >/dev/null
   as kwchain agents >/dev/null 2>&1
   for Cch in "$W/home-kwchain/.local/state/agent-mailbox/checkouts/"*; do :; done
   git -C "$Cch" update-ref refs/heads/y refs/heads/main
   git -C "$Cch" symbolic-ref refs/heads/x refs/heads/y
   git -C "$Cch" symbolic-ref HEAD refs/heads/x
-  git -C "$Cch" update-ref refs/tags/keep-chain refs/heads/y
   out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwchain" "$SH" "$CLI" send ep2 on-chain - 2>&1); rc=$?
   [ "$rc" = 4 ] && ok "(send on HEAD->x->y chain saved locally when push failed)" || no "chain send didn't exit 4 ($rc)" "$out"
   out=$(as kwchain agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
-    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
     git -C "$Cch" symbolic-ref -q refs/heads/x >/dev/null 2>&1 &&
     git -C "$Cch" show-ref -q --verify refs/heads/y &&
-    git -C "$Cch" show-ref -q --verify refs/tags/keep-chain &&
-    ok "HEAD->x->y chain warns, deletes nothing, and publishes unpublished send" ||
+    ok "HEAD->x->y symref chain loses nothing and publishes unpublished send" ||
     no "HEAD->x->y chain lost refs or commit (exit $rc)" "$out | $(git -C "$Cch" show-ref)"
   expect "delivering on-chain to ep2" 0 "ep1-on-chain\.md" as ep2 list
-  # 3. symref chain HEAD -> refs/heads/main -> refs/heads/x -> refs/heads/y with unpublished send on y: published, nothing deleted, warns
+  # 4. hand-made symref chain HEAD -> refs/heads/main -> refs/heads/x -> refs/heads/y: nothing lost
   as kwbch setup --store "$PC" --name ep1 >/dev/null
   as kwbch agents >/dev/null 2>&1
   for Cbch in "$W/home-kwbch/.local/state/agent-mailbox/checkouts/"*; do :; done
   git -C "$Cbch" update-ref refs/heads/y refs/heads/main
   git -C "$Cbch" symbolic-ref refs/heads/x refs/heads/y
   git -C "$Cbch" symbolic-ref refs/heads/main refs/heads/x
-  git -C "$Cbch" update-ref refs/tags/keep-bchain refs/heads/y
   out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwbch" "$SH" "$CLI" send ep2 on-bchain - 2>&1); rc=$?
   [ "$rc" = 4 ] && ok "(send on main->x->y chain saved locally when push failed)" || no "bchain send didn't exit 4 ($rc)" "$out"
   out=$(as kwbch agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
-    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
     git -C "$Cbch" symbolic-ref -q refs/heads/main >/dev/null 2>&1 &&
     git -C "$Cbch" symbolic-ref -q refs/heads/x >/dev/null 2>&1 &&
     git -C "$Cbch" show-ref -q --verify refs/heads/y &&
-    git -C "$Cbch" show-ref -q --verify refs/tags/keep-bchain &&
-    ok "refs/heads/main->x->y chain warns, deletes nothing, and publishes unpublished send" ||
+    ok "refs/heads/main->x->y symref chain loses nothing and publishes unpublished send" ||
     no "refs/heads/main->x->y chain lost refs or commit (exit $rc)" "$out | $(git -C "$Cbch" show-ref)"
   expect "delivering on-bchain to ep2" 0 "ep1-on-bchain\.md" as ep2 list
-  # 4. symbolic local ref while HEAD is on refs/heads/main: warns and deletes nothing
+  # 5. symbolic local ref while HEAD is on main survives while tags are still cleared
   git -C "$Cep" update-ref refs/heads/sym2 "$ep_tip"
   git -C "$Cep" symbolic-ref refs/heads/sym1 refs/heads/sym2
-  git -C "$Cep" update-ref refs/tags/keep-sym "$ep_tip"
-  out=$( (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { printf 'WARN: %s\n' "$*" >&2; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs) 2>&1 )
-  printf '%s\n' "$out" | grep -q "symbolic ref refs/heads/sym1" &&
-    git -C "$Cep" symbolic-ref -q refs/heads/sym1 >/dev/null 2>&1 &&
-    git -C "$Cep" show-ref -q --verify refs/heads/sym2 &&
-    git -C "$Cep" show-ref -q --verify refs/tags/keep-sym &&
-    ok "ad_clean_refs warns and deletes nothing when any symbolic local ref exists" ||
-    no "ad_clean_refs modified refs despite symbolic local ref" "$out | $(git -C "$Cep" for-each-ref)"
-  git -C "$Cep" update-ref --no-deref -d refs/heads/sym1
-  git -C "$Cep" update-ref -d refs/heads/sym2
-  git -C "$Cep" update-ref -d refs/tags/keep-sym
-  # 5. detached HEAD mid-rebase is still cleaned as normal
-  git -C "$Cep" checkout -q --detach
-  mkdir -p "$Cep/.git/rebase-merge"
-  git -C "$Cep" update-ref refs/tags/mid-rb-tag "$ep_tip"
-  git -C "$Cep" update-ref refs/heads/mid-rb-extra "$ep_tip"
+  git -C "$Cep" update-ref refs/tags/clear-sym "$ep_tip"
   (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
-  kept_rb=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
-  rmdir "$Cep/.git/rebase-merge"
-  git -C "$Cep" checkout -q main
-  [ "$kept_rb" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
-    ok "detached HEAD mid-rebase is still cleaned on open" ||
-    no "detached HEAD mid-rebase wasn't cleaned" "$kept_rb"
+  git -C "$Cep" symbolic-ref -q refs/heads/sym1 >/dev/null 2>&1 &&
+    git -C "$Cep" show-ref -q --verify refs/heads/sym2 &&
+    ! git -C "$Cep" show-ref -q --verify refs/tags/clear-sym &&
+    ok "local symbolic ref survives while tags are cleared" ||
+    no "local symbolic ref was dropped or tag remained" "$(git -C "$Cep" for-each-ref)"
+  # 6. fresh clone of a store with a default branch (no main) and tags keeps no fallback branch, tags, or origin/HEAD
+  FB="$T/fresh-clean.git"; git init -q --bare "$FB"
+  git --git-dir="$SR" push -q "$FB" "refs/heads/main:refs/heads/other-default"
+  git --git-dir="$SR" push -q "$FB" "refs/heads/main:refs/tags/t-fresh"
+  git --git-dir="$FB" symbolic-ref HEAD refs/heads/other-default
+  as exfb setup --store "$FB" --name ex1 >/dev/null
+  expect "fresh clone of fallback default-branch store reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exfb list
+  for Cfb in "$W/home-exfb/.local/state/agent-mailbox/checkouts/"*; do :; done
+  [ -z "$(git -C "$Cfb" for-each-ref --format='%(refname)')" ] &&
+    ! git -C "$Cfb" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 &&
+    ok "fresh clone drops fallback default branch, tags and origin/HEAD" ||
+    no "fresh clone kept fallback refs" "$(git -C "$Cfb" for-each-ref --format='%(refname)')"
 
   # shallow checkout + branch advancing on first --unshallow fetch: retry drops --unshallow and holds succeeds
   SHW="$T/shallow-retry.git"; git init -q --bare "$SHW"
@@ -2475,17 +2482,35 @@ exec "%s" "$@"
   chmod +x "$T/shmove/git"
   expect "holds succeeds when shallow checkout retries after branch advances during --unshallow fetch" 0 "item#sh released by sh1 at v1" \
     env PATH="$T/shmove:$PATH" HOME="$W/home-sh2" "$SH" "$CLI" holds "item#sh" --version v1
-  # existing unborn clone with a local refs/heads/HEAD from an older CLI is cleaned on open and publishes nothing
+  # existing unborn clone with any of the four refs git matches for HEAD clears it on open and pushes nothing;
+  # after init, pushes still resolve HEAD to the real mailbox branch
   EU="$T/existing-head.git"; git init -q --bare "$EU"
   as exeu setup --store "$EU" --name ex1 >/dev/null
   as exeu list >/dev/null 2>&1
   for Ceu in "$W/home-exeu/.local/state/agent-mailbox/checkouts/"*; do :; done
-  git -C "$Ceu" fetch -q "$SR" "refs/heads/main:refs/heads/HEAD"
-  expect "existing unborn clone with local refs/heads/HEAD still reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exeu list
-  ! git --git-dir="$EU" show-ref -q --verify refs/heads/main &&
-    [ -z "$(git -C "$Ceu" for-each-ref --format='%(refname)')" ] &&
-    ok "and clears local refs/heads/HEAD without publishing to the store" ||
-    no "existing unborn clone kept refs/heads/HEAD or published it" "store=$(git --git-dir="$EU" show-ref) clone=$(git -C "$Ceu" for-each-ref)"
+  for href in refs/HEAD refs/heads/HEAD refs/remotes/HEAD refs/remotes/HEAD/HEAD; do
+    git -C "$Ceu" fetch -q "$SR" "refs/heads/main:$href"
+    expect "existing unborn clone with $href still reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exeu list
+    ! git --git-dir="$EU" show-ref -q --verify refs/heads/main &&
+      ! git -C "$Ceu" show-ref -q --verify "$href" &&
+      ok "and clears $href without publishing to the store" ||
+      no "existing unborn clone kept $href or published it" "store=$(git --git-dir="$EU" show-ref) clone=$(git -C "$Ceu" for-each-ref)"
+  done
+  expect "init on that clone creates real main cleanly" 0 "initialized" as exeu init
+  as exeu register --kind t --about t --no-key >/dev/null 2>&1
+  as exeu2 setup --store "$EU" --name ex2 >/dev/null
+  as exeu2 register --kind t --about t --no-key >/dev/null 2>&1
+  hi=0
+  for href in refs/HEAD refs/heads/HEAD refs/remotes/HEAD refs/remotes/HEAD/HEAD; do
+    hi=$((hi+1))
+    git -C "$Ceu" fetch -q "$SR" "refs/heads/main:$href"
+    expect "send on existing clone with $href pushes real branch" 0 "^sent mailbox/inbox/ex2/" \
+      sh -c 'echo hi | HOME="$1" "$2" "$3" send ex2 "hpush-$4" -' _ "$W/home-exeu" "$SH" "$CLI" "$hi"
+    ! git -C "$Ceu" show-ref -q --verify "$href" &&
+      ok "and clears $href on existing populated clone" ||
+      no "existing populated clone kept $href" "$(git -C "$Ceu" for-each-ref)"
+  done
+  expect "ex2 sees all 4 pushes from real main" 0 "ex1-hpush-4\.md" as exeu2 list
 
   # keeps-working checks (pass on both v0.1.4 cc785b8 and this branch):
   # 1. sha256 store (git 2.29+)
