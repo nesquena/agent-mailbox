@@ -312,8 +312,21 @@ ad_pull() {
     fi
   fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
-    rb=$(ad_git rebase -q --autostash "refs/remotes/origin/$BRANCH" 2>&1 >/dev/null) ||
-      { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
+    if [ -n "$pre" ] && ! ad_git merge-base --is-ancestor "$pre" "$post"; then
+      # the store's branch was rewound: replay only this clone's own unpublished commits (pre..HEAD) onto post,
+      # dropping commits the store no longer has rather than republishing them. If the rebase aborts, restore
+      # refs/remotes/origin/$BRANCH to pre so the next command still sees the rewind.
+      rw_n=$(ad_git rev-list --count "$post..$pre")
+      rb=$(ad_git rebase -q --autostash --onto "refs/remotes/origin/$BRANCH" "$pre" 2>&1 >/dev/null) ||
+        { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || {
+          ad_git rebase --abort >/dev/null 2>&1
+          ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre" "$post" 2>/dev/null || :
+          printf '%s\n' "$rb"; return 1; }
+      [ "${rw_n:-0}" = 0 ] || warn "the store's branch was rewound; $rw_n commit(s) it no longer has were dropped from this copy, not republished"
+    else
+      rb=$(ad_git rebase -q --autostash "refs/remotes/origin/$BRANCH" 2>&1 >/dev/null) ||
+        { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
+    fi
   else
     rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
   fi
