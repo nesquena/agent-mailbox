@@ -408,6 +408,8 @@ ad_push() {
     # compare-and-swap the store's branch against what this clone last synced (only when HEAD descends from it, so push
     # can never rewrite the store): a rewind landing between sync and push is rejected as "(stale info)" and retried
     # through ad_pull's rewind path instead of fast-forwarding the dropped commits back (--force-with-lease: git 1.8.5+)
+    # ceiling: a clone that fetches from a mirror lagging its push URL sees its own just-pushed commits as rewound and
+    # its next push rejected as stale; compare against the push URL's tip instead if such setups need supporting
     ap_lease=""
     if ap_o=$(ad_ref_oid "refs/remotes/origin/$BRANCH") && ad_git merge-base --is-ancestor "$ap_o" HEAD 2>/dev/null; then
       ap_lease="--force-with-lease=refs/heads/$BRANCH:$ap_o"

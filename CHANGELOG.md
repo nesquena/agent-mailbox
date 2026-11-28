@@ -2,14 +2,14 @@
 
 ## Unreleased
 
-- **When a store's mailbox branch is rewound (force-pushed), an existing clone drops commits the store's branch no
-  longer has instead of pushing them back (including a rewind landing between a command's sync and its push, via
-  `--force-with-lease`; a process killed mid-update before the rebase finishes is not yet covered).** Any unpublished
-  commits the clone made on top are still rebased onto the store's new tip and published (or set aside under
+- **When a store's mailbox branch is rewound (force-pushed), an existing clone drops the commits the store's branch no
+  longer has instead of pushing them back, including when the rewind lands between a command's sync and its push.**
+  Unpublished commits the clone made on top are still rebased onto the store's new tip and published (or set aside under
   `refs/agent-mailbox/stuck/` if they conflict), and the command prints `"the store's branch was rewound; <N> commit(s)
-  the store's branch no longer has were dropped from this copy, not republished"`. For admins: restoring a store from an
-  older backup, or force-pushing the branch, now drops mail sent after that point instead of clones republishing it, so
-  use `--force-with-lease` and expect senders to resend.
+  the store's branch no longer has were dropped from this copy, not republished"`. A send whose store branch is deleted
+  between its sync and its push now stops with exit 4 instead of re-creating the branch. For admins: force-pushing the
+  branch, or restoring the store from an older backup, now drops mail sent after the point you restore to; push with
+  `--force-with-lease` so you don't also drop mail sent while you work, and ask the senders to send it again.
 - **A mailbox clone now uses only the store's exact mailbox branch, so no other ref in the store can stand in for it,
   even before the branch exists.** A new copy keeps only the mailbox branch, its tracking ref, and the CLI's own refs
   (peek, history, and set-aside stuck refs). An existing copy loses only tags and refs named like `HEAD` (including
