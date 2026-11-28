@@ -1736,7 +1736,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   expect "rw2 sees message M before the store is rewound" 0 "rw1-drop-m\.md" as rw2 list
   git clone -q "$S" "$T/admin" && git -C "$T/admin" reset -q --hard "$r0" && git -C "$T/admin" push -q --force origin main
   out=$(as rw2 list 2>&1); rc=$?
-  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) it no longer has were dropped from this copy, not republished" &&
+  [ "$rc" = 3 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
     ! printf '%s\n' "$out" | grep -q "publishing" &&
     ok "pure force-push rewind drops the store's commit and warns without republishing" ||
     no "pure rewind republished or missed warning (exit $rc)" "$out"
@@ -1765,7 +1765,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   out=$(as rw3 list 2>&1); rc=$?
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "rw1-real-s1\.md" &&
     ! printf '%s\n' "$out" | grep -q "extra-e" &&
-    printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) it no longer has were dropped from this copy, not republished" &&
+    printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
     ! printf '%s\n' "$out" | grep -q "publishing" &&
     ok "diverged rewind drops the old ref's commit and reads the restored store's branch" ||
     no "diverged rewind failed or republished E (exit $rc)" "$out"
@@ -1783,7 +1783,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   [ "$rc" = 4 ] && ok "(rw2's local send saved unpublished on top of commit to be rewound)" || no "local send didn't exit 4 ($rc)" "$out"
   git -C "$T/admin" fetch -q && git -C "$T/admin" reset -q --hard "$r_pre_c" && git -C "$T/admin" push -q --force origin main
   out=$(as rw2 agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) it no longer has were dropped from this copy, not republished" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
     printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left from an earlier command" &&
     ok "rewind with local unpublished send drops store commit and publishes local send" ||
     no "rewind with local send failed (exit $rc)" "$out"
@@ -1800,7 +1800,7 @@ agent-mailbox: another agent-mailbox command (pid 1) x" "$SH" "$CLI" doctor
   out=$(as rw1 agents 2>&1); rc=$?
   for Crw1 in "$W/home-rw1/.local/state/agent-mailbox/checkouts/"*; do :; done
   [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "set aside a commit an earlier command left unpublished" &&
-    printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) it no longer has were dropped from this copy, not republished" &&
+    printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
     git -C "$Crw1" show-ref -q --verify refs/agent-mailbox/stuck/1 &&
     ! git --git-dir="$S" show main:mailbox/agents/rw1.md | grep -q 'about: v1' &&
     ok "rewind with conflicting local commit sets local commit aside in stuck/1 and drops rewound store commit" ||
@@ -1833,7 +1833,7 @@ exec "$real" "$@"
     ok "ad_push rewind conflict aborts cleanly and restores origin/main to pre" ||
     no "ad_push rewind conflict didn't restore origin/main (exit $rc)" "$out | origin=$(git -C "$Crw1" show-ref --verify -s refs/remotes/origin/main) want=$m1_oid"
   out=$(as rw1 agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) it no longer has were dropped from this copy, not republished" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
     git --git-dir="$S" show main:mailbox/agents/rw1.md | grep -q '^about: other$' &&
     ok "and the next command still detects the rewind and keeps the store at its rewound tip" ||
     no "next command after ad_push rewind abort failed (exit $rc)" "$out | $(git --git-dir="$S" show main:mailbox/agents/rw1.md)"
@@ -1860,10 +1860,51 @@ exec "$real" "$@"
   echo dropg | as rw1 send rw2 drop-g - >/dev/null 2>&1
   as rw2 list >/dev/null 2>&1
   git -C "$T/admin" fetch -q && git -C "$T/admin" reset -q --hard "$r_pre_g" && git -C "$T/admin" push -q --force origin main
-  expect "doctor shows rewind warning without republishing" 0 "^warn the store's branch was rewound; 1 commit\(s\) it no longer has were dropped from this copy, not republished" as rw2 doctor
+  expect "doctor shows rewind warning without republishing" 0 "^warn the store's branch was rewound; 1 commit\(s\) the store's branch no longer has were dropped from this copy, not republished" as rw2 doctor
   [ "$(git --git-dir="$S" rev-parse refs/heads/main)" = "$r_pre_g" ] &&
     ok "and doctor left the rewound store untouched" ||
     no "doctor republished the dropped commit" "$(git --git-dir="$S" rev-parse refs/heads/main)"
+  # (h) rewind landing between sync and push is rejected by --force-with-lease, drops the rewound commit, and still sends keep
+  r_pre_h=$(git --git-dir="$S" rev-parse refs/heads/main)
+  echo droprace | as rw1 send rw2 drop-race - >/dev/null 2>&1
+  mkdir -p "$T/rwlease"
+  printf '#!/bin/sh
+real="%s"; admin="%s"; base="%s"; stamp="%s/done"
+case " $* " in
+  (*" push "*)
+    if [ ! -e "$stamp" ]; then
+      : > "$stamp"
+      "$real" -C "$admin" fetch -q && "$real" -C "$admin" reset -q --hard "$base" &&
+        "$real" -C "$admin" push -q --force origin main
+    fi ;;
+esac
+exec "$real" "$@"
+' "$(command -v git)" "$T/admin" "$r_pre_h" "$T/rwlease" > "$T/rwlease/git"
+  chmod +x "$T/rwlease/git"
+  out=$(echo keep | env PATH="$T/rwlease:$PATH" HOME="$W/home-rw1" "$SH" "$CLI" send rw2 keep-race - 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "^sent mailbox/inbox/rw2/" &&
+    printf '%s\n' "$out" | grep -q "the store's branch was rewound; 1 commit(s) the store's branch no longer has were dropped from this copy, not republished" &&
+    ok "rewind between sync and push is caught by --force-with-lease and still sends keep" ||
+    no "sync-to-push rewind race wasn't caught (exit $rc)" "$out"
+  expect "rw2 receives keep-race" 0 "rw1-keep-race\.md" as rw2 list
+  [ -z "$(git --git-dir="$S" ls-tree -r --name-only main | grep drop-race)" ] &&
+    ok "and drop-race was not republished by the racing push" ||
+    no "racing push republished drop-race" "$(git --git-dir="$S" ls-tree -r --name-only main)"
+  # (i) --force-with-lease is omitted when HEAD does not descend from origin/main, so ad_push can never overwrite the store
+  r_pre_i=$(git --git-dir="$S" rev-parse refs/heads/main)
+  echo keept | as rw1 send rw2 keep-t - >/dev/null 2>&1
+  t_oid=$(git --git-dir="$S" rev-parse refs/heads/main)
+  as rw3 list >/dev/null 2>&1
+  git -C "$Crw3" reset -q --hard "$r_pre_i"
+  echo div > "$Crw3/mailbox/inbox/rw2/div.txt" && git -C "$Crw3" add mailbox/inbox/rw2/div.txt &&
+    git -C "$Crw3" -c user.name=rw3 -c user.email=rw3@agent-mailbox.invalid commit -qm div-only
+  (AD_DIR=$Crw3 BRANCH=main ME=rw3 CAP=200; die() { exit 1; }; warn() { :; }; clean() { cat; }; . "$ROOTDIR/adapters/git.sh"
+    ad_pull() { return 1; }
+    ad_push) >/dev/null 2>&1
+  [ "$(git --git-dir="$S" rev-parse refs/heads/main)" = "$t_oid" ] &&
+    ok "ad_push does not use --force-with-lease when HEAD does not descend from origin/main" ||
+    no "ad_push overwrote the store from a non-descendant HEAD" "$(git --git-dir="$S" rev-parse refs/heads/main) vs $t_oid"
+  git -C "$Crw3" reset -q --hard "$t_oid"
   }
   section git-foreign-history sec_git_foreign_history git
 
