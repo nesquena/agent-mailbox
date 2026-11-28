@@ -42,19 +42,19 @@ ad_remote_has_branch() { ad_git show-ref -q --verify "refs/remotes/origin/$BRANC
 ad_ref_oid() { ad_git show-ref --verify -s "$1" 2>/dev/null; }
 ad_is_oid() { case $1 in (''|*[!0-9a-f]*) return 1 ;; esac; [ "${#1}" = 40 ] || [ "${#1}" = 64 ]; }
 # ad_head_oid: current commit id of this clone's HEAD without git's short-name ref lookup rules
-# (empty/non-zero when HEAD is unborn, missing, or corrupt)
+# (empty/non-zero when HEAD is unborn, missing, or corrupt; uses show-ref --head when detached so reftable clones work)
 ad_head_oid() {
   if ho_ref=$(ad_git symbolic-ref -q HEAD 2>/dev/null); then
     ad_ref_oid "$ho_ref"
     return
   fi
-  [ -f "$AD_DIR/.git/HEAD" ] && IFS= read -r ho_id < "$AD_DIR/.git/HEAD" 2>/dev/null || return 1
+  ho_id=$(ad_git show-ref --head 2>/dev/null | awk '$2 == "HEAD" { print $1; exit }')
   ad_is_oid "$ho_id" || return 1
   ad_git rev-parse -q --verify "${ho_id}^{commit}" 2>/dev/null
 }
 # ad_rebase_head_oid: stopped commit id during ad_unstick, read from git's state files rather than by short name
-# (REBASE_HEAD on git 2.17+; rebase-merge/stopped-sha and rebase-apply/original-commit on git 2.9+; refuse if a fresh
-# REBASE_HEAD.lock is held)
+# (REBASE_HEAD on git 2.17+; rebase-merge/stopped-sha writes a full id from git 2.29 and abbreviated ids are rejected
+# fail-closed; rebase-apply/original-commit on git 2.9+; refuse if a fresh REBASE_HEAD.lock is held)
 ad_rebase_head_oid() {
   [ ! -e "$AD_DIR/.git/REBASE_HEAD.lock" ] && [ ! -L "$AD_DIR/.git/REBASE_HEAD.lock" ] || return 1
   for rh_f in "$AD_DIR/.git/REBASE_HEAD" "$AD_DIR/.git/rebase-merge/stopped-sha" "$AD_DIR/.git/rebase-apply/original-commit"; do
@@ -442,7 +442,7 @@ ad_push() {
     if ap_o=$(ad_ref_oid "refs/remotes/origin/$BRANCH") && ad_git merge-base --is-ancestor "$ap_o" "$ap_h" 2>/dev/null; then
       ap_lease="--force-with-lease=refs/heads/$BRANCH:$ap_o"
     fi
-    if perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q ${ap_lease:+"$ap_lease"} origin "$ap_h:refs/heads/$BRANCH" ) 2>&1 ); then
+    if perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q ${ap_lease:+"$ap_lease"} origin "${ap_h}^{commit}:refs/heads/$BRANCH" ) 2>&1 ); then
       break
     fi
     case $perr in
