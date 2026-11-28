@@ -2155,7 +2155,7 @@ line two' | HOME='$W/home-p1' '$SH' '$CLI' send p2 planted -"
   # and so is one cut off part-way (here the command is killed as the second checkout starts)
   printf '* text eol=crlf -filter\n' > "$C/.git/info/attributes"; rm -f "$C/$f"; git -C "$C" checkout -q -f HEAD -- . 2>/dev/null
   find "$C" -name .git -prune -o -type f -exec touch -t 202001010000 {} +; git -C "$C" update-index -q --refresh
-  mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree HEAD "*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
+  mkdir -p "$T/killgit"; printf '#!/bin/sh\ncase " $* " in (*" read-tree "[0-9a-f]*) kill -9 $PPID; exit 1 ;; esac\nexec "%s" "$@"\n' \
     "$(command -v git)" > "$T/killgit/git"; chmod +x "$T/killgit/git"
   env PATH="$T/killgit:$PATH" HOME="$W/home-p2" "$SH" "$CLI" list >/dev/null 2>&1
   [ "$(head -n 1 "$C/.git/info/attributes")" = "# retry" ] && ok "(the command was cut off with the second checkout still to do)" ||
@@ -2695,6 +2695,123 @@ exec "%s" "$@"
   done
   expect "ex2 sees all 4 pushes from real main" 0 "ex1-hpush-4\.md" as exeu2 list
 
+  # ad_head_oid / ad_rebase_head_oid never resolve HEAD or REBASE_HEAD by short name
+  # (a1) loose refs/heads/head (case variant) on an unborn clone: ad_head_oid returns empty and list publishes nothing
+  HLO="$T/head-lower.git"; git init -q --bare "$HLO"
+  as exlo setup --store "$HLO" --name ex1 >/dev/null
+  as exlo list >/dev/null 2>&1
+  for Clo in "$W/home-exlo/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Clo" fetch -q "$SR" "refs/heads/main:refs/heads/head"
+  ho_lo=$( (AD_DIR=$Clo BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_head_oid) 2>/dev/null ); ho_rc=$?
+  [ "$ho_rc" != 0 ] && [ -z "$ho_lo" ] &&
+    ok "ad_head_oid returns empty on unborn clone with loose refs/heads/head" ||
+    no "ad_head_oid resolved loose refs/heads/head (rc=$ho_rc)" "$ho_lo"
+  if [ -e "$Clo/.git/refs/heads/HEAD" ]; then
+    [ "$(git -C "$Clo" -c core.ignorecase=false rev-parse -q --verify HEAD 2>/dev/null)" = "$src_oid" ] &&
+      ok "(direct rev-parse HEAD would resolve loose refs/heads/head on this case-insensitive filesystem)" ||
+      no "direct rev-parse HEAD did not resolve refs/heads/head on case-insensitive FS"
+  fi
+  expect "unborn clone with loose refs/heads/head reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exlo list
+  ! git --git-dir="$HLO" show-ref -q --verify refs/heads/main &&
+    ok "and publishes nothing to the store with loose refs/heads/head present" ||
+    no "unborn clone with loose refs/heads/head published to the store" "$(git --git-dir="$HLO" show-ref)"
+  git -C "$Clo" update-ref -d refs/heads/head
+  # (a2) locked refs/heads/HEAD that ad_clean_refs cannot remove: direct rev-parse HEAD resolves it, ad_head_oid does not
+  git -C "$Clo" fetch -q "$SR" "refs/heads/main:refs/heads/HEAD"
+  : > "$Clo/.git/refs/heads/HEAD.lock"
+  [ "$(git -C "$Clo" -c core.ignorecase=false rev-parse -q --verify HEAD 2>/dev/null)" = "$src_oid" ] &&
+    ok "(direct rev-parse HEAD resolves locked refs/heads/HEAD on unborn clone)" ||
+    no "direct rev-parse HEAD did not resolve refs/heads/HEAD"
+  ho_lk=$( (AD_DIR=$Clo BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_head_oid) 2>/dev/null ); ho_rc=$?
+  [ "$ho_rc" != 0 ] && [ -z "$ho_lk" ] &&
+    ok "ad_head_oid ignores locked refs/heads/HEAD on unborn clone" ||
+    no "ad_head_oid resolved locked refs/heads/HEAD (rc=$ho_rc)" "$ho_lk"
+  expect "unborn clone with locked refs/heads/HEAD still reports no mailbox yet" 1 "no mailbox at 'mailbox/' yet" as exlo list
+  ! git --git-dir="$HLO" show-ref -q --verify refs/heads/main &&
+    ok "and publishes nothing even when refs/heads/HEAD cannot be removed" ||
+    no "unborn clone with locked refs/heads/HEAD published to the store" "$(git --git-dir="$HLO" show-ref)"
+  rm -f "$Clo/.git/refs/heads/HEAD.lock"
+  git -C "$Clo" update-ref -d refs/heads/HEAD
+  # (b) local refs/heads/REBASE_HEAD present while ad_unstick runs (both with .git/REBASE_HEAD present and absent like git < 2.17)
+  RH="$T/rebase-head.git"; git init -q --bare "$RH"; git --git-dir="$RH" symbolic-ref HEAD refs/heads/main
+  for a in rh1 rh2; do as $a setup --store "$RH" --name $a >/dev/null; done
+  as rh1 init >/dev/null
+  for a in rh1 rh2; do as $a register --kind t --about t --no-key >/dev/null 2>&1; done
+  rh_r0=$(git --git-dir="$RH" rev-parse refs/heads/main)
+  as rh1 agents >/dev/null 2>&1
+  for Crh1 in "$W/home-rh1/.local/state/agent-mailbox/checkouts/"*; do :; done
+  out=$(env PATH="$T/failpush:$PATH" HOME="$W/home-rh1" "$SH" "$CLI" update --about local1 2>&1); rc=$?
+  [ "$rc" = 4 ] && ok "(rh1 local update saved for REBASE_HEAD conflict check)" || no "rh1 local update didn't exit 4 ($rc)" "$out"
+  rh_local=$(git -C "$Crh1" show-ref --verify -s refs/heads/main)
+  as rh2 update --about remote1 >/dev/null 2>&1
+  # also modify rh1's record on the store so rh1's update genuinely conflicts
+  git clone -q "$RH" "$T/rhw" && (cd "$T/rhw" && git config user.name r && git config user.email r@r.invalid &&
+    sed 's/^about: .*/about: remote-conflict/' mailbox/agents/rh1.md > mailbox/agents/rh1.md.t &&
+    mv mailbox/agents/rh1.md.t mailbox/agents/rh1.md &&
+    git add mailbox/agents/rh1.md && git commit -qm remote-conflict && git push -q origin main)
+  rh_store=$(git --git-dir="$RH" rev-parse refs/heads/main)
+  # b1: simulate git < 2.17 (no .git/REBASE_HEAD) with refs/heads/REBASE_HEAD pointing at rh_r0
+  git -C "$Crh1" fetch -q origin "+refs/heads/main:refs/remotes/origin/main"
+  git -C "$Crh1" update-ref refs/heads/REBASE_HEAD "$rh_r0"
+  git -C "$Crh1" rebase -q "refs/remotes/origin/main" >/dev/null 2>&1 || :
+  rm -f "$Crh1/.git/REBASE_HEAD"
+  [ "$(git -C "$Crh1" rev-parse -q --verify REBASE_HEAD 2>/dev/null)" = "$rh_r0" ] &&
+    ok "(without .git/REBASE_HEAD, direct rev-parse REBASE_HEAD resolves refs/heads/REBASE_HEAD)" ||
+    no "direct rev-parse REBASE_HEAD did not resolve refs/heads/REBASE_HEAD"
+  rh_got=$( (AD_DIR=$Crh1 BRANCH=main ME=rh1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_rebase_head_oid) 2>/dev/null )
+  [ "$rh_got" = "$rh_local" ] &&
+    ok "ad_rebase_head_oid reads stopped-sha when .git/REBASE_HEAD is absent" ||
+    no "ad_rebase_head_oid returned wrong commit" "got=$rh_got want=$rh_local wrong=$rh_r0"
+  (AD_DIR=$Crh1 BRANCH=main ROOT=mailbox ME=rh1 CAP=200; die() { exit 1; }; warn() { :; }; clean() { cat; }; . "$ROOTDIR/adapters/git.sh"; ad_unstick) >/dev/null 2>&1
+  [ "$(git -C "$Crh1" show-ref --verify -s refs/agent-mailbox/stuck/1 2>/dev/null)" = "$rh_local" ] &&
+    ok "ad_unstick sets aside the stopped commit rather than refs/heads/REBASE_HEAD (pre-2.17 layout)" ||
+    no "ad_unstick set aside wrong commit" "got=$(git -C "$Crh1" show-ref --verify -s refs/agent-mailbox/stuck/1 2>/dev/null) want=$rh_local wrong=$rh_r0"
+  # b2: rebase --apply layout (.git/rebase-apply/original-commit) when .git/REBASE_HEAD is absent
+  git -C "$Crh1" reset -q --hard "$rh_local"
+  git -C "$Crh1" -c user.name=t -c user.email=t@t.invalid rebase -q --apply "refs/remotes/origin/main" >/dev/null 2>&1 || :
+  rm -f "$Crh1/.git/REBASE_HEAD"
+  rh_ap=$( (AD_DIR=$Crh1 BRANCH=main ME=rh1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_rebase_head_oid) 2>/dev/null )
+  git -C "$Crh1" rebase --abort >/dev/null 2>&1 || :
+  [ "$rh_ap" = "$rh_local" ] &&
+    ok "ad_rebase_head_oid reads rebase-apply/original-commit when .git/REBASE_HEAD is absent" ||
+    no "ad_rebase_head_oid failed on rebase-apply layout" "got=$rh_ap want=$rh_local"
+  # b3: end-to-end ad_sync with local refs/heads/REBASE_HEAD present and modern .git/REBASE_HEAD
+  git -C "$Crh1" update-ref -d refs/agent-mailbox/stuck/1
+  git -C "$Crh1" reset -q --hard "$rh_local"
+  git -C "$Crh1" update-ref refs/remotes/origin/main "$rh_r0"
+  expect "ad_sync with local refs/heads/REBASE_HEAD recovers and sets aside the real commit" 0 "NAME" as rh1 agents
+  [ "$(git -C "$Crh1" show-ref --verify -s refs/agent-mailbox/stuck/1 2>/dev/null)" = "$rh_local" ] &&
+    ok "and stuck/1 holds the real conflicting commit (not refs/heads/REBASE_HEAD)" ||
+    no "end-to-end ad_unstick saved wrong commit" "got=$(git -C "$Crh1" show-ref --verify -s refs/agent-mailbox/stuck/1 2>/dev/null) want=$rh_local"
+  # (c) push source is the commit OID, never HEAD:, even when a locked local refs/heads/HEAD cannot be removed
+  mkdir -p "$T/logpush"
+  printf '#!/bin/sh\ncase " $* " in (*" push "*) printf "%%s\\n" "$*" >> "%s/push.log" ;; esac\nexec "%s" "$@"\n' \
+    "$T/logpush" "$(command -v git)" > "$T/logpush/git"
+  chmod +x "$T/logpush/git"
+  git -C "$Ceu" fetch -q "$SR" "refs/heads/main:refs/heads/HEAD"
+  : > "$Ceu/.git/refs/heads/HEAD.lock"
+  expect "send pushes real branch by commit id even with locked refs/heads/HEAD" 0 "^sent mailbox/inbox/ex2/" \
+    sh -c 'echo oidpush | PATH="$1:$PATH" HOME="$2" "$3" "$4" send ex2 oid-push -' _ "$T/logpush" "$W/home-exeu" "$SH" "$CLI"
+  eu_tip=$(git --git-dir="$EU" show-ref --verify -s refs/heads/main)
+  grep -qF "$eu_tip:refs/heads/main" "$T/logpush/push.log" && ! grep -qF "HEAD:refs/heads/main" "$T/logpush/push.log" &&
+    ok "push refspec uses commit id instead of HEAD:" ||
+    no "push refspec used HEAD: or wrong oid" "$(cat "$T/logpush/push.log")"
+  rm -f "$Ceu/.git/refs/heads/HEAD.lock"
+  git -C "$Ceu" update-ref -d refs/heads/HEAD
+  expect "ex2 sees oid-push on real main" 0 "ex1-oid-push\.md" as exeu2 list
+  # (d) ad_head_oid handles detached HEAD (sha1 & sha256), symref chains, and rejects corrupt .git/HEAD
+  git -C "$Ceu" checkout -q --detach "$eu_tip"
+  ho_det=$( (AD_DIR=$Ceu BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_head_oid) 2>/dev/null )
+  git -C "$Ceu" checkout -q main
+  [ "$ho_det" = "$eu_tip" ] &&
+    ok "ad_head_oid resolves detached HEAD" || no "ad_head_oid failed on detached HEAD" "got=$ho_det want=$eu_tip"
+  cp "$Ceu/.git/HEAD" "$T/saved-HEAD"
+  printf 'not-an-oid\n' > "$Ceu/.git/HEAD"
+  ho_bad=$( (AD_DIR=$Ceu BRANCH=main ME=ex1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_head_oid) 2>/dev/null ); ho_brc=$?
+  mv "$T/saved-HEAD" "$Ceu/.git/HEAD"
+  [ "$ho_brc" != 0 ] && [ -z "$ho_bad" ] &&
+    ok "ad_head_oid rejects corrupt .git/HEAD" || no "ad_head_oid accepted corrupt .git/HEAD (rc=$ho_brc)" "$ho_bad"
+
   # keeps-working checks (pass on both v0.1.4 cc785b8 and this branch):
   # 1. sha256 store (git 2.29+)
   if git init -q --bare --object-format=sha256 "$T/sha256.git" 2>/dev/null; then
@@ -2705,6 +2822,14 @@ exec "%s" "$@"
       sh -c 'echo ok | HOME="$1" "$2" "$3" send s256b h256 - --release "item#256 v1"' _ "$W/home-s256a" "$SH" "$CLI"
     expect "(keeps working) list on a sha256 store sees mail" 0 "s256a-h256\.md" as s256b list
     expect "(keeps working) holds on a sha256 store passes release" 0 "item#256 released by s256a at v1" as s256b holds "item#256" --version v1
+    for Cs256 in "$W/home-s256a/.local/state/agent-mailbox/checkouts/"*; do :; done
+    s256_tip=$(git -C "$Cs256" show-ref --verify -s refs/heads/main)
+    git -C "$Cs256" checkout -q --detach "$s256_tip"
+    ho_256=$( (AD_DIR=$Cs256 BRANCH=main ME=s256a; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_head_oid) 2>/dev/null )
+    git -C "$Cs256" checkout -q main
+    [ "$ho_256" = "$s256_tip" ] && [ "${#ho_256}" = 64 ] &&
+      ok "ad_head_oid resolves 64-char detached HEAD on a sha256 store" ||
+      no "ad_head_oid failed on sha256 detached HEAD" "got=$ho_256 want=$s256_tip"
   else
     sk "(keeps working) sha256 store (git lacks --object-format=sha256, requires git 2.29+)"
   fi

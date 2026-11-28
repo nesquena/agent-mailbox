@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **The git adapter no longer resolves `HEAD` or `REBASE_HEAD` by short name.** It reads the current commit id directly
+  from the symbolic ref target or `.git/HEAD` (and rebase state files during conflict recovery), and pushes by commit
+  id rather than `HEAD:`.
 - **When a store's mailbox branch is rewound (force-pushed), an existing clone drops the commits the store's branch no
   longer has instead of pushing them back, including when the rewind lands between a command's sync and its push (but
   not when a command is killed while it syncs).** Unpublished commits the clone made on top are still rebased onto the
