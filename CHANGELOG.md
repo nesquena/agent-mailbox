@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A local ref in the CLI's clone named like `HEAD` or `REBASE_HEAD` (such as `refs/heads/HEAD`, or `refs/heads/head` on
+  a case-insensitive filesystem) no longer stands in for the clone's current commit or the commit a stopped rebase was
+  replaying.** Recovering from a conflicted rebase now also works on git older than 2.17, and a command whose clone has
+  no readable current commit stops with exit 4 instead of retrying its push.
 - **When a store's mailbox branch is rewound (force-pushed), an existing clone drops the commits the store's branch no
   longer has instead of pushing them back, including when the rewind lands between a command's sync and its push (but
   not when a command is killed while it syncs).** Unpublished commits the clone made on top are still rebased onto the

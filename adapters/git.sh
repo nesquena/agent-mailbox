@@ -40,6 +40,31 @@ ad_jitter() { sleep "$(od -An -N1 -tu1 /dev/urandom | awk 'NF {printf "%.2f", 0.
 ad_gist() { ( LC_ALL=C && export LC_ALL && sed -E 's#//[^@/]*@#//***@#g' | grep -v '^hint:' | tail -n 3 | tr '\n' ' ' | clean ); }
 ad_remote_has_branch() { ad_git show-ref -q --verify "refs/remotes/origin/$BRANCH"; }
 ad_ref_oid() { ad_git show-ref --verify -s "$1" 2>/dev/null; }
+ad_is_oid() { case $1 in (''|*[!0-9a-f]*) return 1 ;; esac; [ "${#1}" = 40 ] || [ "${#1}" = 64 ]; }
+# ad_head_oid: current commit id of this clone's HEAD without git's short-name ref lookup rules
+# (empty/non-zero when HEAD is unborn, missing, or corrupt; uses show-ref --head when detached so reftable clones work)
+ad_head_oid() {
+  if ho_ref=$(ad_git symbolic-ref -q HEAD 2>/dev/null); then
+    ad_ref_oid "$ho_ref"
+    return
+  fi
+  ho_id=$(ad_git show-ref --head 2>/dev/null | awk '$2 == "HEAD" { print $1; exit }')
+  ad_is_oid "$ho_id" || return 1
+  ad_git rev-parse -q --verify "${ho_id}^{commit}" 2>/dev/null
+}
+# ad_rebase_head_oid: stopped commit id during ad_unstick, read from git's state files rather than by short name
+# (REBASE_HEAD on git 2.17+; rebase-merge/stopped-sha writes a full id from git 2.29 and abbreviated ids are rejected
+# fail-closed; rebase-apply/original-commit on git 2.9+; refuse if a fresh REBASE_HEAD.lock is held)
+ad_rebase_head_oid() {
+  [ ! -e "$AD_DIR/.git/REBASE_HEAD.lock" ] && [ ! -L "$AD_DIR/.git/REBASE_HEAD.lock" ] || return 1
+  for rh_f in "$AD_DIR/.git/REBASE_HEAD" "$AD_DIR/.git/rebase-merge/stopped-sha" "$AD_DIR/.git/rebase-apply/original-commit"; do
+    [ -f "$rh_f" ] || continue
+    IFS= read -r rh_id < "$rh_f" 2>/dev/null || continue
+    ad_is_oid "$rh_id" || continue
+    ad_git rev-parse -q --verify "${rh_id}^{commit}" 2>/dev/null && return 0
+  done
+  return 1
+}
 # ad_clone: clone the store into $AD_DIR, in the C locale so its messages read the same everywhere. git clone takes a
 # name that exists as a repository or bundle where it runs as that local path first, even a URL's (ssh://h/x is also
 # the path ssh:/h/x), so a store named by a URL, host:path or an absolute path is cloned from the agent's own folder,
@@ -235,8 +260,8 @@ ad_open() {
   # first drops the index's stat data, which would otherwise let git skip files it thinks unchanged). The attributes are
   # in force from the start, marked for retry until that succeeds, so a failed or interrupted run is redone next time
   elif ad_attrs '# retry'; then
-    if ! ad_git rev-parse -q --verify HEAD >/dev/null ||
-      { ad_git read-tree HEAD && ad_git checkout-index -q -a -f -u; } 2>/dev/null; then ad_attrs_put || :; fi
+    if ! ao_h=$(ad_head_oid) ||
+      { ad_git read-tree "$ao_h" && ad_git checkout-index -q -a -f -u; } 2>/dev/null; then ad_attrs_put || :; fi
   fi
   # an older clone may hold links checked out before this rule: replace them with plain files
   if [ "$(ad_git config core.symlinks)" != false ]; then
@@ -272,15 +297,16 @@ ad_pull() {
   # the mailbox folder as git prints paths, without ./ parts, and whether the store's branch has a mailbox there
   rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/#' -e 'ta' -e ':b' -e 's#^\./##' -e 'tb' -e 's#/\.$##' -e 's#^\.$##')
   taken=""; ! ad_git cat-file -e "refs/remotes/origin/$BRANCH:${rr:+$rr/}store.md" 2>/dev/null || taken=1
+  ap_h=$(ad_head_oid) || ap_h=""
   # an init an earlier command made but never published (its push failed), when the branch now has a mailbox in its
   # folder: another agent's init won while this one waited. It's dropped, and the clone goes on with that mailbox. Only
   # a lone commit `init` writes (store.md and the two .keep files) that the store never had is dropped; a clone holding
   # anything more, or one whose init the store once had (a mailbox since reset), fails below as before
-  if [ -n "$taken" ] && [ -z "${AD_INIT:-}" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
-    [ "$(ad_git rev-list --count HEAD --not "refs/remotes/origin/$BRANCH")" = 1 ] &&
-    [ "$(ad_git log -1 --format=%s HEAD)" = "mailbox: init" ] &&
-    { [ -z "$pre" ] || ! ad_git merge-base --is-ancestor HEAD "$pre"; } &&
-    [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root HEAD |
+  if [ -n "$taken" ] && [ -z "${AD_INIT:-}" ] && [ -n "$ap_h" ] &&
+    [ "$(ad_git rev-list --count "$ap_h" --not "refs/remotes/origin/$BRANCH")" = 1 ] &&
+    [ "$(ad_git log -1 --format=%s "$ap_h")" = "mailbox: init" ] &&
+    { [ -z "$pre" ] || ! ad_git merge-base --is-ancestor "$ap_h" "$pre"; } &&
+    [ -z "$(ad_git diff-tree --no-commit-id --name-only -r --root "$ap_h" |
       grep -vxF -e "${rr:+$rr/}store.md" -e "${rr:+$rr/}agents/.keep" -e "${rr:+$rr/}inbox/.keep")" ]; then
     # (git prints a path it can't create as it is, line breaks included, and a store writer chooses paths: its output
     # is returned for the one die line, never passed through)
@@ -291,8 +317,8 @@ ad_pull() {
   # the commit `init` made in this same command (AD_INIT), when the branch now has a mailbox in its folder, is a race
   # lost just now: init saw no mailbox there, and its own sync published anything left before, so that commit is all
   # this clone holds unpublished. It's dropped, and init reports the winner
-  if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && ad_git rev-parse -q --verify HEAD >/dev/null &&
-    [ "$(ad_git rev-list --count "refs/remotes/origin/$BRANCH..HEAD")" = 1 ]; then
+  if [ -n "${AD_INIT:-}" ] && [ -n "$taken" ] && [ -n "$ap_h" ] &&
+    [ "$(ad_git rev-list --count "refs/remotes/origin/$BRANCH..$ap_h")" = 1 ]; then
     rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }; return 0
   fi
   # a clone whose history shares nothing with the store's branch fails, saying how to recover, and is never rebased onto
@@ -300,10 +326,10 @@ ad_pull() {
   # reset, deleted or re-created) or the branch now has a mailbox in its own folder (another agent's init took it). A
   # clone that never saw the branch, whose mailbox folder the branch doesn't have (a mailbox in another folder of the
   # same branch), is rebased and published as before. It returns 3, so a push retrying doesn't add "don't resend"
-  if ad_git rev-parse -q --verify HEAD >/dev/null && ! ad_git merge-base HEAD "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
+  if [ -n "$ap_h" ] && ! ad_git merge-base "$ap_h" "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
     if [ -n "$seen" ] || [ -n "$taken" ]; then
       # (what goes with the clone: its commits the store never had, past where it last saw the store's branch)
-      if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..HEAD"); else un=$(ad_git rev-list --count HEAD); fi
+      if [ -n "$pre" ]; then un=$(ad_git rev-list --count "$pre..$ap_h"); else un=$(ad_git rev-list --count "$ap_h"); fi
       lost=""; [ "${un:-0}" = 0 ] || lost=" (its $un unpublished commit(s) go with it: send again what they held)"
       printf "this clone's history doesn't match the store's (another agent's init took this mailbox's folder, or the mailbox was re-created): remove %s%s and run this again\n" "$AD_DIR" "$lost"
       # (the fetch moved the tracking ref to the store's new tip: it goes back to where it was, so a command run again
@@ -314,7 +340,7 @@ ad_pull() {
       return 3
     fi
   fi
-  if ad_git rev-parse -q --verify HEAD >/dev/null; then
+  if [ -n "$ap_h" ]; then
     if [ -n "$pre" ] && ! ad_git merge-base --is-ancestor "$pre" "$post"; then
       # the store's branch was rewound: replay only this clone's own unpublished commits (pre..HEAD) onto post,
       # dropping commits the store no longer has rather than republishing them. If the rebase aborts, restore
@@ -346,42 +372,43 @@ ad_unstick() { k=0 said="" rr=$(printf '%s\n' "$ROOT" | sed -e ':a' -e 's#/\./#/
   [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ] || return 1
   while [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; do
     k=$((k+1)); [ $k -le 50 ] || return 1
-    c=$(ad_git rev-parse -q --verify REBASE_HEAD) || return 1
+    c=$(ad_rebase_head_oid) || return 1
     u=$(ad_git -c core.quotePath=false diff --name-only --diff-filter=U); [ -n "$u" ] || return 1
     if ad_restamp; then ad_git rebase --continue >/dev/null 2>&1 || :
     else ref=$(ad_git for-each-ref --format='%(objectname) %(refname)' refs/agent-mailbox/stuck/ | awk -v c="$c" '$1 == c { print $2; exit }')
-      if [ -z "$ref" ]; then n=1; while ad_git rev-parse -q --verify "refs/agent-mailbox/stuck/$n" >/dev/null; do n=$((n+1)); done
+      if [ -z "$ref" ]; then n=1; while ad_git show-ref -q --verify "refs/agent-mailbox/stuck/$n"; do n=$((n+1)); done
         ref="refs/agent-mailbox/stuck/$n"; ad_git update-ref "$ref" "$c" || return 1; fi
       said="$said${NL}set aside a commit an earlier command left unpublished ($(ad_git log -1 --format=%s "$c" | clean "$CAP")), which conflicts with the store: what it held isn't published, so run again the command that made it: send that mail again, consume it again, or re-run update or register (it's kept as $ref in $AD_DIR); this clone goes on from the store"
       ad_git rebase --skip >/dev/null 2>&1 || :
     fi
   done
-  ad_git merge-base --is-ancestor "refs/remotes/origin/$BRANCH" HEAD || return 1
+  au_h=$(ad_head_oid) && ad_git merge-base --is-ancestor "refs/remotes/origin/$BRANCH" "$au_h" || return 1
   printf '%s\n' "$said" | while IFS= read -r w; do [ -z "$w" ] || warn "$w"; done; }
 # ad_restamp: (for ad_unstick) resolve the stopped commit's conflicts when each is a message that commit added, under a
 # name the store took meanwhile, by moving it (and its .sig) to the next free stamp; status 1 when any isn't
 ad_restamp() { ms=""
+  ar_h=$(ad_head_oid) || return 1
   # (a line at a time, so a path the store chose is never expanded as a pattern)
   while IFS= read -r f; do m=${f%.sig}
     printf '%s\n' "$m" | grep -Eq "^${rr:+$rr/}inbox/[a-z0-9][a-z0-9.-]{0,62}/[0-9]{8}T[0-9]{6}Z-[A-Za-z0-9._-]+\\.md\$" || return 1
     [ "$(ad_git diff-tree --root -r --no-commit-id --name-status "$c" -- "$m" | cut -f1)" = A ] || return 1
     # (and the store has a message of that name: a conflict git reports at a path the store lacks, as a reply quoting a
     # message it consumes, against an edit to that message, is no name taken)
-    ad_git cat-file -e "HEAD:$m" 2>/dev/null || return 1
+    ad_git cat-file -e "$ar_h:$m" 2>/dev/null || return 1
     case " $ms " in (*" $m "*) ;; (*) ms="$ms $m" ;; esac
   done <<EOF
 $u
 EOF
   for m in $ms; do d=${m%/*} b=${m##*/}; rest=${b#*Z-} i=0
     st=$(date -u +%Y%m%dT%H%M%SZ)
-    while ad_git cat-file -e "HEAD:$d/$st-$rest" 2>/dev/null || [ -e "$AD_DIR/$d/$st-$rest" ]; do
+    while ad_git cat-file -e "$ar_h:$d/$st-$rest" 2>/dev/null || [ -e "$AD_DIR/$d/$st-$rest" ]; do
       i=$((i+1)); [ $i -le 10 ] || return 1; sleep 1; st=$(date -u +%Y%m%dT%H%M%SZ); done
     nm="$d/$st-$rest"
     ad_git show "$c:$m" > "$AD_DIR/$nm" || return 1; set -- "$nm"
     if ad_git cat-file -e "$c:$m.sig" 2>/dev/null; then ad_git show "$c:$m.sig" > "$AD_DIR/$nm.sig" || return 1; set -- "$nm" "$nm.sig"; fi
     # the store's own message keeps its name, as the store has it
     for f in "$m" "$m.sig"; do
-      if ad_git cat-file -e "HEAD:$f" 2>/dev/null; then ad_git checkout -q HEAD -- "$f" || return 1
+      if ad_git cat-file -e "$ar_h:$f" 2>/dev/null; then ad_git checkout -q "$ar_h" -- "$f" || return 1
       else ad_git rm -q -f --cached --ignore-unmatch -- "$f" >/dev/null || return 1; rm -f "$AD_DIR/$f"; fi
     done
     ad_git add -f -- "$@" || return 1
@@ -410,11 +437,12 @@ ad_push() {
     # through ad_pull's rewind path instead of fast-forwarding the dropped commits back (--force-with-lease: git 1.8.5+)
     # ceiling: a clone that fetches from a mirror lagging its push URL sees its own just-pushed commits as rewound and
     # its next push rejected as stale; compare against the push URL's tip instead if such setups need supporting
+    ap_h=$(ad_head_oid) && [ -n "$ap_h" ] || { ad_unpublished "no commit to push"; exit 4; }
     ap_lease=""
-    if ap_o=$(ad_ref_oid "refs/remotes/origin/$BRANCH") && ad_git merge-base --is-ancestor "$ap_o" HEAD 2>/dev/null; then
+    if ap_o=$(ad_ref_oid "refs/remotes/origin/$BRANCH") && ad_git merge-base --is-ancestor "$ap_o" "$ap_h" 2>/dev/null; then
       ap_lease="--force-with-lease=refs/heads/$BRANCH:$ap_o"
     fi
-    if perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q ${ap_lease:+"$ap_lease"} origin "HEAD:refs/heads/$BRANCH" ) 2>&1 ); then
+    if perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q ${ap_lease:+"$ap_lease"} origin "${ap_h}^{commit}:refs/heads/$BRANCH" ) 2>&1 ); then
       break
     fi
     case $perr in
@@ -438,7 +466,7 @@ ad_push() {
   # what was pushed is now the store's branch, as far as this clone knows: recorded here, since a clone made from a
   # store with no branch yet fetches it only on its next command. Then a branch deleted from the store before that is
   # seen as deleted, not as one this clone has yet to publish
-  ad_git update-ref "refs/remotes/origin/$BRANCH" HEAD 2>/dev/null || :
+  ad_git update-ref "refs/remotes/origin/$BRANCH" "$ap_h" 2>/dev/null || :
 }
 
 # ad_lock: take this clone's lock, held until the command exits (or ad_unlock), so commands under one name take turns
@@ -560,18 +588,19 @@ ad_sync() {
   # a consumed one removed but not committed). Commits it made but couldn't push are kept, and published below
   if [ -d "$AD_DIR/.git/rebase-merge" ] || [ -d "$AD_DIR/.git/rebase-apply" ]; then
     ad_git rebase --abort >/dev/null 2>&1 || rm -rf "$AD_DIR/.git/rebase-merge" "$AD_DIR/.git/rebase-apply"; fi
-  if ad_git rev-parse -q --verify HEAD >/dev/null; then ad_git reset -q --hard HEAD 2>/dev/null; fi
+  if as_h=$(ad_head_oid); then ad_git reset -q --hard "$as_h" 2>/dev/null; fi
   # (-x: files the store's own .gitignore names are debris too)
   ad_git clean -fdqx -- "$ROOT" 2>/dev/null
   err=$(AD_UNSTICK=1; ad_pull) || die "can't update from the store: $(printf '%s\n' "$err" | ad_gist)"
   # publish anything an earlier command committed but couldn't push; on a store with no mailbox branch yet, that's every
   # commit this clone has (an init whose push failed)
+  as_h=$(ad_head_oid) || as_h=""
   if ad_remote_has_branch; then
-    [ -z "$(ad_git log --format=%h "refs/remotes/origin/$BRANCH..HEAD" 2>/dev/null)" ] && return
-    warn "publishing $(ad_git rev-list --count "refs/remotes/origin/$BRANCH..HEAD") commit(s) left from an earlier command"
+    [ -n "$as_h" ] && [ -n "$(ad_git log --format=%h "refs/remotes/origin/$BRANCH..$as_h" 2>/dev/null)" ] || return 0
+    warn "publishing $(ad_git rev-list --count "refs/remotes/origin/$BRANCH..$as_h") commit(s) left from an earlier command"
   else
-    ad_git rev-parse -q --verify HEAD >/dev/null || return 0
-    warn "publishing $(ad_git rev-list --count HEAD) commit(s) left from an earlier command, to a store with no $BRANCH yet"
+    [ -n "$as_h" ] || return 0
+    warn "publishing $(ad_git rev-list --count "$as_h") commit(s) left from an earlier command, to a store with no $BRANCH yet"
   fi
   AD_LEFTOVER=1; ad_push; AD_LEFTOVER= AD_PUBLISHED=1
 }
