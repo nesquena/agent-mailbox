@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **A mailbox clone now uses only the store's exact mailbox branch, so no other ref in the store can stand in for it,
+  even before the branch exists.** A new copy keeps only the mailbox branch, its tracking ref, and the CLI's own refs
+  (peek, history, and set-aside stuck refs). An existing copy loses only tags and refs named like `HEAD` (including
+  `origin/HEAD`), and keeps any branch of yours. Each update from the store now makes one extra network round trip to
+  check the branch tip before fetching. If a fetch still does not match the store's mailbox branch tip, the command
+  stops with `"fetched commit (...) did not match refs/heads/<branch> (...)"` and names any colliding store ref to
+  remove; for `holds`, a fetch mismatch stops with `"can't read this store's full, latest history"`, and for `watch`, it
+  counts as a failed read. Before the mailbox branch first exists, if a store ref collides with `refs/heads/<branch>`,
+  the command stops at once with exit 4 and names the colliding ref(s) to remove from the store (a branch deleted
+  mid-command isn't covered by that pre-check). When git reports `"matches more than one"` on push, the command likewise
+  stops at once with exit 4 and names any colliding ref(s) to remove, or shows git's message if no collider is found.
+
 ## 0.1.4 (2026-11-27)
 
 Arguments that name one message now refuse whitespace, so a value holding several paths can't be cut down to its last;
