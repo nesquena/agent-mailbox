@@ -2369,30 +2369,92 @@ exec "%s" "$@"
     ok "and deleted store branch stayed absent after upgrading live origin/HEAD clone" ||
     no "live origin/HEAD cleanup caused clone to recreate deleted main" "$(git --git-dir="$DG" show-ref)"
 
-  # ad_clean_refs preserves the branch HEAD is on (e.g. side) and the target of a symbolic refs/heads/main,
-  # so an unpublished send on a side branch is published on the next open rather than dropped
+  # ad_clean_refs under-acts in any odd state (HEAD on another branch, symref chains, or any symbolic local ref):
+  # deletes nothing, prints a warning, and leaves existing sync to publish unpublished commits as on v0.1.4.
+  mkdir -p "$T/failpush"
+  printf '#!/bin/sh\ncase " $* " in (*" push "*) echo "simulated push failure" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failpush/git"
+  chmod +x "$T/failpush/git"
+  # 1. HEAD on a side branch: publishes unpublished send, deletes nothing (stray tag kept), warns
   as kwside setup --store "$PC" --name ep1 >/dev/null
   as kwside agents >/dev/null 2>&1
   for Cside in "$W/home-kwside/.local/state/agent-mailbox/checkouts/"*; do :; done
   git -C "$Cside" checkout -q -b side
-  mkdir -p "$T/failpush"
-  printf '#!/bin/sh\ncase " $* " in (*" push "*) echo "simulated push failure" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$T/failpush/git"
-  chmod +x "$T/failpush/git"
+  git -C "$Cside" update-ref refs/tags/keep-side HEAD
   out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwside" "$SH" "$CLI" send ep2 on-side - 2>&1); rc=$?
   [ "$rc" = 4 ] && ok "(send on side branch saved locally when push failed)" || no "side-branch send didn't exit 4 ($rc)" "$out"
   out=$(as kwside agents 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
+    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
     git -C "$Cside" show-ref -q --verify refs/heads/side &&
-    ok "ad_clean_refs keeps HEAD's side branch and publishes its unpublished send" ||
-    no "side branch or its unpublished send was lost (exit $rc)" "$out"
+    git -C "$Cside" show-ref -q --verify refs/tags/keep-side &&
+    ok "HEAD on side branch warns, deletes nothing, and publishes unpublished send" ||
+    no "side branch didn't warn/keep/publish (exit $rc)" "$out | $(git -C "$Cside" show-ref)"
   expect "delivering on-side to ep2" 0 "ep1-on-side\.md" as ep2 list
-  # symbolic refs/heads/main -> refs/heads/symtgt: ad_clean_refs keeps refs/heads/symtgt too
-  git -C "$Cside" update-ref refs/heads/symtgt refs/heads/main
-  git -C "$Cside" symbolic-ref refs/heads/main refs/heads/symtgt
-  (AD_DIR=$Cside BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
-  git -C "$Cside" show-ref -q --verify refs/heads/symtgt &&
-    ok "ad_clean_refs keeps target of symbolic refs/heads/main" ||
-    no "ad_clean_refs deleted target of symbolic refs/heads/main" "$(git -C "$Cside" for-each-ref --format='%(refname)')"
+  # 2. symref chain HEAD -> refs/heads/x -> refs/heads/y with unpublished send on y: published, nothing deleted, warns
+  as kwchain setup --store "$PC" --name ep1 >/dev/null
+  as kwchain agents >/dev/null 2>&1
+  for Cch in "$W/home-kwchain/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Cch" update-ref refs/heads/y refs/heads/main
+  git -C "$Cch" symbolic-ref refs/heads/x refs/heads/y
+  git -C "$Cch" symbolic-ref HEAD refs/heads/x
+  git -C "$Cch" update-ref refs/tags/keep-chain refs/heads/y
+  out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwchain" "$SH" "$CLI" send ep2 on-chain - 2>&1); rc=$?
+  [ "$rc" = 4 ] && ok "(send on HEAD->x->y chain saved locally when push failed)" || no "chain send didn't exit 4 ($rc)" "$out"
+  out=$(as kwchain agents 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
+    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+    git -C "$Cch" symbolic-ref -q refs/heads/x >/dev/null 2>&1 &&
+    git -C "$Cch" show-ref -q --verify refs/heads/y &&
+    git -C "$Cch" show-ref -q --verify refs/tags/keep-chain &&
+    ok "HEAD->x->y chain warns, deletes nothing, and publishes unpublished send" ||
+    no "HEAD->x->y chain lost refs or commit (exit $rc)" "$out | $(git -C "$Cch" show-ref)"
+  expect "delivering on-chain to ep2" 0 "ep1-on-chain\.md" as ep2 list
+  # 3. symref chain HEAD -> refs/heads/main -> refs/heads/x -> refs/heads/y with unpublished send on y: published, nothing deleted, warns
+  as kwbch setup --store "$PC" --name ep1 >/dev/null
+  as kwbch agents >/dev/null 2>&1
+  for Cbch in "$W/home-kwbch/.local/state/agent-mailbox/checkouts/"*; do :; done
+  git -C "$Cbch" update-ref refs/heads/y refs/heads/main
+  git -C "$Cbch" symbolic-ref refs/heads/x refs/heads/y
+  git -C "$Cbch" symbolic-ref refs/heads/main refs/heads/x
+  git -C "$Cbch" update-ref refs/tags/keep-bchain refs/heads/y
+  out=$(echo hi | env PATH="$T/failpush:$PATH" HOME="$W/home-kwbch" "$SH" "$CLI" send ep2 on-bchain - 2>&1); rc=$?
+  [ "$rc" = 4 ] && ok "(send on main->x->y chain saved locally when push failed)" || no "bchain send didn't exit 4 ($rc)" "$out"
+  out=$(as kwbch agents 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "HEAD isn't on main in " &&
+    printf '%s\n' "$out" | grep -q "publishing 1 commit(s) left" &&
+    git -C "$Cbch" symbolic-ref -q refs/heads/main >/dev/null 2>&1 &&
+    git -C "$Cbch" symbolic-ref -q refs/heads/x >/dev/null 2>&1 &&
+    git -C "$Cbch" show-ref -q --verify refs/heads/y &&
+    git -C "$Cbch" show-ref -q --verify refs/tags/keep-bchain &&
+    ok "refs/heads/main->x->y chain warns, deletes nothing, and publishes unpublished send" ||
+    no "refs/heads/main->x->y chain lost refs or commit (exit $rc)" "$out | $(git -C "$Cbch" show-ref)"
+  expect "delivering on-bchain to ep2" 0 "ep1-on-bchain\.md" as ep2 list
+  # 4. symbolic local ref while HEAD is on refs/heads/main: warns and deletes nothing
+  git -C "$Cep" update-ref refs/heads/sym2 "$ep_tip"
+  git -C "$Cep" symbolic-ref refs/heads/sym1 refs/heads/sym2
+  git -C "$Cep" update-ref refs/tags/keep-sym "$ep_tip"
+  out=$( (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { printf 'WARN: %s\n' "$*" >&2; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs) 2>&1 )
+  printf '%s\n' "$out" | grep -q "symbolic ref refs/heads/sym1" &&
+    git -C "$Cep" symbolic-ref -q refs/heads/sym1 >/dev/null 2>&1 &&
+    git -C "$Cep" show-ref -q --verify refs/heads/sym2 &&
+    git -C "$Cep" show-ref -q --verify refs/tags/keep-sym &&
+    ok "ad_clean_refs warns and deletes nothing when any symbolic local ref exists" ||
+    no "ad_clean_refs modified refs despite symbolic local ref" "$out | $(git -C "$Cep" for-each-ref)"
+  git -C "$Cep" update-ref --no-deref -d refs/heads/sym1
+  git -C "$Cep" update-ref -d refs/heads/sym2
+  git -C "$Cep" update-ref -d refs/tags/keep-sym
+  # 5. detached HEAD mid-rebase is still cleaned as normal
+  git -C "$Cep" checkout -q --detach
+  mkdir -p "$Cep/.git/rebase-merge"
+  git -C "$Cep" update-ref refs/tags/mid-rb-tag "$ep_tip"
+  git -C "$Cep" update-ref refs/heads/mid-rb-extra "$ep_tip"
+  (AD_DIR=$Cep BRANCH=main ME=ep1; die() { exit 1; }; warn() { :; }; . "$ROOTDIR/adapters/git.sh"; ad_clean_refs)
+  kept_rb=$(git -C "$Cep" for-each-ref --format='%(refname)' | sort | tr '\n' ' ')
+  rmdir "$Cep/.git/rebase-merge"
+  git -C "$Cep" checkout -q main
+  [ "$kept_rb" = "refs/agent-mailbox/stuck/1 refs/heads/main refs/remotes/origin/main " ] &&
+    ok "detached HEAD mid-rebase is still cleaned on open" ||
+    no "detached HEAD mid-rebase wasn't cleaned" "$kept_rb"
 
   # shallow checkout + branch advancing on first --unshallow fetch: retry drops --unshallow and holds succeeds
   SHW="$T/shallow-retry.git"; git init -q --bare "$SHW"

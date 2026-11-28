@@ -53,20 +53,30 @@ ad_cd_state() { CDPATH= cd -P -- "$STATE/checkouts" || exit; }
 ad_clone() { ( to=$AD_DIR; case $to in (/*) ;; (*) to=$PWD/$to ;; esac
   case $STORE in (/*) ad_cd_state ;; (*:*) case ${STORE%%:*} in (*/*) ;; (*) ad_cd_state ;; esac ;; esac
   LC_ALL=C && export LC_ALL && ad_g clone -q --no-checkout --single-branch --origin origin "$@" -- "$STORE" "$to" ) 2>&1; }
-# ad_list_extra_refs / ad_clean_refs: mailbox clones keep only the mailbox branch, its remote tracking ref,
-# refs/agent-mailbox/* (peek, history, stuck/*), and the target of HEAD or a symbolic refs/heads/$BRANCH if either
-# points elsewhere. Keep tag auto-following off and drop every other local ref (tags, default branches, origin/HEAD,
-# local refs/heads/HEAD) in one --no-deref batch, with a per-ref fallback.
+# ad_list_extra_refs / ad_clean_refs: mailbox clones keep only the mailbox branch, its remote tracking ref, and
+# refs/agent-mailbox/* (peek, history, stuck/*). Keep tag auto-following off and drop every other local ref (tags,
+# default branches, origin/HEAD, local refs/heads/HEAD) in one --no-deref batch, with a per-ref fallback.
+# Clean only when the clone looks the way the CLI leaves it (HEAD detached or on refs/heads/$BRANCH, and no symbolic
+# local ref other than refs/remotes/origin/HEAD); otherwise delete nothing and warn, so hand-made branches or symref
+# chains never lose unpublished commits. (%(symref) in for-each-ref has been supported since git 1.6.1.)
 ad_list_extra_refs() {
-  cr_h=$(ad_git symbolic-ref -q HEAD 2>/dev/null) || cr_h=""
-  cr_b=$(ad_git symbolic-ref -q "refs/heads/$BRANCH" 2>/dev/null) || cr_b=""
-  ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" -v h="$cr_h" -v sb="$cr_b" '
+  ad_git for-each-ref --format='%(refname)' | awk -v b="$BRANCH" '
     $0 == "refs/heads/" b || $0 == "refs/remotes/origin/" b || index($0, "refs/agent-mailbox/") == 1 { next }
-    (h != "" && $0 == h) || (sb != "" && $0 == sb) { next }
     { print }'
 }
 ad_clean_refs() {
   [ "$(ad_git config remote.origin.tagOpt)" = --no-tags ] || ad_git config remote.origin.tagOpt --no-tags
+  cr_h=$(ad_git symbolic-ref -q HEAD 2>/dev/null) || cr_h=""
+  if [ -n "$cr_h" ] && [ "$cr_h" != "refs/heads/$BRANCH" ]; then
+    warn "HEAD isn't on $BRANCH in $AD_DIR: run \`git -C $AD_DIR checkout $BRANCH\`, or remove the clone once nothing in it is unpublished"
+    return 0
+  fi
+  cr_sym=$(ad_git for-each-ref --format='%(refname) %(symref)' | awk '$2 != "" && $1 != "refs/remotes/origin/HEAD" { print $1; exit }')
+  if [ -z "$cr_sym" ] && ad_git symbolic-ref -q "refs/heads/$BRANCH" >/dev/null 2>&1; then cr_sym="refs/heads/$BRANCH"; fi
+  if [ -n "$cr_sym" ]; then
+    warn "symbolic ref $cr_sym in $AD_DIR (skipping ref cleanup): remove $cr_sym, or remove the clone once nothing in it is unpublished"
+    return 0
+  fi
   if [ -n "$(ad_list_extra_refs | head -n 1)" ]; then
     ad_list_extra_refs | awk '{ print "delete " $0 }' | ad_git update-ref --stdin --no-deref 2>/dev/null ||
       ad_list_extra_refs | while IFS= read -r cr_r; do
