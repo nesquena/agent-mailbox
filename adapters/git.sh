@@ -253,6 +253,9 @@ ad_open() {
 ad_pull() {
   # whether this clone had seen the store's branch before this fetch, and where it was then
   seen="" pre=""; ! ad_remote_has_branch || { seen=1; pre=$(ad_git rev-parse -q --verify "refs/remotes/origin/$BRANCH"); }
+  # ceiling: a kill between this fetch and the end of the rebase below leaves refs/remotes/origin/$BRANCH already at
+  # post, losing the rewind record so the next run won't see it; the fix is to fetch into a CLI-owned ref and advance
+  # the tracking ref only after the rebase completes
   ferr=$(ad_fetch_branch "refs/remotes/origin/$BRANCH"); fr=$?
   case $fr in
     (0) ;;
@@ -312,8 +315,21 @@ ad_pull() {
     fi
   fi
   if ad_git rev-parse -q --verify HEAD >/dev/null; then
-    rb=$(ad_git rebase -q --autostash "refs/remotes/origin/$BRANCH" 2>&1 >/dev/null) ||
-      { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
+    if [ -n "$pre" ] && ! ad_git merge-base --is-ancestor "$pre" "$post"; then
+      # the store's branch was rewound: replay only this clone's own unpublished commits (pre..HEAD) onto post,
+      # dropping commits the store no longer has rather than republishing them. If the rebase aborts, restore
+      # refs/remotes/origin/$BRANCH to pre so the next command still sees the rewind.
+      rw_n=$(ad_git rev-list --count "$post..$pre")
+      rb=$(ad_git rebase -q --autostash --onto "refs/remotes/origin/$BRANCH" "$pre" 2>&1 >/dev/null) ||
+        { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || {
+          ad_git rebase --abort >/dev/null 2>&1
+          ad_git update-ref "refs/remotes/origin/$BRANCH" "$pre" "$post" 2>/dev/null || :
+          printf '%s\n' "$rb"; return 1; }
+      [ "${rw_n:-0}" = 0 ] || warn "the store's branch was rewound; $rw_n commit(s) the store's branch no longer has were dropped from this copy, not republished"
+    else
+      rb=$(ad_git rebase -q --autostash "refs/remotes/origin/$BRANCH" 2>&1 >/dev/null) ||
+        { [ -n "${AD_UNSTICK:-}" ] && ad_unstick; } || { ad_git rebase --abort >/dev/null 2>&1; printf '%s\n' "$rb"; return 1; }
+    fi
   else
     rerr=$(ad_git reset -q --hard "refs/remotes/origin/$BRANCH" 2>&1) || { printf '%s\n' "$rerr"; return 1; }
   fi
@@ -388,7 +404,19 @@ ad_push() {
     [ -z "$ap_amb" ] || { ad_unpublished "store ref collides with refs/heads/$BRANCH ($ap_amb); remove $ap_amb from the store and try again"; exit 4; }
   fi
   n=0
-  until perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q origin "HEAD:refs/heads/$BRANCH" ) 2>&1 ); do
+  while :; do
+    # compare-and-swap the store's branch against what this clone last synced (only when HEAD descends from it, so push
+    # can never rewrite the store): a rewind landing between sync and push is rejected as "(stale info)" and retried
+    # through ad_pull's rewind path instead of fast-forwarding the dropped commits back (--force-with-lease: git 1.8.5+)
+    # ceiling: a clone that fetches from a mirror lagging its push URL sees its own just-pushed commits as rewound and
+    # its next push rejected as stale; compare against the push URL's tip instead if such setups need supporting
+    ap_lease=""
+    if ap_o=$(ad_ref_oid "refs/remotes/origin/$BRANCH") && ad_git merge-base --is-ancestor "$ap_o" HEAD 2>/dev/null; then
+      ap_lease="--force-with-lease=refs/heads/$BRANCH:$ap_o"
+    fi
+    if perr=$( ( LC_ALL=C && export LC_ALL && ad_git push -q ${ap_lease:+"$ap_lease"} origin "HEAD:refs/heads/$BRANCH" ) 2>&1 ); then
+      break
+    fi
     case $perr in
       (*"matches more than one"*)
         ap_amb=$(ad_ambiguous_refs | awk '{ s = (s ? s ", " : "") $0 } END { print s }' | clean "$CAP")
